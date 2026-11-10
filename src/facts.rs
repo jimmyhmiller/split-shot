@@ -212,7 +212,7 @@ impl Info {
         Info { types: T_ALL, lo: None, hi: None, nan: true, truthy: None, eq: None, ne: Vec::new(), cases: None, fixed: Vec::new(), props: Vec::new(), callee: None, ordinary: false }
     }
 
-    fn of_types(types: u16) -> Info {
+    pub fn of_types(types: u16) -> Info {
         Info { types, ..Info::top() }
     }
 
@@ -484,20 +484,29 @@ pub fn info_of(e: &RExpr, lookup: Lookup, typed_fns: &[&str]) -> Info {
     }
     // A property the object's facts know (a known or frozen one): what is
     // known of it.
+    let numeric_key;
     let property = match e {
         RExpr::Get(base, key) | RExpr::OwnMember { obj: base, key, .. } => Some((&**base, key.as_str())),
         RExpr::Index(base, key) => match &**key {
             RExpr::Str(key) => Some((&**base, key.as_str())),
+            // (`m[1]` is `m["1"]`.)
+            RExpr::Num(n) => {
+                numeric_key = n.to_js_string();
+                Some((&**base, numeric_key.as_str()))
+            }
             _ => None,
         },
         _ => None,
     };
     if let Some((base, key)) = property {
         let object = info_of(base, lookup, typed_fns);
-        if let Some((_, field)) = object.props.iter().find(|(name, _)| name == key) {
+        // (Only of a value that is an object: a read of one that may be
+        // null or undefined throws, which nothing known of it may hide.)
+        let object_only = object.types != 0 && object.types & !(T_OBJ | T_FUNC) == 0;
+        if let (true, Some((_, field))) = (object_only, object.props.iter().find(|(name, _)| name == key)) {
             return field.clone();
         }
-        if let Some((_, value)) = object.fixed.iter().find(|(name, _)| name == key) {
+        if let (true, Some((_, value))) = (object_only, object.fixed.iter().find(|(name, _)| name == key)) {
             return info_of(value, lookup, typed_fns);
         }
     }

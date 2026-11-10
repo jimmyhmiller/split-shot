@@ -49,6 +49,11 @@ impl Re {
         })
     }
 
+    /// How many capture groups the pattern has.
+    pub fn group_count(&self) -> usize {
+        self.names.len()
+    }
+
     /// Whether the pattern matches code points (`u` or `v` flag).
     pub fn unicode_mode(&self) -> bool {
         self.unicode
@@ -251,4 +256,118 @@ pub fn split(re: &Re, text: &[u16], limit: u32) -> Vec<Option<Vec<u16>>> {
     }
     out.push(Some(text[p..size].to_vec()));
     out
+}
+
+/// For each capture group of pattern `source` (in order), whether every
+/// match gives it a value: a group in no alternation, under no count that
+/// allows zero repetitions, and in no lookaround (all of that conservatively,
+/// at any depth). `None` for a source this does not read.
+pub fn captures_always_set(source: &str) -> Option<Vec<bool>> {
+    struct Frame {
+        /// The captures inside it, with itself if it captures.
+        captures: Vec<usize>,
+        /// A lookaround, or an alternation directly inside it.
+        optional: bool,
+    }
+    let cs: Vec<char> = source.chars().collect();
+    let mut optional: Vec<bool> = Vec::new();
+    let mut frames: Vec<Frame> = vec![Frame { captures: Vec::new(), optional: false }];
+    let mut i = 0;
+    // What a count after position `j` allows: zero repetitions?
+    let zero_count = |j: usize| -> Option<bool> {
+        match cs.get(j) {
+            Some('?') | Some('*') => Some(true),
+            Some('{') => {
+                let close = (j..cs.len()).find(|&k| cs[k] == '}')?;
+                let body: String = cs[j + 1..close].iter().collect();
+                let lo = body.split(',').next()?;
+                if lo.is_empty() || !lo.chars().all(|c| c.is_ascii_digit()) {
+                    return Some(false); // a literal brace (Annex B)
+                }
+                Some(lo.parse::<u64>().ok()? == 0)
+            }
+            _ => Some(false),
+        }
+    };
+    while i < cs.len() {
+        match cs[i] {
+            '\\' => i += 2,
+            '[' => {
+                i += 1;
+                if cs.get(i) == Some(&'^') {
+                    i += 1;
+                }
+                // (A `]` first in a class is a character.)
+                if cs.get(i) == Some(&']') {
+                    i += 1;
+                }
+                while i < cs.len() && cs[i] != ']' {
+                    i += if cs[i] == '\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            '(' => {
+                let mut f = Frame { captures: Vec::new(), optional: false };
+                if cs.get(i + 1) == Some(&'?') {
+                    match (cs.get(i + 2), cs.get(i + 3)) {
+                        (Some(':'), _) => {}
+                        (Some('<'), Some('=' | '!')) | (Some('=' | '!'), _) => f.optional = true,
+                        (Some('<'), _) => {
+                            optional.push(false);
+                            f.captures.push(optional.len() - 1);
+                        }
+                        _ => return None,
+                    }
+                } else {
+                    optional.push(false);
+                    f.captures.push(optional.len() - 1);
+                }
+                frames.push(f);
+                i += 1;
+            }
+            ')' => {
+                let f = frames.pop()?;
+                if frames.is_empty() {
+                    return None;
+                }
+                let zero = zero_count(i + 1)?;
+                if f.optional || zero {
+                    for &c in &f.captures {
+                        optional[c] = true;
+                    }
+                }
+                frames.last_mut().unwrap().captures.extend(f.captures);
+                i += 1;
+            }
+            '|' => {
+                frames.last_mut().unwrap().optional = true;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if frames.len() != 1 {
+        return None;
+    }
+    if frames[0].optional {
+        for c in &frames[0].captures {
+            optional[*c] = true;
+        }
+    }
+    Some(optional.into_iter().map(|o| !o).collect())
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::captures_always_set;
+
+    #[test]
+    fn which_captures_always_take_part() {
+        assert_eq!(captures_always_set(r"^\/teams\/([^/]+?)\/projects\/([^/]+?)\/files\/(.+?)(?:\/)?$"), Some(vec![true, true, true]));
+        assert_eq!(captures_always_set(r"(a)?(b)*(c){0,2}(d){1}(e)+"), Some(vec![false, false, false, true, true]));
+        assert_eq!(captures_always_set(r"(a)|(b)"), Some(vec![false, false]));
+        assert_eq!(captures_always_set(r"x(?:(a)|b)(c)"), Some(vec![false, true]));
+        assert_eq!(captures_always_set(r"(?=(a))(?<n>b)[(]\("), Some(vec![false, true]));
+        assert_eq!(captures_always_set(r"((a)?)"), Some(vec![true, false]));
+    }
 }

@@ -6614,7 +6614,30 @@ impl Js {
     /// object whose `valueOf` throws). (Outside a try such a throw propagates
     /// from the residual expression as it would from the original.)
     fn throws_in(&self, s: &State, e: &RExpr) -> bool {
-        (self.throws(e) && !self.pure_data_read(s, e)) || (!s.handlers.is_empty() && self.converts_unknown_in(s, e))
+        (self.throws(e) && !self.pure_data_read(s, e) && !self.pure_string_call(s, e)) || (!s.handlers.is_empty() && self.converts_unknown_in(s, e))
+    }
+
+    /// Is `e` `x.m(args)` with `m` a method of a pristine
+    /// `String.prototype` that only computes a primitive
+    /// (`PURE_STRING_METHODS`), `x` a variable the path knows is a string,
+    /// and each argument a primitive literal or a variable known to hold a
+    /// primitive other than a symbol? That runs no code and cannot throw.
+    fn pure_string_call(&self, s: &State, e: &RExpr) -> bool {
+        if self.facts_off {
+            return false;
+        }
+        let RExpr::Call(c, args) = e else { return false };
+        let RExpr::Get(o, m) = &**c else { return false };
+        let RExpr::Var(recv) = &**o else { return false };
+        let primitive = crate::facts::T_NUM | crate::facts::T_STR | crate::facts::T_BOOL | crate::facts::T_UNDEF | crate::facts::T_NULL;
+        PURE_STRING_METHODS.contains(&m.as_str())
+            && self.pristine("String")
+            && s.facts.get(recv).is_some_and(|i| i.types == crate::facts::T_STR)
+            && args.iter().all(|a| match a {
+                RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null => true,
+                RExpr::Var(v) => s.facts.get(v).is_some_and(|i| i.types != 0 && i.types & !primitive == 0),
+                _ => false,
+            })
     }
 
     /// Is `e` a read of a data property the path knows an object variable
@@ -6625,10 +6648,15 @@ impl Js {
         if self.facts_off {
             return false;
         }
+        let numeric_key;
         let (base, key) = match e {
             RExpr::Get(base, key) => (&**base, key.as_str()),
             RExpr::Index(base, key) => match &**key {
                 RExpr::Str(key) => (&**base, key.as_str()),
+                RExpr::Num(n) => {
+                    numeric_key = n.to_js_string();
+                    (&**base, numeric_key.as_str())
+                }
                 _ => return false,
             },
             _ => return false,
@@ -7571,6 +7599,25 @@ fn closure_chain_standard(heap: &Heap, addr: usize) -> bool {
 /// block before blocks are made per iteration again, for the engine's
 /// unroll backstop (its `UNROLL_BOUND`).
 const STATIC_UNROLL_INLINE: usize = 5_000;
+
+/// Methods of `String.prototype` that, on a string with primitive (not
+/// symbol) arguments, compute a primitive without throwing or running code.
+/// (Not the ones that may throw on a size, `padStart`/`repeat`, or make an
+/// object, `split`/`match`.)
+const PURE_STRING_METHODS: &[&str] = &[
+    "at", "charAt", "charCodeAt", "codePointAt", "endsWith", "startsWith", "includes", "indexOf", "lastIndexOf", "slice",
+    "substring", "substr", "toLowerCase", "toUpperCase", "trim", "trimStart", "trimEnd", "concat", "toString", "valueOf",
+];
+
+/// A standard global function that reads only its first `n` arguments:
+/// `n`.
+fn ignored_after(g: &str) -> Option<usize> {
+    match g {
+        "encodeURIComponent" | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" | "isNaN" | "isFinite" | "parseFloat" => Some(1),
+        "parseInt" => Some(2),
+        _ => None,
+    }
+}
 
 /// The standard error constructors.
 const STANDARD_ERRORS: &[&str] = &["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError"];
@@ -9754,7 +9801,7 @@ impl Js {
                 // not only inside a try: `-v;` throws for a Symbol and runs an
                 // object's `valueOf`, and nothing else would evaluate it.)
                 if let Abs::Dyn(rexpr) = &v {
-                    if self.throws(rexpr) || self.converts_unknown_in(s, rexpr) {
+                    if (self.throws(rexpr) && !self.pure_string_call(s, rexpr)) || self.converts_unknown_in(s, rexpr) {
                         self.forbid_residual_in_try(s, "a discarded may-throw expression");
                         let dst = self.discard_var(pc);
                         out.push(Op::Eval { dst, expr: rexpr.clone() });
@@ -11947,6 +11994,26 @@ impl Js {
             pre.extend(ops_f.into_iter().map(|op| Js::guard_op(op, &c, false)));
             c
         };
+        // A value an arm computed, held at the join (in a variable, or in an
+        // object the arm made or changed), is evaluated there, before the
+        // choice, on every path: one that may throw or run code (a read of a
+        // property of a value the arm knew was an object, a conversion) is
+        // safe only on its arm's path. Then no conversion. (What the state
+        // held before the `if` is evaluated where it was anyway.)
+        let unsafe_at_join = |st: &State| -> bool {
+            let before: std::collections::HashSet<&RExpr> =
+                s.frames.iter().flat_map(|f| f.values()).filter_map(|v| if let Abs::Dyn(e) = v { Some(e) } else { None }).collect();
+            let risky = |v: &Abs| matches!(v, Abs::Dyn(e) if !before.contains(e) && (self.throws(e) || converts_unknown(e)));
+            st.frames.iter().flat_map(|f| f.values()).any(risky)
+                || st.heap.iter().filter(|(a, o)| **a >= base || s.heap.get(a) != Some(*o)).any(|(_, o)| o.children().into_iter().any(risky))
+        };
+        if unsafe_at_join(&st_t) || unsafe_at_join(&st_f) {
+            if dbg {
+                eprintln!("[IFCONV] pc={pc}: an arm's value may throw or run code before the choice");
+            }
+            restore_all();
+            return None;
+        }
         // (An arm that called a function had its dead values cleared, see
         // `clear_dead`: the other's are too, so the two compare as they
         // are.)
@@ -16618,6 +16685,33 @@ impl Js {
             // duplicated; the callee and any heap-object arguments escape (the
             // callee may read or mutate them).
             _ => {
+                // A method of a pristine `String.prototype` that only computes
+                // a primitive, on a value known to be a string, with arguments
+                // whose conversion runs no code: a value, not an effect. It is
+                // left as an expression (dropped when unused, as an unused
+                // operator is), not emitted as a call (`pure_string_call`).
+                if let (Abs::Dyn(c @ RExpr::Get(o, _)), Abs::Dyn(t)) = (&callee, &this) {
+                    if **o == *t && args.iter().all(|a| !matches!(a, Abs::Ref(_))) {
+                        let expr = RExpr::Call(Box::new(c.clone()), args.iter().map(|a| a.to_rexpr()).collect());
+                        if self.pure_string_call(s, &expr) {
+                            s.top_mut().pc += 1;
+                            self.finish_call(s, Abs::Dyn(expr), this, ret, pc, out);
+                            return Step::Continue;
+                        }
+                    }
+                }
+                // A standard function of a fixed arity ignores the arguments
+                // past it: given already, they need not be passed (an object
+                // there would escape for nothing). (Only values: an
+                // expression not yet evaluated runs at the call.)
+                let mut args = args;
+                if let Abs::Dyn(RExpr::Global(g)) = &callee {
+                    if let Some(n) = ignored_after(g).filter(|_| self.pristine(g)) {
+                        if args.len() > n && args[n..].iter().all(|a| !matches!(a, Abs::Dyn(e) if !matches!(e, RExpr::Var(_)))) {
+                            args.truncate(n);
+                        }
+                    }
+                }
                 // A provably-total host builtin (`Date.now()`, `Math.*`) never
                 // throws, so it must not force an enclosing `try` to residualize
                 // (which would runtime-ize everything the try touches — the
@@ -16626,7 +16720,11 @@ impl Js {
                 // (What is known of `Object.assign`'s result, from its
                 // arguments as they are before the call: it only reads them.)
                 self.note_global_definition(s, &callee, &args);
-                let assign_info = self.object_assign_info(s, &callee, &args).or_else(|| self.react_call_result_info(s, &callee));
+                let assign_info = self
+                    .object_assign_info(s, &callee, &args)
+                    .or_else(|| self.react_call_result_info(s, &callee))
+                    .or_else(|| self.standard_call_info(&callee))
+                    .or_else(|| self.regex_exec_info(s, &callee, &this));
                 let nonthrow = matches!(&callee, Abs::Dyn(e) if self.call_nonthrowing(s, e, &args));
                 let symbol_call = matches!(&callee, Abs::Dyn(e) if self.is_symbol_call(e, &args)) && this == Abs::Undef;
                 if env_flag!("CALL_DEBUG") && !s.handlers.is_empty() && !nonthrow {
@@ -16775,7 +16873,20 @@ impl Js {
             // does) continues as a runtime call.
             || s.frames.len() >= MAX_DEPTH;
         if dynamic_recursion && env_flag!("RESID_DEBUG") {
-            eprintln!("[RESID] {} depth={} shared={shared_context}", self.names[fid], s.frames.len());
+            let all_dyn = !args.is_empty() && args.iter().all(|a| a.is_dynamic());
+            let stalled: Vec<String> = s
+                .frames
+                .iter()
+                .enumerate()
+                .filter(|(i, f)| f.func == fid && !skel_progress(&f.entry_skel, &now) && s.frames[*i..].iter().any(|g| g.branched))
+                .map(|(i, f)| format!("frame {i} skel {:?} now {:?}", f.entry_skel, now))
+                .collect();
+            eprintln!(
+                "[RESID] {} depth={} shared={shared_context} recursive={recursive} all_dyn={all_dyn} dyn_ctl={} stalled={stalled:?}",
+                self.names[fid],
+                s.frames.len(),
+                s.top().dyn_ctl
+            );
         }
         // An async function's body runs partly after the script (its awaits
         // resume from the microtask queue): it is always a residual call.
@@ -17049,6 +17160,26 @@ impl Js {
                     }
                 }
             }
+            // Another standard constructor (`RegExp`, `Map`, `Date`, ...),
+            // whose `@@hasInstance` is `Function.prototype`'s: a primitive is
+            // no instance; a modeled RegExp/collection is one of its own kind
+            // only; a modeled object is one when its chain ends at the
+            // constructor's own intrinsic prototype (every other intrinsic
+            // the chain can end at inherits only `Object.prototype`).
+            Abs::Dyn(RExpr::Global(g)) if builtin_typeof(g) == Some("function") && self.pristine(g) && self.pristine("Function") => match o {
+                Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null => Some(false),
+                Abs::Ref(a) => match &s.heap[a] {
+                    HeapObj::Builtin { kind, ext: None, .. } if kind == "RegExp" || is_collection(kind) => Some(kind == g),
+                    HeapObj::Builtin { .. } | HeapObj::Choice { .. } | HeapObj::Log { .. } | HeapObj::Generator { .. } => None,
+                    _ => match chain(s, o)? {
+                        (_, Abs::Dyn(e)) => Some(is_intrinsic_proto(&e, g)),
+                        // (At `null`, or a standard array's `Array.prototype`.)
+                        (_, Abs::Null | Abs::Undef) => Some(false),
+                        _ => None,
+                    },
+                },
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -21535,6 +21666,52 @@ impl Js {
     /// whose facts say it reads `undefined`, a `null` or `undefined` source)
     /// reads `undefined` on it, when `Object.prototype` has no such member;
     /// one a modeled source after every runtime one gives is that value.
+    /// What `re.exec(text)` of a modeled RegExp gives, on a string not known
+    /// here: `null`, or a match array of `1 +` the pattern's groups elements,
+    /// the whole match a string, and each group a string when every match
+    /// gives it one (`jsregex::captures_always_set`), else a string or
+    /// undefined. (Its `index` a number, its `input` a string.)
+    fn regex_exec_info(&self, s: &State, callee: &Abs, this: &Abs) -> Option<crate::facts::Info> {
+        use crate::facts::{Info, T_NULL, T_NUM, T_OBJ, T_STR, T_UNDEF};
+        let (Abs::Ref(f), Abs::Ref(re)) = (callee, this) else { return None };
+        if !matches!(&s.heap[f], HeapObj::Builtin { kind, .. } if kind == "RegExp.prototype.exec") {
+            return None;
+        }
+        let HeapObj::Builtin { kind, data, ext: None } = &s.heap[re] else { return None };
+        let Abs::Str(src) = &data[0] else { return None };
+        if kind != "RegExp" || !self.pristine("RegExp") || !self.pristine("Array") {
+            return None;
+        }
+        let groups = crate::jsregex::captures_always_set(src)?;
+        if self.regexp_of(s, *re)?.group_count() != groups.len() {
+            return None;
+        }
+        let mut props = vec![
+            ("length".to_string(), Info::of_const(&RExpr::Num(JsNum::int(groups.len() as i64 + 1)))?),
+            ("0".to_string(), Info::of_types(T_STR)),
+            ("index".to_string(), Info::of_types(T_NUM)),
+            ("input".to_string(), Info::of_types(T_STR)),
+        ];
+        for (i, always) in groups.iter().enumerate() {
+            props.push(((i + 1).to_string(), Info::of_types(if *always { T_STR } else { T_STR | T_UNDEF })));
+        }
+        Some(Info { props, ..Info::of_types(T_OBJ | T_NULL) })
+    }
+
+    /// What a call of a pristine standard global function gives, by type:
+    /// `String(x)` a string, `Number(x)` a number, ... (`None`: unknown).
+    fn standard_call_info(&self, callee: &Abs) -> Option<crate::facts::Info> {
+        use crate::facts::{Info, T_BOOL, T_NUM, T_STR};
+        let Abs::Dyn(RExpr::Global(g)) = callee else { return None };
+        let types = match g.as_str() {
+            "String" | "encodeURIComponent" | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" => T_STR,
+            "Number" | "parseInt" | "parseFloat" => T_NUM,
+            "Boolean" | "isNaN" | "isFinite" => T_BOOL,
+            _ => return None,
+        };
+        self.pristine(g).then(|| Info::of_types(types))
+    }
+
     fn object_assign_info(&self, s: &State, callee: &Abs, args: &[Abs]) -> Option<Info> {
         if self.facts_off || !self.pristine("Object") {
             return None;
