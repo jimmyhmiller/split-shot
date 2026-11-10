@@ -757,6 +757,7 @@ fn has_effect(e: &RExpr, pure_call: &dyn Fn(&RExpr) -> bool) -> bool {
             let callee_inert = matches!(&**c, RExpr::Global(_)) || matches!(&**c, RExpr::Get(o, _) if matches!(&**o, RExpr::Global(_)));
             !callee_inert || xs.iter().any(|x| has_effect(x, pure_call))
         }
+        RExpr::New(c, xs) if pure_call(e) => has_effect(c, pure_call) || xs.iter().any(|x| has_effect(x, pure_call)),
         RExpr::Bin(_, a, b) => has_effect(a, pure_call) || has_effect(b, pure_call) || crate::js::throws_by_types(e),
         RExpr::Opaque(op, xs) => {
             op == "in" || op == "instanceof" || xs.iter().any(|x| has_effect(x, pure_call)) || crate::js::throws_by_types(e)

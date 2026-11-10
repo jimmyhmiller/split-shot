@@ -1441,8 +1441,14 @@ pub(crate) fn label_js(l: &str) -> String {
             if let Some(x) = names.labels.get(l) {
                 return x.clone();
             }
-            let x = nth_ident(names.taken_labels);
-            names.taken_labels += 1;
+            // (A label is an identifier: not a reserved word, as `do`.)
+            let x = loop {
+                let x = nth_ident(names.taken_labels);
+                names.taken_labels += 1;
+                if !RESERVED.contains(&x.as_str()) {
+                    break x;
+                }
+            };
             names.labels.insert(l.to_string(), x.clone());
             x
         }

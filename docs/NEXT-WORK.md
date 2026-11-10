@@ -329,11 +329,15 @@ correctly after each.
      differs from the original. A representation leak; likely a documented limitation
      unless residual closures carry original source.
 
-2. **continue/break out of a residualized `try`/`catch`** — still a deliberate,
-   catchable refusal (`residual_try_stack` in `src/js.rs`, ~line 1009 / the panic in
-   `residualize_try`). Scoped design is in `docs/HANDOFF.md` ("continue-out-of-
-   residual-try fix DESIGN") and the memory note — needs a non-local-exit target on
-   `Terminator::Halt` + a pc→outer-block map. Risky; gate on the residual-try tests.
+2. **continue/break out of a residualized `try`/`catch` — DONE (split-shot, 2026-11-09).**
+   Every exit from a `try` statement (a `return`, a `break`/`continue` to a
+   statement around it) is compiled as an exit code (and the return value) in
+   scratch slots and a jump to the statement's end, where a dispatch takes it
+   (`TryExits` in `src/js.rs`). A residual `try` therefore has one way out, at
+   its end: the nested body no longer runs on past it (which also put the code
+   after a lowered `finally` inside the `try`), and a `return` in it no longer
+   ends the residual function, so functions with a `try` are inlined like any
+   other. Probes `corpus/try_*.js`.
 
 3. **simple.js effect #4** — the real deobfuscation endpoint (an effect-ordering bug
    in the residualized lazy-decrypt loop). Fully traced in `docs/HANDOFF.md`

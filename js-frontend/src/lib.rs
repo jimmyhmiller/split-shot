@@ -324,20 +324,25 @@ mod tests {
 
     #[test]
     fn try_containing_recursive_function_residualizes() {
-        // A `try`-containing recursive function is residualized (not inlined) into
-        // a real recursive residual function. The Rust reference interpreter can't
-        // run a residual self-call, so this checks the path produces a recursive
-        // residual at all (correctness is validated against Node by the fuzzer).
-        let src = "
+        // A `try`-containing function recursing to a runtime depth is
+        // residualized (not inlined) into a real recursive residual function;
+        // to a static depth it is inlined like any other function, each
+        // activation's `try` a residual `try` where it does not fold. The Rust
+        // reference interpreter can't run these residuals (correctness is
+        // checked against Node by the corpus: try_inlined_recursion).
+        let body = "
             function sum(n, acc) {
                 try {
                     if (n <= 0) { return acc; }
                     return sum(n - 1, acc + n);
                 } catch (e) { return -1; }
-            }
-            function main(input) { return sum(5, input); }";
-        let js = to_js(src).expect("to_js should succeed for residualized recursion");
+            }";
+        let dynamic = format!("{body} function main(input) {{ return sum(input, 0); }}");
+        let js = to_js(&dynamic).expect("to_js should succeed for residualized recursion");
         assert!(js.contains("__rf"), "expected a residual recursive function, got:\n{js}");
+        let fixed = format!("{body} function main(input) {{ return sum(5, input); }}");
+        let js = to_js(&fixed).expect("to_js should succeed for inlined recursion");
+        assert!(!js.contains("__rf") && js.contains("try"), "expected the recursion inlined, got:\n{js}");
     }
 
     #[test]

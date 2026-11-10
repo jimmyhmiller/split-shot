@@ -2780,6 +2780,79 @@ struct CompileAux {
     next_slot: usize,
     /// high-water mark of slots used (becomes the function's nslots).
     max_slot: usize,
+    /// The `try` statements being compiled (innermost last): see `TryExits`.
+    try_exits: Vec<TryExits>,
+}
+
+/// A `try` statement being compiled. A jump out of it (a `return`, or a
+/// `break`/`continue` to a statement around it) does not leave from inside:
+/// it records which exit in `code_slot` (and a `return`'s value in
+/// `val_slot`) and goes to the end of the statement, after the `catch`,
+/// where a dispatch on `code_slot` takes it. The statement then has one way
+/// out, at its end. (A residual `try` is the nested programs of its body and
+/// catch, which end at the region's end: control leaving from inside would
+/// go on specializing the code after it as part of the body, inside the
+/// `try`. And a `return` inside would end the residual function, which in a
+/// function inlined into another is not where it returns to.)
+#[derive(Default)]
+struct TryExits {
+    /// `breaks`/`continues` heights outside the statement.
+    breaks: usize,
+    continues: usize,
+    /// `handler_depth` outside the statement.
+    handler_depth: usize,
+    code_slot: usize,
+    val_slot: usize,
+    /// The exits taken, by code (`code_slot` holds 1 + the index).
+    exits: Vec<TryExit>,
+    /// Compiling the body (not the catch).
+    in_body: bool,
+    /// The exits' jumps: from the body to its end (the `PopHandler` of the
+    /// statement's own handler, then on to the statement's end, where the
+    /// residual body ends too), from the catch to the statement's end.
+    body_jumps: Vec<usize>,
+    jumps: Vec<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TryExit {
+    Return,
+    /// To the end of the breakable statement / the continuation of the loop
+    /// at this index of `breaks` / `continues`.
+    Break(usize),
+    Continue(usize),
+}
+
+/// Leave the innermost `try` being compiled by `exit` if it goes out of it
+/// (see `TryExits`; a `return`'s value is already in its `val_slot`).
+fn leave_try(exit: TryExit, code: &mut Vec<Instr>, aux: &mut CompileAux) -> bool {
+    let depth = aux.handler_depth;
+    let Some(t) = aux.try_exits.last_mut() else { return false };
+    let leaves = match exit {
+        TryExit::Return => true,
+        TryExit::Break(i) => i < t.breaks,
+        TryExit::Continue(i) => i < t.continues,
+    };
+    if !leaves {
+        return false;
+    }
+    let k = match t.exits.iter().position(|e| *e == exit) {
+        Some(k) => k,
+        None => {
+            t.exits.push(exit);
+            t.exits.len() - 1
+        }
+    };
+    code.push(Instr::PushNum(JsNum::int(k as i64 + 1)));
+    code.push(Instr::Store(t.code_slot));
+    // (The handlers opened inside the statement; from the body, its own is
+    // popped where the body ends.)
+    for _ in 0..(depth - t.handler_depth - usize::from(t.in_body)) {
+        code.push(Instr::PopHandler);
+    }
+    if t.in_body { t.body_jumps.push(code.len()) } else { t.jumps.push(code.len()) }
+    code.push(Instr::Jmp(0));
+    true
 }
 
 fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
@@ -2828,12 +2901,18 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
             }
             Stmt::Return(e) => {
                 compile_expr(e, code, aux);
-                code.push(Instr::Ret);
+                if let Some(t) = aux.try_exits.last() {
+                    code.push(Instr::Store(t.val_slot));
+                    leave_try(TryExit::Return, code, aux);
+                } else {
+                    code.push(Instr::Ret);
+                }
             }
             Stmt::ExprStmt(e) => {
                 compile_expr(e, code, aux);
                 code.push(Instr::Pop);
             }
+            Stmt::Break if leave_try(TryExit::Break(aux.breaks.len() - 1), code, aux) => {}
             Stmt::Break => {
                 // Leaving the target loop/switch via `break` exits every `try`
                 // opened inside it: pop those handlers before the jump.
@@ -2919,6 +2998,7 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
                     patch(&mut code[c], update_pc);
                 }
             }
+            Stmt::BreakOuter(n) if leave_try(TryExit::Break(aux.breaks.len() - 1 - n), code, aux) => {}
             Stmt::BreakOuter(n) => {
                 let idx = aux.breaks.len() - 1 - n;
                 let target_hd = aux.breaks_hd[idx];
@@ -2929,6 +3009,7 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
                 code.push(Instr::Jmp(0));
                 aux.breaks[idx].push(j);
             }
+            Stmt::ContinueOuter(n) if leave_try(TryExit::Continue(aux.continues.len() - 1 - n), code, aux) => {}
             Stmt::ContinueOuter(n) => {
                 let idx = aux.continues.len() - 1 - n;
                 let target_hd = aux.continues_hd[idx];
@@ -2949,6 +3030,7 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
                 }
                 aux.breaks_hd.pop();
             }
+            Stmt::Continue if leave_try(TryExit::Continue(aux.continues.len() - 1), code, aux) => {}
             Stmt::Continue => {
                 // Leaving the loop body via `continue` exits every `try` opened
                 // inside it: pop those handlers before the jump.
@@ -2981,6 +3063,20 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
                 code[at] = Instr::TryFinally { body_end, end };
             }
             Stmt::Try { body, catch_slot, catch_body } => {
+                let (code_slot, val_slot) = (aux.next_slot, aux.next_slot + 1);
+                aux.next_slot += 2;
+                aux.max_slot = aux.max_slot.max(aux.next_slot);
+                code.push(Instr::PushNum(JsNum::int(0)));
+                code.push(Instr::Store(code_slot));
+                aux.try_exits.push(TryExits {
+                    breaks: aux.breaks.len(),
+                    continues: aux.continues.len(),
+                    handler_depth: aux.handler_depth,
+                    code_slot,
+                    val_slot,
+                    in_body: true,
+                    ..TryExits::default()
+                });
                 let ph = code.len();
                 code.push(Instr::PushHandler {
                     catch_pc: 0,
@@ -3000,6 +3096,7 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
                 code.push(Instr::Jmp(0)); // normal completion skips the catch
                 let catch_pc = code.len();
                 aux.catch_pcs.push(catch_pc);
+                aux.try_exits.last_mut().unwrap().in_body = false;
                 compile_stmts(catch_body, code, aux);
                 let end = code.len();
                 patch(&mut code[jmp], end);
@@ -3009,6 +3106,23 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
                     *cp = catch_pc;
                     *be = body_end;
                     *en = end;
+                }
+                // The exits, out of the statement (see `TryExits`).
+                let t = aux.try_exits.pop().unwrap();
+                for j in &t.body_jumps {
+                    patch(&mut code[*j], body_end);
+                }
+                for j in &t.jumps {
+                    patch(&mut code[*j], end);
+                }
+                for (k, exit) in t.exits.iter().enumerate() {
+                    let take = match *exit {
+                        TryExit::Return => Stmt::Return(Expr::Var(t.val_slot)),
+                        TryExit::Break(i) => Stmt::BreakOuter(aux.breaks.len() - 1 - i),
+                        TryExit::Continue(i) => Stmt::ContinueOuter(aux.continues.len() - 1 - i),
+                    };
+                    let taken = Expr::Bin(Bop::Eq, Box::new(Expr::Var(code_slot)), Box::new(Expr::Num(JsNum::int(k as i64 + 1))));
+                    compile_stmts(&[Stmt::If(taken, vec![take], vec![])], code, aux);
                 }
             }
         }
@@ -3882,7 +3996,12 @@ pub struct Js {
     /// never converges). We detect the re-entry and raise a clear, bounded error
     /// instead of overflowing the stack. (Properly threading the non-local exit
     /// out of the residual sub-program is future work.)
-    residual_try_stack: std::cell::RefCell<Vec<usize>>,
+    residual_try_stack: std::cell::RefCell<Vec<(usize, usize)>>,
+    /// Per body or catch of a residual `try` being specialized: its end pc,
+    /// and the locals every path that reached it held, each the one static
+    /// primitive value they all held there or `None` (`None` overall: no path
+    /// reached it yet). See `residualize_try`.
+    halt_locals: std::cell::RefCell<Vec<(usize, Option<Vec<Option<Abs>>>)>>,
     /// True while running the foldability probe for a `try`: a would-be
     /// `forbid_residual_in_try` records taint instead of aborting.
     probing: std::cell::Cell<bool>,
@@ -4744,6 +4863,7 @@ impl Js {
             resume_memo: std::cell::RefCell::new(HashMap::new()),
             halt_at: std::cell::RefCell::new(Vec::new()),
             residual_try_stack: std::cell::RefCell::new(Vec::new()),
+            halt_locals: std::cell::RefCell::new(Vec::new()),
             probing: std::cell::Cell::new(false),
             try_taint: std::cell::Cell::new(false),
             spec_steps: std::cell::Cell::new(0),
@@ -6677,6 +6797,12 @@ impl Js {
         num: &std::collections::HashSet<usize>,
         defs: &std::collections::HashMap<usize, RExpr>,
     ) -> bool {
+        // A standard error made with primitive arguments: no code of the
+        // program runs, nothing can throw (see `Instr::NewOp`).
+        if let RExpr::New(c, xs) = e {
+            return matches!(&**c, RExpr::Global(g) if STANDARD_ERRORS.contains(&g.as_str()) && self.pristine(g))
+                && xs.iter().all(|x| matches!(x, RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null));
+        }
         // The geometry or buffer of a typed array the residual made itself.
         if let RExpr::Get(o, k) = e {
             // (A property of an ordinary function as made, none an
@@ -7433,6 +7559,9 @@ fn closure_chain_standard(heap: &Heap, addr: usize) -> bool {
 /// block before blocks are made per iteration again, for the engine's
 /// unroll backstop (its `UNROLL_BOUND`).
 const STATIC_UNROLL_INLINE: usize = 5_000;
+
+/// The standard error constructors.
+const STANDARD_ERRORS: &[&str] = &["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError"];
 
 /// (`MEM_DEBUG`: the process's peak resident size, from `getrusage`.)
 #[repr(C)]
@@ -8446,6 +8575,23 @@ fn standard_static_method(g: &str, m: &str) -> bool {
 
 /// Does some value of `s` (a frame's, a heap object's, a tracked global's)
 /// name variable `v`?
+/// Join `locals` (the activation's slots on one more path) into `seen`
+/// (see `Js::halt_locals`): a slot keeps its value while every path held the
+/// same static primitive.
+fn join_static_locals(seen: &mut Option<Vec<Option<Abs>>>, locals: &[Abs]) {
+    let own = |v: &Abs| matches!(v, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null).then(|| v.clone());
+    match seen {
+        None => *seen = Some(locals.iter().map(own).collect()),
+        Some(seen) => {
+            for (slot, v) in seen.iter_mut().enumerate() {
+                if v.is_some() && locals.get(slot) != v.as_ref() {
+                    *v = None;
+                }
+            }
+        }
+    }
+}
+
 fn state_refers_to(s: &State, v: usize) -> bool {
     let names = |a: &Abs| matches!(a, Abs::Dyn(e) if rexpr_contains(e, &|x| matches!(x, RExpr::Var(w) if *w == v)));
     s.frames.iter().any(|f| f.values().any(names))
@@ -9243,7 +9389,7 @@ impl Js {
         // block entry (the then-arm consumed its copy in `jump_to`). Otherwise the
         // stale marker persists and, inside a loop, keeps the state from ever
         // memo-tying. Only at a real block boundary (`at_entry`).
-        if at_entry && s.pending_joins.last().map(|j| j.end) == Some(pc) {
+        if at_entry && s.pending_joins.last().map(|j| j.end) == Some(pc) && !self.ends_nested(s, pc) {
             self.consume_pending_joins(s, pc, out);
         }
         // (Passing a loop head starts a new iteration.)
@@ -9269,7 +9415,17 @@ impl Js {
                 // write any locals the body/catch modified back to their stable
                 // variables so the continuation after the `try` observes them.
                 if !self.probing.get() {
-                    let slots: Vec<usize> = (0..s.top().locals.len()).collect();
+                    if let Some((at, seen)) = self.halt_locals.borrow_mut().last_mut() {
+                        if *at == pc {
+                            join_static_locals(seen, &s.top().locals);
+                        }
+                    }
+                    // (A local holding a static primitive already holds it
+                    // in its variable: the residual `try` wrote it as it
+                    // began, or a store as it ran, see `eager_stores`.)
+                    let slots: Vec<usize> = (0..s.top().locals.len())
+                        .filter(|&k| !matches!(s.top().locals[k], Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null))
+                        .collect();
                     self.materialize(s, &slots, out);
                 }
                 return Step::Halt;
@@ -9493,9 +9649,20 @@ impl Js {
                     // Every other live reader of `id`, anywhere in the state, is
                     // frozen too (see `freeze_refs_to`).
                     let fi = s.frames.len() - 1;
+                    // (A value that is the variable already: nothing to write.
+                    // An inlined recursive activation's slots are its
+                    // caller's variables too.)
+                    if expr == RExpr::Var(id) {
+                        s.top_mut().locals[*slot] = v;
+                        return self.advance(s);
+                    }
                     self.freeze_refs_to(s, &[id], &[(fi, *slot)], &[], pc, out);
                     out.push(Op::Assign { var: id, expr });
-                    s.top_mut().locals[*slot] = Abs::Dyn(RExpr::Var(id));
+                    // (A static primitive written for a residual `try`'s sake
+                    // stays known: the variable holds it from here, as the
+                    // slot does.)
+                    let known = matches!(v, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null);
+                    s.top_mut().locals[*slot] = if known { v } else { Abs::Dyn(RExpr::Var(id)) };
                 } else {
                     s.top_mut().locals[*slot] = v;
                 }
@@ -11153,8 +11320,15 @@ impl Js {
                     Ok(step) => return step,
                     Err(back) => back,
                 };
-                self.sync_globals(s, true, out);
-                self.forbid_residual_in_try(s, "a `new` expression");
+                // A standard error made with a primitive message (or none)
+                // runs no code of the program and cannot throw: no runtime
+                // point a `try` must catch or globals must be written out for.
+                let plain_error = matches!(&callee, Abs::Dyn(RExpr::Global(g)) if STANDARD_ERRORS.contains(&g.as_str()) && self.pristine(g))
+                    && args.iter().all(|a| matches!(a, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null));
+                if !plain_error {
+                    self.sync_globals(s, true, out);
+                    self.forbid_residual_in_try(s, "a `new` expression");
+                }
                 let callee_r = match callee {
                     Abs::Dyn(r) => r,
                     // `new` of a known function/closure: it becomes a residual
@@ -16816,7 +16990,17 @@ impl Js {
         }
         // An async function's body runs partly after the script (its awaits
         // resume from the microtask queue): it is always a residual call.
-        if self.has_try[fid] || dynamic_recursion || self.is_async[fid] {
+        // A function with a `try` is inlined like any other (a `try` that
+        // does not fold becomes a residual `try` in the caller, see
+        // `residualize_try`), except a generator (a `yield` in a `try` runs
+        // in its residual body) and a derived constructor (its `this`, made
+        // by a `super(...)` a residual `try` may hold, is the activation's).
+        let try_stays = self.has_try[fid] && {
+            let hi = self.entries.get(fid + 1).copied().unwrap_or(self.code.len());
+            self.fn_kinds[fid] == FnKind::Generator
+                || self.code[self.entries[fid]..hi].iter().any(|i| matches!(i, Instr::SuperCall(_) | Instr::SuperCallSpread))
+        };
+        if try_stays || dynamic_recursion || self.is_async[fid] {
             self.forbid_residual_in_try(s, "a call to a residual function");
             self.freeze_before_opaque_call(s, pc, out);
             let mut escaped = std::collections::HashSet::new();
@@ -21642,6 +21826,14 @@ impl Js {
     /// at the join (block entry) — without the latter, an `if` with no `else`
     /// inside a loop leaves a stale `pending_join` on the else path that never
     /// clears, so the loop's states never memo-tie and it unrolls forever.
+    /// Does a bounded sub-specialization (a residual `try`'s body or catch)
+    /// end at `pc` in `s`? There every local goes to its variable anyway, and
+    /// the static values the paths arrive with are what `halt_locals` keeps:
+    /// an `if`'s join is not applied first.
+    fn ends_nested(&self, s: &State, pc: usize) -> bool {
+        s.frames.len() == 1 && self.halt_at.borrow().last() == Some(&pc)
+    }
+
     fn consume_pending_joins(&self, ns: &mut State, target: usize, out: &mut Vec<Op>) {
         while ns.pending_joins.last().map(|j| j.end) == Some(target) {
             let PendingJoin { mods: m, globals, .. } = ns.pending_joins.pop().unwrap();
@@ -21896,7 +22088,9 @@ impl Js {
             }
             self.materialize(&mut ns, &slots, out);
         }
-        self.consume_pending_joins(&mut ns, target, out);
+        if !self.ends_nested(&ns, target) {
+            self.consume_pending_joins(&mut ns, target, out);
+        }
         // Block boundary: reclaim heap garbage so the abstract heap stays bounded
         // by the live set (otherwise long static unrolling accumulates dead
         // objects forever, which is what made `simple.js` blow up).
@@ -22357,14 +22551,28 @@ impl Js {
         // that re-entry and fail with a clear, catchable error rather than
         // overflowing the stack. (The sound complete fix is to thread the
         // non-local exit out of the residual sub-program; not yet done.)
-        if self.residual_try_stack.borrow().contains(&catch_pc) {
+        // (The same `try` at the same depth of activations: a nested
+        // program's sole activation is at the depth of the `try` it is the
+        // region of. The same `try` deeper is a recursive call's.)
+        let depth = self.residual_try_stack.borrow().last().map_or(0, |&(_, d)| d - 1) + s.frames.len();
+        if self.residual_try_stack.borrow().contains(&(catch_pc, depth)) {
             panic!(
                 "`continue`/`break` out of a residualized `try`/`catch` back into an \
                  enclosing loop is not yet supported (would not terminate)"
             );
         }
-        self.residual_try_stack.borrow_mut().push(catch_pc);
-
+        self.residual_try_stack.borrow_mut().push((catch_pc, depth));
+        // The locals that hold static primitives as the `try` starts: the
+        // body starts with them known (each local also goes to its variable
+        // below, and a store in the body writes the variable as it runs, see
+        // `eager_stores`), as does the catch for those the body never
+        // assigns.
+        let known: Vec<Option<Abs>> = s
+            .top()
+            .locals
+            .iter()
+            .map(|v| matches!(v, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null).then(|| v.clone()))
+            .collect();
         self.materialize_all(s, out);
         // The body writes globals in place (and may throw after some), and
         // the catch and the code after the `try` cannot know which: tracked
@@ -22376,23 +22584,60 @@ impl Js {
         // Body: no handler (a runtime throw is caught by the emitted `catch`),
         // bounded at the `PopHandler` (normal completion).
         let body_pc = s.top().pc + 1;
-        let body_state = self.sole_frame_state(s, body_pc);
+        let mut body_state = self.sole_frame_state(s, body_pc);
+        for (slot, v) in known.iter().enumerate() {
+            if let Some(v) = v {
+                body_state.frames[0].locals[slot] = v.clone();
+            }
+        }
         self.halt_at.borrow_mut().push(body_end);
+        self.halt_locals.borrow_mut().push((body_end, None));
         let body = self.specialize_nested(body_state);
+        let (_, mut after) = self.halt_locals.borrow_mut().pop().unwrap();
         self.halt_at.borrow_mut().pop();
         // Catch: the exception is a runtime value bound to a residual variable.
         let ev = self.exc_var(catch_pc);
         let mut catch_state = self.sole_frame_state(s, catch_pc);
+        let assigned: std::collections::HashSet<usize> =
+            self.code[body_pc..body_end].iter().filter_map(|i| if let Instr::Store(k) = i { Some(*k) } else { None }).collect();
+        for (slot, v) in known.iter().enumerate() {
+            if let (Some(v), false) = (v, assigned.contains(&slot)) {
+                catch_state.frames[0].locals[slot] = v.clone();
+            }
+        }
         if let Some(slot) = exc_slot {
             catch_state.frames[0].locals[slot] = Abs::Dyn(RExpr::Var(ev));
         }
         self.halt_at.borrow_mut().push(end);
+        self.halt_locals.borrow_mut().push((end, None));
         let catch_body = self.specialize_nested(catch_state);
+        let (_, after_catch) = self.halt_locals.borrow_mut().pop().unwrap();
         self.halt_at.borrow_mut().pop();
         self.eager_stores.set(prev_eager);
         self.residual_try_stack.borrow_mut().pop();
         out.push(Op::Try { body, catch_slot: exc_slot.map(|_| ev), catch_body, finally_body: None });
         s.top_mut().pc = end;
+        // A local every path out of the body and the catch left holding one
+        // static value holds it after the `try` (the exit a `TryExits`
+        // dispatch takes, when every path takes the same one).
+        match (&mut after, after_catch) {
+            (None, c) => after = c,
+            (Some(a), Some(c)) => {
+                for (x, y) in a.iter_mut().zip(c) {
+                    if *x != y {
+                        *x = None;
+                    }
+                }
+            }
+            (Some(_), None) => {}
+        }
+        if let Some(after) = after {
+            for (slot, v) in after.into_iter().enumerate() {
+                if let Some(v) = v {
+                    s.top_mut().locals[slot] = v;
+                }
+            }
+        }
         Step::Continue
     }
 
