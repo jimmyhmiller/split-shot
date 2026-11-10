@@ -3731,6 +3731,8 @@ pub struct Js {
     /// The conditional jumps guarding an exit from a loop whose own test is a
     /// constant, with the loop heads (see `Js::new`).
     loop_exit_branch_of: HashMap<usize, Vec<usize>>,
+    /// Per loop head: the pc of its back edge (the loop's last instruction).
+    loop_back: Vec<usize>,
     /// The loop heads one of whose exit branches has decided dynamically.
     loop_exit_dynamic: std::cell::RefCell<std::collections::HashSet<LoopCtx>>,
     /// Specializing a residual function's body (its globals are runtime).
@@ -4681,6 +4683,7 @@ impl Js {
             loop_cond_seen: std::cell::RefCell::new(HashMap::new()),
             loop_cond_of,
             loop_exit_branch_of,
+            loop_back,
             loop_exit_dynamic: std::cell::RefCell::new(std::collections::HashSet::new()),
             collection_prelude: program
                 .iter()
@@ -11707,7 +11710,7 @@ impl Js {
         {
             Vec::new()
         } else {
-            self.heap_field_changes(&seen.heap, &from.heap, self.dynamically_controlled(from)).map(|(c, _)| c).unwrap_or_default()
+            self.heap_field_changes(&seen.heap, &from.heap, self.dynamically_controlled(from), from).map(|(c, _)| c).unwrap_or_default()
         };
         if env_flag!("GEN_DEBUG") && !fields.is_empty() {
             for &(addr, idx) in &fields {
@@ -14099,7 +14102,7 @@ impl Js {
         if seen.frames[..fi] != cand.frames[..fi] {
             return false;
         }
-        match self.heap_field_changes(&seen.heap, &cand.heap, false) {
+        match self.heap_field_changes(&seen.heap, &cand.heap, false, cand) {
             Some((_, heap_grew)) => grew || heap_grew,
             // Structures changed shape (an array grew, an object gained a
             // property). With static progress elsewhere (a counter, an
@@ -14189,6 +14192,23 @@ impl Js {
         out
     }
 
+    /// The heap fields the conditions of the loops around `s`'s position in
+    /// its activation read (see `dry_run_condition`): the heap analogue of
+    /// guard slots.
+    fn loop_condition_fields(&self, s: &State) -> Vec<(usize, Option<usize>)> {
+        let pc = s.top().pc;
+        let lo = self.entries[s.top().func];
+        let mut reads = Vec::new();
+        for h in lo..=pc {
+            if self.loop_head[h] && self.loop_back[h] >= pc {
+                let mut probe = s.clone();
+                probe.top_mut().pc = h;
+                self.dry_run_condition(&probe, &mut reads);
+            }
+        }
+        reads
+    }
+
     /// Compare two heaps that should hold the SAME objects (same addresses, same
     /// kinds, same array lengths / object keys) and differ only in PRIMITIVE
     /// fields, as when a loop updates an array of registers in place. Returns the
@@ -14198,12 +14218,19 @@ impl Js {
     /// changed reference), which is left to the existing materialization rules.
     /// `dynamic`: the loop is under runtime control, so a field moving between
     /// two static values bounds nothing (a closure's counter a constructor
-    /// bumps in a loop of a runtime count) and generalizes too.
+    /// bumps in a loop of a runtime count) and generalizes too. Otherwise
+    /// such a field stops it when a condition of the loops around `at`
+    /// reads it (`loop_condition_fields`): it may be what bounds the loop
+    /// (a Brainfuck tape cell counted down by `while (tape[p])`), as a
+    /// guard slot does. One no condition reads only accumulates data (a
+    /// register `r[1] += 2` of a VM whose registers are an array): it
+    /// generalizes with the loop, as an accumulator slot does.
     fn heap_field_changes(
         &self,
         seen: &Heap,
         cand: &Heap,
         dynamic: bool,
+        at: &State,
     ) -> Option<(Vec<(usize, usize)>, bool)> {
         if seen.len() != cand.len() {
             return None;
@@ -14211,6 +14238,7 @@ impl Js {
         let creation = self.creation_pc.borrow();
         let mut changes = Vec::new();
         let mut grew = false;
+        let mut guard_fields: Option<Vec<(usize, Option<usize>)>> = None;
         for (addr, c) in cand.iter() {
             let s = seen.get(addr)?;
             if s == c {
@@ -14234,13 +14262,13 @@ impl Js {
                 if matches!(a, Abs::Ref(_)) || matches!(b, Abs::Ref(_)) {
                     return None;
                 }
-                // A field moving between two STATIC values may be what bounds the
-                // loop (a Brainfuck tape cell counted down by `while (tape[p])`),
-                // the heap analogue of a loop guard; which fields the condition
-                // reads isn't tracked, so keep unrolling, as before. (Not
-                // under runtime control: no static value bounds that loop.)
+                // A field moving between two STATIC values that a loop's
+                // condition reads: the loop's bound (see above).
                 if !dynamic && !a.is_dynamic() && !b.is_dynamic() {
-                    return None;
+                    let guards = guard_fields.get_or_insert_with(|| self.loop_condition_fields(at));
+                    if guards.iter().any(|&(g, e)| g == *addr && e.is_none_or(|e| e == idx)) {
+                        return None;
+                    }
                 }
                 if let (Abs::Dyn(x), Abs::Dyn(y)) = (a, b) {
                     if rexpr_subterm(x, y) {
@@ -21484,7 +21512,14 @@ impl Js {
         if self.loop_exit_dynamic.borrow().contains(&self.loop_ctx(s, s.top().pc)) {
             return true;
         }
-        // Dry-run the loop condition under the current locals/heap.
+        self.dry_run_condition(s, &mut Vec::new())
+    }
+
+    /// Dry-run the condition of the loop whose head `s` is at, under the
+    /// current locals and heap: is it dynamic? The heap fields it reads go to
+    /// `reads`, as `(object, Some(element))` for an array element at a static
+    /// index and `(object, None)` for any other read of an object.
+    fn dry_run_condition(&self, s: &State, reads: &mut Vec<(usize, Option<usize>)>) -> bool {
         let mut probe = s.clone();
         for _ in 0..512 {
             let pc = probe.top().pc;
@@ -21511,6 +21546,9 @@ impl Js {
                 }
                 Instr::GetProp(k) => {
                     let o = probe.top_mut().ostack.pop().unwrap();
+                    if let Abs::Ref(addr) = o {
+                        reads.push((addr, None));
+                    }
                     match self.get_prop_opt(&probe, &o, k) {
                         Some(v) => probe.top_mut().ostack.push(v),
                         // A read the dry run cannot do (a method of a modeled
@@ -21527,6 +21565,13 @@ impl Js {
                     // loop as dynamically controlled.
                     if !self.index_is_static(&probe, &a, &i) {
                         return true;
+                    }
+                    if let Abs::Ref(addr) = a {
+                        let elem = match (&probe.heap[&addr], &i) {
+                            (HeapObj::Array(_), Abs::Num(n)) if n.0 >= 0.0 && n.0.fract() == 0.0 => Some(n.0 as usize),
+                            _ => None,
+                        };
+                        reads.push((addr, elem));
                     }
                     let v = self.get_index(&probe, &a, &i);
                     probe.top_mut().ostack.push(v);
