@@ -16233,8 +16233,19 @@ impl Js {
                     // through it, so the call stays a runtime call.)
                     let species = (uses_species(m) && matches!(&s.heap[&recv], HeapObj::Array(a) if !a.standard()))
                         || (mutates_array(m) && matches!(&s.heap[&recv], HeapObj::Array(a) if a.frozen));
+                    // A method that runs a known function of the program on
+                    // each element of this array (of a static length) is
+                    // unfolded even where the function's results are runtime
+                    // values: each call is inlined, where the runtime's method
+                    // would call it per element. (Not the ones that stop at
+                    // an element, `find` and the like: each element the
+                    // search could stop at would be a different value after
+                    // the call, so the code after it would be specialized
+                    // once per element.)
+                    let known_callback = matches!(m, "filter" | "reduce" | "reduceRight" | "forEach" | "map" | "flatMap" | "some" | "every")
+                        && matches!(args.first(), Some(Abs::Ref(f)) if matches!(&s.heap[f], HeapObj::Closure { known: true, .. }));
                     if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), self.may_fold_builtins(s), native_only, species) {
-                      if self.prelude_unfolds(s, fid, &args, &this, pc) {
+                      if known_callback || self.prelude_unfolds(s, fid, &args, &this, pc) {
                         let f = s.alloc(HeapObj::closure(fid, vec![]));
                         let n = args.len();
                         s.top_mut().ostack.push(Abs::Ref(f));
