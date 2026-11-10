@@ -4065,6 +4065,11 @@ pub struct Js {
     /// the duplication profiler to map a duplicated abstract object back to the
     /// single creation site that dominates all of its uses.
     creation_pc: std::cell::RefCell<HashMap<usize, usize>>,
+    /// Per heap address, the address its generalized fields are named after
+    /// (see `pair_fresh` and `field_owner`): an object made anew on every
+    /// iteration of a runtime loop names its fields after the object it
+    /// replaced, so the loop carries them in one set of variables.
+    field_owner: std::cell::RefCell<HashMap<usize, usize>>,
     /// Stable residual variable per (creation pc, field index) of a heap object
     /// whose primitive field is generalized at a loop head (see
     /// `heap_field_changes`). Interned so every iteration's state names the field
@@ -4882,6 +4887,7 @@ impl Js {
             simple_vars: std::cell::RefCell::new(std::collections::HashSet::new()),
             eager_stores: std::cell::Cell::new(false),
             creation_pc: std::cell::RefCell::new(HashMap::new()),
+            field_owner: std::cell::RefCell::new(HashMap::new()),
             var_ids: std::cell::RefCell::new(VarIds::default()),
             passed_leader: std::cell::Cell::new(None),
             block_hist: std::cell::RefCell::new(HashMap::new()),
@@ -7062,6 +7068,7 @@ impl Js {
         self.spec_blocks.set(0);
         self.spec_weight.set(0);
         self.creation_pc.borrow_mut().clear();
+        self.field_owner.borrow_mut().clear();
         self.branched_contexts.borrow_mut().clear();
     }
 
@@ -11425,8 +11432,24 @@ impl Js {
             self.sync_globals(&mut g, true, out);
         }
         let fi = g.frames.len() - 1;
+        // (An object made anew on each iteration stands for the one it
+        // replaced: see `pair_fresh`. Only under runtime control: a loop the
+        // specializer runs itself tells its iterations apart.)
+        let fresh = if self.dynamically_controlled(from) { self.pair_fresh(seen, from) } else { HashMap::new() };
+        if env_flag!("GEN_DEBUG") {
+            let creation = self.creation_pc.borrow();
+            eprintln!(
+                "[GEN-FRESH] pairs={:?} sites={:?} callers_equal={}",
+                fresh,
+                fresh.iter().map(|(f, s)| (creation.get(f).copied(), creation.get(s).copied())).collect::<Vec<_>>(),
+                seen.frames.len() == from.frames.len() && seen.frames[..fi] == from.frames[..fi]
+            );
+        }
         let slots: Vec<usize> = (0..g.frames[fi].locals.len())
-            .filter(|&slot| seen.frames[fi].locals[slot] != from.frames[fi].locals[slot])
+            .filter(|&slot| match (&seen.frames[fi].locals[slot], &from.frames[fi].locals[slot]) {
+                (Abs::Ref(a), Abs::Ref(b)) if fresh.get(b) == Some(a) => false,
+                (a, b) => a != b,
+            })
             .collect();
         if env_flag!("GENSTATE_DEBUG") {
             let gs = |st: &State| -> Vec<(usize, u8, Option<usize>)> {
@@ -11490,7 +11513,13 @@ impl Js {
         {
             Vec::new()
         } else {
-            self.heap_field_changes(&seen.heap, &from.heap, self.dynamically_controlled(from), from).map(|(c, _)| c).unwrap_or_default()
+            match self.heap_field_changes(&seen.heap, &from.heap, self.dynamically_controlled(from), from, &fresh) {
+                Some((changes, _)) => {
+                    self.adopt_field_owners(&fresh);
+                    changes
+                }
+                None => Vec::new(),
+            }
         };
         if env_flag!("GEN_DEBUG") && !fields.is_empty() {
             for &(addr, idx) in &fields {
@@ -13882,7 +13911,7 @@ impl Js {
         if seen.frames[..fi] != cand.frames[..fi] {
             return false;
         }
-        match self.heap_field_changes(&seen.heap, &cand.heap, false, cand) {
+        match self.heap_field_changes(&seen.heap, &cand.heap, false, cand, &HashMap::new()) {
             Some((_, heap_grew)) => grew || heap_grew,
             // Structures changed shape (an array grew, an object gained a
             // property). With static progress elsewhere (a counter, an
@@ -14011,6 +14040,7 @@ impl Js {
         cand: &Heap,
         dynamic: bool,
         at: &State,
+        fresh: &HashMap<usize, usize>,
     ) -> Option<(Vec<(usize, usize)>, bool)> {
         if seen.len() != cand.len() {
             return None;
@@ -14019,11 +14049,29 @@ impl Js {
         let mut changes = Vec::new();
         let mut grew = false;
         let mut guard_fields: Option<Vec<(usize, Option<usize>)>> = None;
+        // (`cand`'s value as `seen` would hold it: a fresh object is its
+        // partner.)
+        let as_seen = |v: &Abs| -> Abs {
+            match v {
+                Abs::Ref(a) => Abs::Ref(*fresh.get(a).unwrap_or(a)),
+                other => other.clone(),
+            }
+        };
         for (addr, c) in cand.iter() {
-            let s = seen.get(addr)?;
+            let s = seen.get(fresh.get(addr).unwrap_or(addr))?;
             if s == c {
                 continue;
             }
+            let renamed;
+            let c = if fresh.is_empty() {
+                c
+            } else {
+                renamed = c.map_children(&as_seen);
+                if *s == renamed {
+                    continue;
+                }
+                &renamed
+            };
             let pairs: Vec<(&Abs, &Abs)> = match (s, c) {
                 (HeapObj::Array(a), HeapObj::Array(b)) if a.len() == b.len() && a.props == b.props && a.proto == b.proto => {
                     a.iter().zip(b.iter()).collect()
@@ -14056,6 +14104,19 @@ impl Js {
                     }
                 }
                 changes.push((*addr, idx));
+            }
+        }
+        // Two live objects whose fields would take one name (an object and
+        // the one that replaced it elsewhere, both still reachable on this
+        // path): their fields cannot be told apart at runtime.
+        if !changes.is_empty() && (!fresh.is_empty() || !self.field_owner.borrow().is_empty()) {
+            let mut owners: HashMap<usize, usize> = HashMap::new();
+            for addr in cand.keys() {
+                let owner = fresh.get(addr).map(|s| self.field_owner(*s)).unwrap_or_else(|| self.field_owner(*addr));
+                *owners.entry(owner).or_insert(0) += 1;
+            }
+            if owners.values().any(|&n| n > 1) {
+                return None;
             }
         }
         Some((changes, grew))
@@ -14430,7 +14491,114 @@ impl Js {
     }
 
     fn heap_field_id(&self, cpc: usize, addr: usize, idx: usize) -> usize {
-        self.var_id(VarKey::HeapField(cpc, addr, idx))
+        self.var_id(VarKey::HeapField(cpc, self.field_owner(addr), idx))
+    }
+
+    /// The address `addr`'s generalized fields are named after: its own,
+    /// unless it replaced another object across a runtime loop's iterations
+    /// (see `pair_fresh`).
+    fn field_owner(&self, addr: usize) -> usize {
+        let owners = self.field_owner.borrow();
+        let mut a = addr;
+        while let Some(&next) = owners.get(&a) {
+            a = next;
+        }
+        a
+    }
+
+    /// The objects of `from` that stand where a different object of `seen`
+    /// stood, as `from address -> seen address`: reached from the same root
+    /// (the same slot of the same frame, the same global) by the same path of
+    /// fields, made at the same place with the same shape, the `seen` one
+    /// gone from `from` and the `from` one not yet in `seen`. This is what a
+    /// loop body that makes an object on every iteration leaves at the loop
+    /// head: `p = new Point(p.x + 1)`, an interpreter's fresh argument list.
+    /// The two are one loop-carried object as far as the next iteration can
+    /// tell (the old one is unreachable), so generalization compares them
+    /// field by field instead of seeing a changed reference it cannot name.
+    fn pair_fresh(&self, seen: &State, from: &State) -> HashMap<usize, usize> {
+        let mut pairs: HashMap<usize, usize> = HashMap::new();
+        if seen.frames.len() != from.frames.len()
+            || seen.frames.iter().zip(&from.frames).any(|(a, b)| {
+                a.func != b.func || a.pc != b.pc || a.locals.len() != b.locals.len() || a.ostack.len() != b.ostack.len()
+            })
+        {
+            return pairs;
+        }
+        let creation = self.creation_pc.borrow();
+        let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        let mut work: Vec<(usize, usize)> = Vec::new();
+        let root = |a: &Abs, b: &Abs, work: &mut Vec<(usize, usize)>| {
+            if let (Abs::Ref(x), Abs::Ref(y)) = (a, b) {
+                work.push((*x, *y));
+            }
+        };
+        for (a, b) in seen.frames.iter().zip(&from.frames) {
+            for (x, y) in a.values().zip(b.values()) {
+                root(x, y, &mut work);
+            }
+        }
+        for (k, x) in seen.fns.iter() {
+            if let Some(y) = from.fns.get(k) {
+                root(x, y, &mut work);
+            }
+        }
+        for (k, (x, _)) in seen.globals.iter() {
+            if let Some((y, _)) = from.globals.get(k) {
+                root(x, y, &mut work);
+            }
+        }
+        // (Positions correspond only between two objects of one shape.)
+        let alike = |s: &HeapObj, f: &HeapObj| match (s, f) {
+            (HeapObj::Array(a), HeapObj::Array(b)) => a.len() == b.len() && a.props.len() == b.props.len(),
+            (HeapObj::Object { .. }, HeapObj::Object { .. }) => obj_cell_labels(s) == obj_cell_labels(f),
+            (HeapObj::Closure { fid: f1, captured: c1, known: k1, .. }, HeapObj::Closure { fid: f2, captured: c2, known: k2, .. }) => {
+                f1 == f2 && k1 == k2 && c1.len() == c2.len() && obj_cell_labels(s) == obj_cell_labels(f)
+            }
+            _ => false,
+        };
+        while let Some((x, y)) = work.pop() {
+            if !visited.insert((x, y)) {
+                continue;
+            }
+            let (Some(so), Some(fo)) = (seen.heap.get(&x), from.heap.get(&y)) else { continue };
+            if !alike(so, fo) {
+                continue;
+            }
+            if x != y {
+                let fresh = !from.heap.contains_key(&x)
+                    && !seen.heap.contains_key(&y)
+                    && !from.escaped.contains(&x)
+                    && !seen.escaped.contains(&y)
+                    && creation.get(&x).is_some()
+                    && creation.get(&x) == creation.get(&y);
+                if !fresh || pairs.get(&y).is_some_and(|&p| p != x) || (!pairs.contains_key(&y) && taken.contains(&x)) {
+                    continue;
+                }
+                pairs.insert(y, x);
+                taken.insert(x);
+            }
+            let (sk, fk) = (so.children(), fo.children());
+            if sk.len() == fk.len() {
+                for (a, b) in sk.into_iter().zip(fk) {
+                    root(a, b, &mut work);
+                }
+            }
+        }
+        pairs
+    }
+
+    /// Record that the fields of each paired `from` object are named after
+    /// its `seen` partner (see `pair_fresh`), for the pairs whose objects
+    /// both still name their own.
+    fn adopt_field_owners(&self, pairs: &HashMap<usize, usize>) {
+        for (&f, &s) in pairs {
+            let (fo, so) = (self.field_owner(f), self.field_owner(s));
+            if fo != so {
+                self.field_owner.borrow_mut().insert(fo, so);
+            }
+        }
     }
 
     fn push(&self, s: &mut State, v: Abs) -> Step<Js> {
@@ -22194,32 +22362,12 @@ impl Js {
                 }
             }
             let disable_inv = env_flag!("DISABLE_INV");
-            // What the loop can reach at all: the objects reachable from the
-            // slots it reads, the stack, `this`, the globals and the
-            // function objects. An object held only in slots it never reads
-            // is out of its reach (a script's entry function across the
-            // script's loops): it stays static.
+            // An object held only in slots the loop never reads (a script's
+            // entry function across the script's loops, an interpreter's
+            // statement list across the loop that runs one statement of it)
+            // is decided after the slots it does read: see below.
             let reads = &self.loop_reads[target];
-            let mut reach: std::collections::HashSet<usize> = std::collections::HashSet::new();
-            {
-                let f = &ns.frames[fi];
-                let roots = f
-                    .locals
-                    .iter()
-                    .enumerate()
-                    .filter(|(sl, _)| reads.get(*sl).copied().unwrap_or(true))
-                    .map(|(_, v)| v)
-                    .chain(f.ostack.iter())
-                    .chain(std::iter::once(&f.this))
-                    .chain(std::iter::once(&*f.new_target))
-                    .chain(ns.globals.values().map(|(v, _)| v))
-                    .chain(ns.fns.values());
-                for v in roots {
-                    if let Abs::Ref(a) = v {
-                        Js::reachable(&ns.heap, *a, &mut reach);
-                    }
-                }
-            }
+            let mut unread: Vec<usize> = Vec::new();
             for slot in 0..ns.frames[fi].locals.len() {
                 if matches!(ns.frames[fi].locals[slot], Abs::Ref(_)) && !slots.contains(&slot) {
                     // (The final cell of a captured variable: no code writes
@@ -22258,12 +22406,45 @@ impl Js {
                             continue; // provably frozen — keep static
                         }
                     }
-                    if let Abs::Ref(id) = ns.frames[fi].locals[slot] {
-                        if !reads.get(slot).copied().unwrap_or(true) && !reach.contains(&id) {
-                            continue;
-                        }
+                    if !reads.get(slot).copied().unwrap_or(true) {
+                        unread.push(slot);
+                        continue;
                     }
                     slots.push(slot);
+                }
+            }
+            // A slot the loop never reads keeps its object static unless the
+            // object becomes a runtime value anyway or the loop's own code
+            // may change it: one reachable from an object materialized here,
+            // from one the loop's code mutates, or from the stack, `this`,
+            // the globals and the function objects. One reachable only from
+            // objects that stay static is as static as they are (what a call
+            // in the loop does to it shows at the next visit, as for them).
+            if !unread.is_empty() {
+                let mut reach: std::collections::HashSet<usize> = std::collections::HashSet::new();
+                let f = &ns.frames[fi];
+                let roots = slots
+                    .iter()
+                    .filter_map(|&sl| f.locals.get(sl))
+                    .chain(f.ostack.iter())
+                    .chain(std::iter::once(&f.this))
+                    .chain(std::iter::once(&*f.new_target))
+                    .chain(ns.globals.values().map(|(v, _)| v))
+                    .chain(ns.fns.values());
+                for v in roots {
+                    if let Abs::Ref(a) = v {
+                        Js::reachable(&ns.heap, *a, &mut reach);
+                    }
+                }
+                for &id in &mutated_ids {
+                    Js::reachable(&ns.heap, id, &mut reach);
+                }
+                for slot in unread {
+                    if let Abs::Ref(id) = ns.frames[fi].locals[slot] {
+                        if reach.contains(&id) {
+                            slots.push(slot);
+                        }
+                    }
                 }
             }
             slots.sort_unstable();
