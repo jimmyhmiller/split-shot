@@ -56,12 +56,16 @@ function invoke(info, parent, args, receiver, actuals) {
     j = j + 1;
   }
   // The receiver travels with what is known of its shape: self[1] is the id
-  // of a shape it is known to have at least (-1 when nothing is known) and
+  // of a shape it is known to have at least (0 when nothing is known) and
   // self[2] is 1 while that is exactly its shape. Both start from the
-  // variant this activation is specialized for (see `entryShape`).
-  var self = [receiver, -1, 0];
-  if (!info[5]) { self[1] = entryShape; self[2] = entryShape >= 0 ? 1 : 0; }
+  // variant this activation is specialized for (see `entryShape`). An
+  // arrow's receiver is its scope's, of which nothing is known here.
+  var self = [receiver, 0, 0];
+  if (!info[5]) { self[1] = entryShape; self[2] = entryShape > 0 ? 1 : 0; }
   var status = execute(nodes[info[4]], env, locals, self, actuals);
+  // The shape the receiver is left with, for the driver: it is a shape
+  // receivers of other calls will have (see object-project).
+  if (self[1] > 0) shapeNote(2, self[1], 0);
   // info[11]: a protected part of a `try`. It reports how its body completed
   // and leaves a returned value in the scope it ran in.
   // Status 5 is a `return` that passed through a `try`: its value is in this
@@ -84,10 +88,72 @@ function constant(index) {
   if (value[0] === "null") return vNull();
   return vStr(value[1]);
 }
+// Shapes the specializer can see. A static shape is the sequence of keys an
+// object was given, in order, each with the default attributes; the run time
+// gives the same shapes the same ids (`shapeDeclare`), and 0 to every other.
+//   shapeKeys[id]  the atoms of the shape's keys in slot order
+//   shapeSteps     [from id, atom, to id] for each known addition of a key
+// A lookup compares the id against every shape that has the key. With the id
+// a literal that is a literal; with an id that became a run-time number where
+// two paths met, it is a chain of comparisons that selects the slot, and -1
+// (or 0, for a shape) when the id is none of them.
+function shapeSlot(id, key) {
+  var slot = -1, k = 1;
+  while (k < shapeKeys.length) {
+    var keys = shapeKeys[k], i = 0;
+    while (i < keys.length) {
+      if (keys[i] === key) { if (id === k) slot = i; }
+      i = i + 1;
+    }
+    k = k + 1;
+  }
+  return slot;
+}
+function shapeAfter(id, key) {
+  var next = 0, t = 0;
+  while (t < shapeSteps.length) {
+    var step = shapeSteps[t];
+    if (step[1] === key) { if (id === step[0]) next = step[2]; }
+    t = t + 1;
+  }
+  return next;
+}
+// A named store to the receiver. Its shape is a lower bound once anything
+// else may have run: keys are only ever added and never move, so a key the
+// shape has is at its slot, but one it lacks may be there by now.
+function storeToSelf(node, self, address, value) {
+  var at = shapeSlot(self[1], address);
+  if (at >= 0) {
+    // Exactly this shape: the property is writable, as every property of a
+    // static shape is. Otherwise its attributes may have changed since.
+    if (self[2]) objSetAt(self[0], address, at, value);
+    else objSetOwn(self[0], address, value);
+    return value;
+  }
+  if (self[2]) {
+    var next = shapeAfter(self[1], address);
+    if (next > 0) {
+      objAddKnown(self[0], address, shapeSlot(next, address), value);
+      self[1] = next;
+      return value;
+    }
+    // No shape is known to follow: ask for one, and stop following.
+    shapeNote(1, self[1], address);
+    self[1] = 0;
+    self[2] = 0;
+  }
+  if (node[6]) objSetOwn(self[0], address, value);
+  else objSet(self[0], address, value);
+  return value;
+}
 // Store to the target an assignment or update resolved. kind: 3 a local,
 // 0 an environment slot, 1 a named property, 2 an array index, 4 a key
 // examined at run time.
-function storeTo(kind, node, locals, address, object, name, value) {
+function storeTo(kind, node, locals, address, object, name, value, self, own) {
+  // A store through anything but the receiver itself may be a store to the
+  // receiver under another name.
+  if (kind === 1 && own) return storeToSelf(node, self, address, value);
+  if (kind === 1 || kind === 4) self[2] = 0;
   if (kind === 3) locals[address] = value;
   else if (kind === 0) envSet(object, address, value);
   // node[6]: the base is proved to own the property already, so the store
@@ -202,6 +268,11 @@ function expression(node, env, locals, self, actuals) {
     // node[4]: the property is proved to be an own property of any object
     // base. node[5]: it is also proved to be inline slot node[5] - 1.
     if (node[1] >= 0) {
+      // A property of the receiver that its known shape has is at its slot.
+      if (node[1] > 0 && nodes[node[2]][0] === 12) {
+        var at = shapeSlot(self[1], node[1]);
+        if (at >= 0) return objGetAt(base, node[1], at);
+      }
       // node[6]: the base is proved to be an object, null or undefined.
       // Otherwise it may be a string, number or boolean, which read through
       // their root prototypes.
@@ -223,6 +294,9 @@ function expression(node, env, locals, self, actuals) {
     var address = 0;
     var object = vUndef();
     var name = vUndef();
+    // The target is a named property of the receiver itself.
+    // (Atom 0 is `length`, which an array keeps outside its shape.)
+    var own = target[0] === 8 && target[1] > 0 && nodes[target[2]][0] === 12;
     if (target[0] === 3) {
       if (target[3] >= 0) { kind = 3; address = target[3]; }
       else { object = frame(env, target[1]); address = target[2]; }
@@ -237,7 +311,10 @@ function expression(node, env, locals, self, actuals) {
       if (kind === 3) old = locals[address];
       else if (kind === 0) old = envGet(object, address);
       else if (kind === 1) {
-        if (!node[8]) old = objGetAny(object, address);
+        var oldAt = -1;
+        if (own) oldAt = shapeSlot(self[1], address);
+        if (oldAt >= 0) old = objGetAt(object, address, oldAt);
+        else if (!node[8]) old = objGetAny(object, address);
         else if (node[4] && node[7]) old = objGetSlot(object, address, node[7] - 1);
         else if (node[4]) old = objGetOwn(object, address);
         else old = objGet(object, address);
@@ -253,8 +330,8 @@ function expression(node, env, locals, self, actuals) {
       if (node[1] === 23) wanted = vIsNullish(old);
       var settled = old;
       if (node[1] === 22) {
-        if (!wanted) { settled = expression(nodes[node[3]], env, locals, self, actuals); storeTo(kind, node, locals, address, object, name, settled); }
-      } else if (wanted) { settled = expression(nodes[node[3]], env, locals, self, actuals); storeTo(kind, node, locals, address, object, name, settled); }
+        if (!wanted) { settled = expression(nodes[node[3]], env, locals, self, actuals); storeTo(kind, node, locals, address, object, name, settled, self, own); }
+      } else if (wanted) { settled = expression(nodes[node[3]], env, locals, self, actuals); storeTo(kind, node, locals, address, object, name, settled, self, own); }
       return settled;
     }
     var value = vUndef();
@@ -266,7 +343,7 @@ function expression(node, env, locals, self, actuals) {
       value = expression(nodes[node[3]], env, locals, self, actuals);
       if (node[1] !== 0) { if (node[5]) value = vBinaryNumber(node[1], old, value); else value = vBinary(node[1], old, value); }
     }
-    storeTo(kind, node, locals, address, object, name, value);
+    storeTo(kind, node, locals, address, object, name, value, self, own);
     if (tag === 10 && !node[3]) return old;
     return value;
   }
@@ -307,6 +384,8 @@ function expression(node, env, locals, self, actuals) {
       j = j + 1;
     }
     if (constructor) receiver = constructReceiver(callee);
+    // Whatever runs may add to the receiver: its shape is a lower bound now.
+    self[2] = 0;
     var value = vUndef();
     if (direct >= 0) {
       if (tag === 16) value = callGuest(direct, staticEnv, receiver, args);
@@ -336,6 +415,7 @@ function expression(node, env, locals, self, actuals) {
     // arguments from position node[3] on.
     var forwarded = expression(nodes[node[1]], env, locals, self, actuals);
     var forwardedReceiver = expression(nodes[node[2]], env, locals, self, actuals);
+    self[2] = 0;
     return callRest(fnCode(forwarded), fnEnv(forwarded), forwardedReceiver, actuals, node[3]);
   }
   if (tag === 25) return objRootProto(node[1]);
@@ -375,6 +455,7 @@ function expression(node, env, locals, self, actuals) {
     if (node[1] === 3) spreadReceiver = expression(nodes[node[3]], env, locals, self, actuals);
     var spreadList = expression(nodes[node[4]], env, locals, self, actuals);
     if (node[1] === 1) spreadReceiver = constructReceiver(spreadCallee);
+    self[2] = 0;
     var spreadResult = callSpread(fnCode(spreadCallee), fnEnv(spreadCallee), spreadReceiver, spreadList);
     if (node[1] === 1) return constructResult(spreadReceiver, spreadResult);
     return spreadResult;
@@ -389,6 +470,7 @@ function expression(node, env, locals, self, actuals) {
       storeValue(calledArgs, c, expression(nodes[lists[node[3] + c]], env, locals, self, actuals));
       c = c + 1;
     }
+    self[2] = 0;
     return callGuest(fnCode(called), fnEnv(called), calledReceiver, calledArgs);
   }
   if (tag === 31) {
@@ -427,6 +509,7 @@ function expression(node, env, locals, self, actuals) {
     var defined = expression(nodes[node[1]], env, locals, self, actuals);
     var definedKey = expression(nodes[node[2]], env, locals, self, actuals);
     var definedValue = expression(nodes[node[3]], env, locals, self, actuals);
+    self[2] = 0;
     return objDefine(defined, definedKey, definedValue, vNumber(expression(nodes[node[4]], env, locals, self, actuals)));
   }
   if (tag === 20) {
@@ -508,6 +591,7 @@ function execute(node, env, locals, self, actuals) {
     // over this scope; node[3] is the finalizer; node[4], node[5] locate
     // the value of a `return` executed inside a protected part.
     var noArguments = allocArgs(0);
+    self[2] = 0;
     var outcome = callProtected(node[1], env, self[0], noArguments);
     var throwing = tookThrow();
     var thrown = vUndef();

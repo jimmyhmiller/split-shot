@@ -1,8 +1,52 @@
 //! Object interpreter first projection. The encoder produces data; the
 //! interpreter and semantic intrinsics define execution.
 use std::process::ExitCode;
-fn harness(p: &serde_json::Value, guest: Option<usize>, ordinary: bool) -> Result<String, String> {
-    let mut source = format!("function main(input) {{\nvar nodes={};\nvar functions={};\nvar lists={};\nvar constants={};\nvar keyCount={};\nvar entryShape=-1;\n",p["nodes"],p["functions"],p["lists"],p["constants"],p["keys"].as_array().ok_or("keys required")?.len());
+/// The static shapes the specializer follows receivers through. A shape is
+/// the atoms of an object's keys in the order they were added; its id is
+/// its index. 0 is no shape and 1 the empty one.
+struct Shapes {
+    keys: Vec<Vec<i64>>,
+    /// (from, atom, to): adding `atom` to shape `from` gives shape `to`.
+    steps: Vec<(usize, i64, usize)>,
+}
+impl Shapes {
+    fn new() -> Shapes {
+        Shapes { keys: vec![vec![], vec![]], steps: vec![] }
+    }
+    /// The shape after adding `atom` to `from`, made if it is new.
+    fn step(&mut self, from: usize, atom: i64) -> usize {
+        if let Some(s) = self.steps.iter().find(|s| s.0 == from && s.1 == atom) {
+            return s.2;
+        }
+        let mut keys = self.keys[from].clone();
+        keys.push(atom);
+        self.keys.push(keys);
+        let to = self.keys.len() - 1;
+        self.steps.push((from, atom, to));
+        to
+    }
+    fn tables(&self) -> String {
+        format!(
+            "var shapeKeys={};\nvar shapeSteps={};\n",
+            serde_json::to_string(&self.keys).unwrap(),
+            serde_json::to_string(&self.steps.iter().map(|s| vec![s.0 as i64, s.1, s.2 as i64]).collect::<Vec<_>>()).unwrap()
+        )
+    }
+    /// Declarations of every shape to the run time, parents first.
+    fn declarations(&self) -> String {
+        self.steps.iter().map(|s| format!("shapeDeclare({},{},{});\n", s.2, s.0, s.1)).collect()
+    }
+}
+/// What one guest function is specialized for. `shape` is the receiver's
+/// shape on entry (0: any receiver). `variants` lists, for the general
+/// version, the (shape, code) pairs it hands a receiver of that shape to.
+struct Entry<'a> {
+    guest: Option<usize>,
+    shape: usize,
+    variants: &'a [(usize, usize)],
+}
+fn harness(p: &serde_json::Value, entry: &Entry, shapes: &Shapes, ordinary: bool) -> Result<String, String> {
+    let mut source = format!("function main(input) {{\nvar nodes={};\nvar functions={};\nvar lists={};\nvar constants={};\nvar keyCount={};\nvar entryShape={};\n{}",p["nodes"],p["functions"],p["lists"],p["constants"],p["keys"].as_array().ok_or("keys required")?.len(),entry.shape,shapes.tables());
     if ordinary {
         source.push_str("function callGuest(code,parent,receiver,args) {enterGuest();var value=invoke(functions[code],parent,args,receiver,args);leaveGuest();return value;}\nfunction callGuestOneOf(code,parent,receiver,args,first,second,third,fourth) {return callGuest(code,parent,receiver,args);}\nfunction callSpread(code,parent,receiver,list) {return callGuest(code,parent,receiver,arrValues(list));}\nfunction frameArgCount(frame) {return frame.length;}\nfunction frameArg(frame,i) {if(i<frame.length)return frame[i];return vUndef();}\nfunction callRest(code,parent,receiver,frame,skip) {return callGuest(code,parent,receiver,frame.slice(skip));}\nfunction callProtected(code,parent,receiver,args) {return protectedInvoke(function(){return callGuest(code,parent,receiver,args);});}\n");
     } else {
@@ -12,7 +56,7 @@ fn harness(p: &serde_json::Value, guest: Option<usize>, ordinary: bool) -> Resul
     source.push_str(include_str!(
         "../../docs/object-projection/interpreter.js"
     ));
-    if let Some(id) = guest {
+    if let Some(id) = entry.guest {
         let arity = p["functions"][id][0]
             .as_u64()
             .ok_or("function arity required")?;
@@ -20,13 +64,64 @@ fn harness(p: &serde_json::Value, guest: Option<usize>, ordinary: bool) -> Resul
             .map(|i| format!("callArg(input,{i})"))
             .collect::<Vec<_>>()
             .join(",");
+        // The general version first hands a receiver of a shape the function
+        // has a version for to that version, with the same frame.
+        if !entry.variants.is_empty() {
+            source.push_str("\nvar receiverShape=objShapeId(callThis(input));");
+            for (shape, code) in entry.variants {
+                source.push_str(&format!("\nif(receiverShape==={shape})return callGuestRest({code},callEnv(input),callThis(input),input,0);"));
+            }
+        }
         source.push_str(&format!(
             "\nreturn invoke(functions[{id}],callEnv(input),[{args}],callThis(input),input);\n}}\n"
         ));
     } else {
-        source.push_str(&format!("\n{}return invoke(functions[{}],vNull(),[vNum(input)],vUndef(),{});\n}}\n",c_backend::object_projection::atom_registration(p),p["entry"],if ordinary {"[vNum(input)]"} else {"input"}));
+        source.push_str(&format!("\n{}{}return invoke(functions[{}],vNull(),[vNum(input)],vUndef(),{});\n}}\n",c_backend::object_projection::atom_registration(p),shapes.declarations(),p["entry"],if ordinary {"[vNum(input)]"} else {"input"}));
     }
     Ok(source)
+}
+/// The requests a residual makes of the driver: `shapeNote(kind, a, b)` with
+/// literal arguments. Kind 1 asks for the shape after adding atom `b` to
+/// shape `a`; kind 2 reports that a receiver is left with shape `a`.
+fn notes(residual: &str) -> Result<Vec<(u32, usize, i64)>, String> {
+    let mut out = vec![];
+    let mut rest = residual;
+    while let Some(at) = rest.find("shapeNote") {
+        let before = rest[..at].chars().next_back();
+        rest = &rest[at + "shapeNote".len()..];
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+            continue;
+        }
+        let Some(inside) = rest.strip_prefix('(') else {
+            return Err("a residual uses shapeNote other than by calling it".into());
+        };
+        let close = inside.find(')').ok_or("unterminated shapeNote call")?;
+        let parts: Vec<&str> = inside[..close].split(',').map(str::trim).collect();
+        // (A shape that became a run-time number where two paths met: there
+        // is nothing to ask for.)
+        let numbers: Option<Vec<i64>> = parts.iter().map(|p| p.parse::<i64>().ok()).collect();
+        if let Some(n) = numbers.filter(|n| n.len() == 3) {
+            out.push((n[0] as u32, n[1] as usize, n[2]));
+        }
+    }
+    Ok(out)
+}
+/// The atoms a residual names as the key of a named property operation.
+fn property_atoms(residual: &str) -> std::collections::BTreeSet<i64> {
+    let mut out = std::collections::BTreeSet::new();
+    for op in ["objGet(", "objGetAny(", "objGetOwn(", "objGetSlot(", "objSet(", "objSetOwn(", "objSetSlot("] {
+        let mut rest = residual;
+        while let Some(at) = rest.find(op) {
+            rest = &rest[at + op.len()..];
+            // The key is the second argument, a literal after the base.
+            let Some(comma) = rest.find(',') else { break };
+            let digits: String = rest[comma + 1..].trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(atom) = digits.parse() {
+                out.insert(atom);
+            }
+        }
+    }
+    out
 }
 fn rename(source: &str, entry: &str, prefix: &str) -> Result<String, String> {
     use std::collections::BTreeMap;
@@ -96,7 +191,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if mode == "harness" {
-        print!("{}", harness(&program, None, true)?);
+        print!("{}", harness(&program, &Entry { guest: None, shape: 0, variants: &[] }, &Shapes::new(), true)?);
         return Ok(());
     }
     for (key, value) in [
@@ -109,14 +204,99 @@ fn run() -> Result<(), String> {
         }
     }
     let started = std::time::Instant::now();
+    let functions = program["functions"].as_array().ok_or("functions required")?;
+    let count = functions.len();
+    let mut shapes = Shapes::new();
+    // A version of a function per receiver shape. The specializer follows
+    // the receiver's shape through the function, so a version for a shape
+    // reads and writes the receiver's properties at their slots. Which
+    // shapes are worth a version is found by trying: a function is
+    // specialized for the empty shape (a constructor's receiver) and for
+    // every shape some version leaves its receiver with, and the version is
+    // kept when the shape made a difference. A version that needs a shape
+    // not yet known asks for it and is specialized again.
+    // (`OBJECT_PROJECT_NO_SHAPES`: only the general versions.)
+    let follow = std::env::var_os("OBJECT_PROJECT_NO_SHAPES").is_none();
+    let uses_shape = |text: &str| ["objGetAt(", "objSetAt(", "objAddKnown("].iter().any(|op| text.contains(op));
+    // Arrows take their scope's receiver, of which nothing is known.
+    let candidates: Vec<usize> = (1..count).filter(|&id| follow && functions[id][5].as_i64() == Some(0)).collect();
+    // Trying every function for every shape costs a specialization each. A
+    // function is tried for a non-empty shape only when its general version
+    // names, in some property operation, a key the shape has: following the
+    // receiver's shape can only change operations on those keys.
+    // The empty shape has no keys: only a function that stores a named
+    // property can gain from starting there.
+    let mut named: std::collections::BTreeMap<usize, std::collections::BTreeSet<i64>> = Default::default();
+    let mut stores: std::collections::BTreeSet<usize> = Default::default();
+    let mut general: std::collections::BTreeMap<usize, String> = Default::default();
+    for id in 1..count {
+        let input = harness(&program, &Entry { guest: Some(id), shape: 0, variants: &[] }, &shapes, false)?;
+        let text = js_frontend::to_js_opts(&input, "main", true)?;
+        named.insert(id, property_atoms(&text));
+        if ["objSet(", "objSetOwn(", "objSetSlot("].iter().any(|op| text.contains(op)) {
+            stores.insert(id);
+        }
+        general.insert(id, text);
+    }
+    let mut tried: std::collections::BTreeSet<(usize, usize)> = Default::default();
+    let mut kept: std::collections::BTreeMap<(usize, usize), String> = Default::default();
+    let mut receivers: std::collections::BTreeSet<usize> = [1].into();
+    loop {
+        let pending: Vec<(usize, usize)> = candidates
+            .iter()
+            .flat_map(|&id| receivers.iter().map(move |&shape| (id, shape)))
+            .filter(|pair| !tried.contains(pair))
+            .filter(|(id, shape)| if *shape == 1 { stores.contains(id) } else { shapes.keys[*shape].iter().any(|atom| named[id].contains(atom)) })
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        for (id, shape) in pending {
+            tried.insert((id, shape));
+            // Specialized again for as long as it asks for a shape.
+            let text = loop {
+                let input = harness(&program, &Entry { guest: Some(id), shape, variants: &[] }, &shapes, false)?;
+                let text = js_frontend::to_js_opts(&input, "main", true)?;
+                let found = notes(&text)?;
+                let known = shapes.keys.len();
+                for (kind, from, atom) in &found {
+                    if *kind == 1 {
+                        shapes.step(*from, *atom);
+                    }
+                }
+                if shapes.keys.len() == known {
+                    for (kind, left, _) in found {
+                        if kind == 2 {
+                            receivers.insert(left);
+                        }
+                    }
+                    break text;
+                }
+            };
+            let used = uses_shape(&text);
+            eprintln!("object function {id} for shape {shape} {:?}: {} bytes{}", shapes.keys[shape], text.len(), if used { "" } else { ", no use of the shape" });
+            if used {
+                kept.insert((id, shape), text);
+            }
+        }
+    }
+    // A version made before a shape was known was specialized with smaller
+    // tables. Each is specialized once more with the final ones, so every
+    // version agrees on what the shapes are.
+    let codes: std::collections::BTreeMap<(usize, usize), usize> =
+        kept.keys().enumerate().map(|(i, key)| (*key, count + i)).collect();
     let mut residual = String::new();
-    let count = program["functions"]
-        .as_array()
-        .ok_or("functions required")?
-        .len();
     for id in 0..count {
-        let input = harness(&program, if id == 0 { None } else { Some(id) }, false)?;
-        let projected = js_frontend::to_js_opts(&input, "main", true)?;
+        let variants: Vec<(usize, usize)> = codes.iter().filter(|(key, _)| key.0 == id).map(|(key, code)| (key.1, *code)).collect();
+        // (With no version to hand a receiver to, the general version is
+        // the one already made: the shape tables do not enter it.)
+        let projected = match general.remove(&id).filter(|_| variants.is_empty()) {
+            Some(text) => text,
+            None => {
+                let input = harness(&program, &Entry { guest: if id == 0 { None } else { Some(id) }, shape: 0, variants: &variants }, &shapes, false)?;
+                js_frontend::to_js_opts(&input, "main", true)?
+            }
+        };
         let entry = if id == 0 {
             "main".to_owned()
         } else {
@@ -125,11 +305,22 @@ fn run() -> Result<(), String> {
         residual.push_str(&rename(&projected, &entry, &format!("fragment_{id}_"))?);
         eprintln!("object function {id}/{count}: {} bytes", projected.len());
     }
+    for ((id, shape), code) in &codes {
+        let input = harness(&program, &Entry { guest: Some(*id), shape: *shape, variants: &[] }, &shapes, false)?;
+        let projected = js_frontend::to_js_opts(&input, "main", true)?;
+        if notes(&projected)?.iter().any(|n| n.0 == 1) {
+            return Err(format!("function {id} for shape {shape} still asks for a shape after the shapes settled"));
+        }
+        residual.push_str(&rename(&projected, &format!("guest_{code}"), &format!("fragment_{code}_"))?);
+        eprintln!("object function {id} for shape {shape} as {code}: {} bytes", projected.len());
+    }
     eprintln!(
-        "object projection: source={} AST={} functions={} interpreter={} residual={} bytes {:.3}ms",
+        "object projection: source={} AST={} functions={} versions={} shapes={} interpreter={} residual={} bytes {:.3}ms",
         source.len(),
         program.to_string().len(),
         count,
+        codes.len(),
+        shapes.keys.len() - 1,
         include_str!("../../docs/object-projection/interpreter.js").len(),
         residual.len(),
         started.elapsed().as_secs_f64() * 1000.0

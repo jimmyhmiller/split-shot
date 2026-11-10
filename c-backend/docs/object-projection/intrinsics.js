@@ -121,7 +121,7 @@ function callGuestRest(code,env,receiver,input,skip) {if(!currentGuestFrame)thro
 function sharedValues(id,n) {if(!Number.isInteger(id)||id<0||id>=8)throw new RangeError('shared buffer id');if(!sharedValueBuffers[id])sharedValueBuffers[id]=allocValues(n);else if(sharedValueBuffers[id].length!==n)throw new RangeError('shared buffer size mismatch');return sharedValueBuffers[id];}
 function sharedF64(id,n) {if(!Number.isInteger(id)||id<0||id>=8)throw new RangeError('shared buffer id');if(!sharedNumberBuffers[id])sharedNumberBuffers[id]=allocF64(n);else if(sharedNumberBuffers[id].length!==n)throw new RangeError('shared buffer size mismatch');return sharedNumberBuffers[id];}
 const initialResetObjectRuntime=resetObjectRuntime;
-resetObjectRuntime=function(){initialResetObjectRuntime();atomNames=new Map();sharedValueBuffers=[];sharedNumberBuffers=[];currentGuestFrame=undefined;guestCallDepth=0;};
+resetObjectRuntime=function(){initialResetObjectRuntime();atomNames=new Map();staticShapes=new Map([['',1]]);staticShapeTexts=new Map([[1,'']]);sharedValueBuffers=[];sharedNumberBuffers=[];currentGuestFrame=undefined;guestCallDepth=0;};
 Object.assign(api,{callGuestOneOf,protectedInvoke,callGuestProtected,tookThrow,callGuestRest,enterGuest,leaveGuest,setGuestDispatcher,callGuest,callEnv,callThis,callArgCount,callCount,callArg,sharedValues,sharedF64,resetObjectRuntime});
 function allocArgs(n) {return allocValues(n);}
 function setObjectFunctions(functions) {setGuestDispatcher(code=>{if(!Number.isInteger(code)||typeof functions[code]!=='function')return failCall();return functions[code](0);});}
@@ -144,6 +144,26 @@ function objGetSlot(v,key,slot) {key=atom(key);const o=needObject(v);checkSlot(o
 // A store to a property the base is proved to own already.
 function objSetOwn(v,key,value) {const o=needObject(v);key=atom(key);if(!o.slots.has(key)||!(attributes(o,key)&1))violated('stored property proved own is absent or not writable');o.slots.set(key,value);return value;}
 function objSetSlot(v,key,slot,value) {const o=needObject(v);key=atom(key);checkSlot(o,key,slot);if(!(attributes(o,key)&1))violated('stored property proved writable is not');o.slots.set(key,value);return value;}
+// Shapes the specializer follows (see interpreter.js). A static shape is a
+// sequence of keys, each with the attributes assignment gives; the program
+// declares each one with its id at start. Id 1 is the empty shape, and an
+// object whose keys or attributes are no declared shape's has id 0.
+let staticShapes=new Map([['',1]]),staticShapeTexts=new Map([[1,'']]);
+function shapeText(o) {for(const k of o.slots.keys())if(attributes(o,k)!==7)return null;return [...o.slots.keys()].join(',');}
+function objShapeId(v) {if(!v||v.tag!==4)return 0;const text=shapeText(v.payload);return text===null?0:(staticShapes.get(text)||0);}
+function shapeDeclare(id,parent,key) {atom(key);if(!Number.isInteger(id)||id<2||!staticShapeTexts.has(parent)||key===0)throw new TypeError('invalid static shape declaration');const from=staticShapeTexts.get(parent),text=from===''?String(key):from+','+key;if(staticShapes.has(text)&&staticShapes.get(text)!==id)throw new TypeError('static shape declared twice with different ids');staticShapes.set(text,id);staticShapeTexts.set(id,text);return U;}
+function shapeViolated(what) {throw new Error('shape violation: '+what);}
+// A property of an object that has at least the keys of a static shape
+// putting `key` at `slot`.
+function objGetAt(v,key,slot) {key=atom(key);if(!v||v.tag!==4||slotOf(v.payload,key)!==slot)shapeViolated('property is not at its followed slot');return v.payload.slots.get(key);}
+// A store to an object that has exactly such a shape.
+function objSetAt(v,key,slot,value) {key=atom(key);if(!v||v.tag!==4||slotOf(v.payload,key)!==slot||!(attributes(v.payload,key)&1))shapeViolated('stored property is not at its followed writable slot');v.payload.slots.set(key,value);return value;}
+// An addition to an object that has exactly a static shape lacking `key`;
+// `slot` is where the next shape puts it. The ordinary store finds an
+// inherited property that forbids it.
+function objAddKnown(v,key,slot,value) {key=atom(key);if(!v||v.tag!==4||v.payload.slots.has(key)||v.payload.slots.size!==slot)shapeViolated('added property is present or not at its followed slot');return objSet(v,key,value);}
+// A request the driver read from the residual program.
+function shapeNote() {return U;}
 // Runtime property names: usable only when they spell one of the program's
 // static atoms, which the program registers at start.
 let atomNames=new Map();
@@ -197,5 +217,6 @@ function objDefine(v,key,value,fields) {const o=needObject(v);if(!Number.isInteg
  o.flags.set(a,updated);if(fields&1)o.slots.set(a,value);return v;}
 Object.assign(api,{atomName,keyedGet,keyedSet,keyedHas,objDefine});
 Object.assign(api,{objGetOwn,vBinaryNumber,vUnaryNumber,objGetSlot,objSetOwn,objSetSlot});
+Object.assign(api,{objShapeId,shapeDeclare,objGetAt,objSetAt,objAddKnown,shapeNote});
 function objRequire(v) {needObject(v);return v;}
 Object.assign(api,{objRequire});

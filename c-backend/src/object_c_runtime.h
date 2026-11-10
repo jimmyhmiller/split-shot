@@ -110,6 +110,8 @@ struct oc_scope {
 typedef struct oc_shape {
   struct oc_shape *parent, *children, *sibling;
   uint32_t key;
+  /* The id the specializer knows this shape by, or 0 (see oc_shape_declare). */
+  uint32_t id;
   uint16_t count;
   uint8_t key_flags;
   uint16_t slot[OC_ATOMS];
@@ -208,6 +210,9 @@ typedef struct {
   oc_host *host;
   oc_owned *owned;
   oc_shape *empty_shape;
+  /* The shapes generated code declared, by id; entry 1 is the empty shape. */
+  oc_shape **static_shapes;
+  size_t static_shape_count;
   /* Shapes are carved from chunks; `shape_room` are the unused bytes of the
    * newest chunk. */
   oc_host *shape_chunks;
@@ -282,6 +287,7 @@ static void oc_context_free(oc_ctx *c) {
     n = m->next;
     free(m);
   }
+  free(c->static_shapes);
   free(c->atom_index);
   free(c->mark_stack);
   free(c);
@@ -719,6 +725,7 @@ static oc_shape *oc_shape_new(oc_ctx *c, oc_shape *parent, size_t key,
   }
   shape->parent = parent;
   shape->children = NULL;
+  shape->id = 0;
   shape->key = (uint32_t)key;
   shape->key_flags = (uint8_t)flags;
   return shape;
@@ -773,6 +780,7 @@ static oc_ctx *oc_context_new(void) {
     return NULL;
   c->heap_limit = OC_GC_INITIAL_BYTES;
   c->empty_shape = oc_shape_new(c, NULL, 0, 0);
+  c->empty_shape->id = 1;
   c->roots[0] = oc_new_object(c, oc_null(), 0);
   c->roots[1] = oc_new_object(c, c->roots[0], 0);
   c->roots[2] = oc_new_object(c, c->roots[0], 0);
@@ -937,6 +945,57 @@ OC_INLINE oc_value oc_get_slot(oc_ctx *c, oc_value v, double atom,
 #endif
   return OC_SLOTS(o)[s];
 }
+/* The id of the value's shape if it is one the specializer declared, or 0. */
+OC_INLINE double oc_shape_id(oc_value v) {
+  return v.tag == OC_OBJECT ? (double)v.as.object->shape->id : 0.0;
+}
+/* Declare a static shape: the one reached from static shape `parent` by
+ * adding property `atom` with the attributes assignment gives. Id 1 is the
+ * empty shape. Generated code declares every shape it was specialized for
+ * before any guest code runs, parents first. */
+static oc_value oc_shape_declare(oc_ctx *c, double id, double parent,
+                                 double atom) {
+  size_t n = oc_size(c, id), p = oc_size(c, parent), key = oc_size(c, atom);
+  oc_shape *from = p == 1 ? c->empty_shape
+                   : p < c->static_shape_count ? c->static_shapes[p]
+                   : NULL;
+  if (n < 2 || !from || key == 0 || key >= OC_ATOMS)
+    oc_fail(c, "invalid static shape declaration");
+  if (n >= c->static_shape_count) {
+    size_t count = n + 1;
+    oc_shape **table =
+        (oc_shape **)realloc(c->static_shapes, count * sizeof(*table));
+    if (!table)
+      oc_fail(c, "out of memory");
+    for (size_t i = c->static_shape_count; i < count; i++)
+      table[i] = NULL;
+    c->static_shapes = table;
+    c->static_shape_count = count;
+  }
+  oc_shape *shape = oc_shape_with(c, from, key, OC_ASSIGNED);
+  if (shape->id != 0 && shape->id != n)
+    oc_fail(c, "static shape declared twice with different ids");
+  shape->id = (uint32_t)n;
+  c->static_shapes[n] = shape;
+  return oc_undef();
+}
+/* Load of a property the specializer followed the object's shape to: the
+ * object has at least the keys of a static shape that puts `atom` at `slot`.
+ * Keys are only added and never move, so that is where it is. */
+OC_INLINE oc_value oc_get_at(oc_ctx *c, oc_value v, double atom, double slot) {
+  oc_obj *o = v.as.object;
+  size_t s = (size_t)slot;
+#ifdef OC_VERIFY_PROOFS
+  size_t key = oc_size(c, atom);
+  if (v.tag != OC_OBJECT || key == 0 || key >= OC_ATOMS ||
+      o->shape->slot[key] != s)
+    oc_violated(c, "shape violation: property is not at its followed slot");
+#else
+  (void)c;
+  (void)atom;
+#endif
+  return *oc_slot(o, s);
+}
 /* The failure of a named lookup on a non-object, without the lookup. */
 OC_INLINE oc_value oc_require_object(oc_ctx *c, oc_value v) {
   if (OC_UNLIKELY(v.tag != OC_OBJECT))
@@ -1037,6 +1096,44 @@ OC_INLINE oc_value oc_set_slot(oc_ctx *c, oc_value v, double atom, double slot,
     oc_violated(c, "analysis violation: stored property is not at its proved writable slot");
 #endif
   OC_SLOTS(o)[s] = x;
+  return x;
+}
+/* Store to a property of an object that has exactly a static shape putting
+ * `atom` at `slot`; every property of a static shape is writable. */
+OC_INLINE oc_value oc_set_at(oc_ctx *c, oc_value v, double atom, double slot,
+                             oc_value x) {
+  oc_obj *o = v.as.object;
+  size_t s = (size_t)slot;
+#ifdef OC_VERIFY_PROOFS
+  size_t key = oc_size(c, atom);
+  if (v.tag != OC_OBJECT || key == 0 || key >= OC_ATOMS ||
+      o->shape->store[key] != s)
+    oc_violated(c, "shape violation: stored property is not at its followed writable slot");
+#else
+  (void)c;
+  (void)atom;
+#endif
+  *oc_slot(o, s) = x;
+  return x;
+}
+/* Add property `atom` to an object that has exactly a static shape lacking
+ * it; `slot` is where the next static shape puts it. An inherited property
+ * that forbids the assignment is found by the ordinary store, which throws. */
+OC_INLINE oc_value oc_add_known(oc_ctx *c, oc_value v, double atom,
+                                double slot, oc_value x) {
+  size_t key = oc_size(c, atom);
+  if (OC_UNLIKELY(v.tag != OC_OBJECT || key == 0 || key >= OC_ATOMS ||
+                  c->guarded[key]))
+    return oc_set_slow(c, v, key, x);
+  oc_obj *o = v.as.object;
+#ifdef OC_VERIFY_PROOFS
+  if (o->shape->slot[key] != OC_NO_SLOT || o->shape->count != (size_t)slot)
+    oc_violated(c, "shape violation: added property is present or not at its followed slot");
+#else
+  (void)slot;
+#endif
+  size_t s = oc_add_slot(c, o, key, OC_ASSIGNED);
+  *oc_slot(o, s) = x;
   return x;
 }
 static double oc_has_own(oc_ctx *c, oc_value v, double atom) {

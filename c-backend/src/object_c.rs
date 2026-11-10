@@ -242,7 +242,8 @@ impl Emit {
         self.allow_store = matches!(
             self.expression_call_name(e),
             Some(
-                "storeF64" | "storeValue" | "objSet" | "objSetOwn" | "objSetSlot" | "arrSet" | "arrPush"
+                "storeF64" | "storeValue" | "objSet" | "objSetOwn" | "objSetSlot" | "objSetAt" | "objAddKnown"
+                    | "shapeDeclare" | "shapeNote" | "arrSet" | "arrPush"
                     | "arrAppendAll" | "objSetProto"
                     | "objSetIndex" | "envSet" | "keyedSet" | "objDefine" | "atomName"
             )
@@ -1007,6 +1008,12 @@ fn intrinsic_name(n: &str) -> Option<&'static str> {
         "objGetSlot",
         "objSetOwn",
         "objSetSlot",
+        "objGetAt",
+        "objSetAt",
+        "objAddKnown",
+        "objShapeId",
+        "shapeDeclare",
+        "shapeNote",
         "callGuestRest",
         "atomName",
         "keyedGet",
@@ -1076,7 +1083,9 @@ fn intrinsic_spec(n: &str) -> (Vec<Kind>, Kind) {
         "vBinary" | "vBinaryNumber" => (vec![Number, Value, Value], Value),
         "objNew" | "objGet" | "objGetOwn" | "objGetAny" | "arrGet" => (vec![Value, Number], Value),
         "constructReceiver" => (vec![Value], Value),
-        "objGetSlot" => (vec![Value, Number, Number], Value),
+        "objGetSlot" | "objGetAt" => (vec![Value, Number, Number], Value),
+        "objShapeId" => (vec![Value], Number),
+        "shapeDeclare" | "shapeNote" => (vec![Number, Number, Number], Value),
         "atomName" => (vec![Number, Number], Value),
         "keyedGet" => (vec![Value, Value], Value),
         "keyedSet" => (vec![Value, Value, Value], Value),
@@ -1086,7 +1095,7 @@ fn intrinsic_spec(n: &str) -> (Vec<Kind>, Kind) {
         "callGuestSpread" => (vec![Number, Value, Value, Value], Value),
         "vTypeof" => (vec![Value], Value),
         "objDefine" => (vec![Value, Value, Value, Number], Value),
-        "objSetSlot" => (vec![Value, Number, Number, Value], Value),
+        "objSetSlot" | "objSetAt" | "objAddKnown" => (vec![Value, Number, Number, Value], Value),
         "objSet" | "objSetOwn" | "arrSet" | "objSetIndex" => (vec![Value, Number, Value], Value),
         "objHasOwn" | "arrHas" => (vec![Value, Number], Number),
         "objProto" | "objError" | "objRequire" => (vec![Value], Value),
@@ -1125,6 +1134,10 @@ fn intrinsic_is_read(n: &str) -> bool {
             | "objSet"
             | "objSetOwn"
             | "objSetSlot"
+            | "objSetAt"
+            | "objAddKnown"
+            | "shapeDeclare"
+            | "shapeNote"
             | "keyedSet"
             | "objDefine"
             | "atomName"
@@ -1633,7 +1646,10 @@ impl Emit {
         // A literal atom sizes the program's static atom table.
         let atom_argument = match n {
             "objGet" | "objGetOwn" | "objGetAny" | "objGetSlot" | "objSet" | "objSetOwn" | "objSetSlot"
-            | "objHasOwn" => Some(1),
+            | "objGetAt" | "objSetAt" | "objAddKnown" | "objHasOwn" => Some(1),
+            // (A declared shape's key is an atom the program may not name
+            // anywhere else.)
+            "shapeDeclare" => Some(2),
             _ => None,
         };
         if let Some(index) = atom_argument {
@@ -1787,6 +1803,15 @@ impl Emit {
             "objSetOwn" => call("oc_set_own", true),
             "objSetSlot" => call("oc_set_slot", true),
             "objGetSlot" => call("oc_get_slot", true),
+            // A property of an object whose shape the specializer followed.
+            "objGetAt" => call("oc_get_at", true),
+            "objSetAt" => call("oc_set_at", true),
+            "objAddKnown" => call("oc_add_known", true),
+            "objShapeId" => call("oc_shape_id", false),
+            "shapeDeclare" => call("oc_shape_declare", true),
+            // A request the driver read from the residual program; nothing
+            // to do at run time.
+            "shapeNote" => "oc_undef()".to_owned(),
             "keyedGet" => call("oc_keyed_get", true),
             "keyedSet" => call("oc_keyed_set", true),
             "keyedHas" => call("oc_keyed_has", true),
