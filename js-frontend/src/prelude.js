@@ -370,3 +370,52 @@ function __pe_Set_forEach(callback, thisArg) {
   for (const v of this) callback.call(thisArg, v, v, this);
   return undefined;
 }
+
+// `str.replace(re, fn)` with a function replacement (RegExp.prototype
+// [ @@replace ] for a modeled RegExp of standard behavior): the matches as
+// `exec` finds them (all of them for a global pattern, an empty match
+// advancing one position, or one code point under `u`/`v`), then each
+// replaced by `fn`'s result for (match, ...captures, position, string,
+// groups when named). On a string the specializer knows, each `exec` folds
+// and each call of `fn` runs inline.
+function __pe_regex_replace_fn(str, re, fn) {
+  var global = re.global;
+  var fullUnicode = re.unicode || re.unicodeSets;
+  if (global) re.lastIndex = 0;
+  var results = [];
+  while (true) {
+    var result = re.exec(str);
+    if (result === null) break;
+    results.push(result);
+    if (!global) break;
+    if (`${result[0]}` === "") re.lastIndex = __pe_advance_string_index(str, re.lastIndex, fullUnicode);
+  }
+  var acc = "";
+  var next = 0;
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var matched = `${r[0]}`;
+    var position = r.index;
+    if (position > str.length) position = str.length;
+    if (position < 0) position = 0;
+    var args = [matched];
+    for (var n = 1; n < r.length; n++) args.push(r[n] === undefined ? undefined : `${r[n]}`);
+    args.push(position, str);
+    if (r.groups !== undefined) args.push(r.groups);
+    var replacement = `${fn.apply(undefined, args)}`;
+    if (position >= next) {
+      acc = acc + str.slice(next, position) + replacement;
+      next = position + matched.length;
+    }
+  }
+  return next >= str.length ? acc : acc + str.slice(next);
+}
+
+// AdvanceStringIndex.
+function __pe_advance_string_index(str, index, unicode) {
+  if (!unicode || index + 1 >= str.length) return index + 1;
+  var c = str.charCodeAt(index);
+  if (c < 0xD800 || c > 0xDBFF) return index + 1;
+  var d = str.charCodeAt(index + 1);
+  return d < 0xDC00 || d > 0xDFFF ? index + 1 : index + 2;
+}

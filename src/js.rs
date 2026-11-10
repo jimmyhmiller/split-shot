@@ -16629,6 +16629,23 @@ impl Js {
                             s.top_mut().ostack.push(v);
                             return Step::Continue;
                         }
+                        // A function replacement: the prelude's @@replace,
+                        // whose `exec`s fold on the string and whose calls of
+                        // the function run inline (a regex of standard
+                        // behavior only: no own properties, which could be
+                        // an `exec` it calls).
+                        let global = matches!(&s.heap[&re], HeapObj::Builtin { data, .. } if matches!(&data[1], Abs::Str(f) if f.contains('g')));
+                        let standard = matches!(&s.heap[&re], HeapObj::Builtin { ext: None, .. });
+                        let callable = matches!(args.get(1), Some(Abs::Ref(f)) if matches!(&s.heap[f], HeapObj::Closure { known: true, .. }));
+                        if standard && callable && (method == "replace" || (method == "replaceAll" && global)) {
+                            if let Some(fid) = self.names.iter().position(|n| n == "__pe_regex_replace_fn") {
+                                let f = s.alloc(HeapObj::closure(fid, vec![]));
+                                let n = 3;
+                                s.top_mut().ostack.push(Abs::Ref(f));
+                                s.top_mut().ostack.extend([Abs::Str(recv.clone()), Abs::Ref(re), args[1].clone()]);
+                                return self.do_call(s, n, pc, out, Abs::Undef, ret, Abs::Undef);
+                            }
+                        }
                     }
                 }
                 if method == "split" {
@@ -21195,7 +21212,10 @@ impl Js {
                 } else {
                     panic!("cannot residualize built-in `{kind}` with captured state");
                 };
-                fills.push(Op::Assign { var: dst, expr });
+                // (Made with the shells: it needs nothing, and a closure made
+                // there may capture it, by value: LiquidJS's
+                // `const toString = Object.prototype.toString`.)
+                shells.push(Op::Assign { var: dst, expr });
             }
         }
     }
