@@ -1,0 +1,26 @@
+round 1: 2 shapes, 10 variants
+round 2: 4 shapes, 10 variants
+round 3: 6 shapes, 12 variants
+round 4: 6 shapes, 14 variants
+round 5: 6 shapes, 14 variants
+results agree with plain JavaScript on 4 inputs: true
+one run of main(7): {"loadFixed":46,"loadGeneric":0,"storeFixed":7,"addStatic":20,"setGeneric":0,"arithGeneric":0,"callResolved":24,"callGeneric":0,"variantMissing":0}
+
+variant                         loads fixed/other  stores fixed  static adds  generic sets  calls literal/other  helpers left
+main [dyn]                      0/1                0             1            1             3/1                  38
+main [none]                     0/1                0             1            1             3/1                  38
+Vec [{} exact]                  0/0                0             2            0             0/0                  0
+Vec [dyn]                       0/0                0             6            3             0/0                  1
+Vec.add [{}]                    0/4                0             0            0             1/0                  0
+Vec.add [{x}]                   1/3                0             0            0             1/1                  0
+Vec.add [{x,y}]                 2/2                0             0            0             1/2                  0
+Vec.add [dyn]                   0/4                0             0            0             1/0                  0
+Ent [{} exact]                  0/0                0             2            0             0/0                  0
+Ent [dyn]                       0/0                0             6            3             0/0                  1
+Ent.step [{}]                   0/2                0             0            1             0/1                  0
+Ent.step [{pos}]                1/1                1             0            0             0/2                  0
+Ent.step [{pos,vel}]            2/0                1             0            0             0/3                  0
+Ent.step [dyn]                  0/2                0             2            1             0/1                  0
+
+shapes: 0:Vec{}  1:Ent{}  2:Vec{x}  3:Ent{pos}  4:Vec{x,y}  5:Ent{pos,vel}
+constructor exit shapes: {"1:0":4,"3:1":5}
