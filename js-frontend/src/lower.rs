@@ -1298,7 +1298,18 @@ impl Compiler {
                 }
                 None => {
                     let stmts = self.decls[i].module_body.take().expect("a declaration is a function or the script's body");
-                    self.lower_module_main(&stmts)?
+                    let mut lowered = self.lower_module_main(&stmts)?;
+                    // (A whole script ending in `return main(input)`: its
+                    // top-level code ends just before that call, see
+                    // `Stmt::EntryBoundary`.)
+                    if self.script_entry.is_some() {
+                        let body = &mut lowered.3;
+                        if matches!(body.last(), Some(Stmt::Return(_))) {
+                            let at = body.len() - 1;
+                            body.insert(at, Stmt::EntryBoundary);
+                        }
+                    }
+                    lowered
                 }
             };
             self.declared.push(FuncDef {

@@ -1,8 +1,8 @@
 // The module system of a linked program (see `link.rs`): CommonJS modules,
 // JSON modules, Node built-ins, the namespace objects of ES modules, and the
-// groups of ES modules a program evaluates. The linker defines this function
-// inside the program's `main` and calls it once, before any module code
-// runs.
+// groups of ES modules a program evaluates. The linked script's top-level
+// code defines this function (in a function of its own) and calls it once,
+// before any module code runs.
 //
 // A module is known by its index in the linked program. An ES module's code
 // is part of a group (one function, its modules' top-level bindings in one

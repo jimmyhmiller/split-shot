@@ -1,1 +1,1 @@
-{ "entry": "main.mts", "inputs": [2, 9], "typescript": true }
+{"entry": "main.mts", "inputs": [2, 9], "typescript": true, "repeat": true}

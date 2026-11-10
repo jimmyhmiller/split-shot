@@ -1870,10 +1870,14 @@ impl Linker {
         }
         runtime_targets.retain(|m| self.modules[*m].kind == Kind::Esm);
 
+        // The program is a script: its top-level code loads the modules once,
+        // as Node does when the entry module is imported, and `main(input)`
+        // calls the entry's `main` (the specializer splits the two: see
+        // `Stmt::EntryBoundary`).
         let mut out = String::new();
-        out.push_str("function main(__pe_input) {\n");
+        out.push_str("const __pe_R = (function () {\n");
         out.push_str(RUNTIME);
-        out.push_str("\nconst __pe_R = __pe_moduleRegistry();\n");
+        out.push_str("\nreturn __pe_moduleRegistry();\n})();\n");
         // Every module but the ES ones, in index order.
         for id in 0..self.modules.len() {
             let file = self.modules[id].file.display().to_string();
@@ -1928,14 +1932,13 @@ impl Linker {
         match self.modules[entry].kind {
             Kind::Esm => {
                 let tracked = groups[0].modules.iter().any(|m| runtime_targets.contains(m));
-                out.push_str(&format!("const __pe_entry = __pe_R.{}(0);\nreturn __pe_entry(__pe_input);\n", if tracked { "runGroupTracked" } else { "runGroup" }));
+                out.push_str(&format!("const __pe_entry = __pe_R.{}(0);\nfunction main(__pe_input) {{\n  return __pe_entry(__pe_input);\n}}\n", if tracked { "runGroupTracked" } else { "runGroup" }));
             }
             Kind::Cjs => {
-                out.push_str(&format!("const __pe_main = __pe_R.requireMain({entry});\nreturn {}(__pe_input);\n", member("__pe_main", entry_name)));
+                out.push_str(&format!("const __pe_main = __pe_R.requireMain({entry});\nfunction main(__pe_input) {{\n  return {}(__pe_input);\n}}\n", member("__pe_main", entry_name)));
             }
             _ => return Err(format!("{}: the entry must be a JavaScript module", self.modules[entry].file.display())),
         }
-        out.push_str("}\n");
         Ok(out)
     }
 

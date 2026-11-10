@@ -1,1 +1,1 @@
-{ "entry": "app/main.mjs", "inputs": [5], "conditions": ["custom"] }
+{"entry": "app/main.mjs", "inputs": [5], "conditions": ["custom"], "repeat": true}

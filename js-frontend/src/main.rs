@@ -172,7 +172,9 @@ fn main() -> ExitCode {
     };
     let typescript = !module_program && (ts_flag || path.ends_with(".ts"));
     if emit_js && (entry != "main" || typescript || module_program) {
-        let opts = js_frontend::LowerOpts { closed_script, typescript, trust_types, react };
+        // (A program of modules is linked to one script whose top-level
+        // names are the linker's own: no other script reads them.)
+        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react };
         // (`PE_REPEAT=n`: the whole compilation run n times more first, its
         // output dropped: one process to profile.)
         let repeat: usize = std::env::var("PE_REPEAT").ok().map(|n| n.parse().expect("PE_REPEAT is a count")).unwrap_or(0);

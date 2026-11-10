@@ -64,6 +64,9 @@ pub fn to_js_with(src: &str, entry: &str, short_names: bool, prepack_intrinsics:
     if opts.react {
         vm.set_react();
     }
+    if opts.closed_script {
+        vm.set_closed_script();
+    }
     let t = phase("engine setup", t);
     let mut prog = vm.specialize_program();
     let t = phase("specialize", t);
@@ -77,6 +80,7 @@ pub fn to_js_with(src: &str, entry: &str, short_names: bool, prepack_intrinsics:
     }
     partial::residual::simplify(&mut prog);
     vm.coalesce(&mut prog);
+    vm.coalesce_load();
     let t = phase("cleanup", t);
     let js = codegen::program_to_js(&vm, &prog, vm.input_var(), short_names, &sources);
     phase("codegen", t);
@@ -91,6 +95,7 @@ pub fn specialize(src: &str) -> Result<(Js, Program<Op, Cond>), String> {
     let mut prog = vm.specialize_program();
     partial::residual::simplify(&mut prog);
     vm.coalesce(&mut prog);
+    vm.coalesce_load();
     Ok((vm, prog))
 }
 
@@ -109,6 +114,7 @@ pub fn specialize_with_budget(
     let mut prog = vm.specialize_program();
     partial::residual::simplify(&mut prog);
     vm.coalesce(&mut prog);
+    vm.coalesce_load();
     Ok((vm, prog))
 }
 

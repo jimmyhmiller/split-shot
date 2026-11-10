@@ -155,7 +155,7 @@ impl Bits {
     }
 }
 
-fn rename_rexpr(e: &mut RExpr, m: &HashMap<usize, usize>) {
+pub(crate) fn rename_rexpr(e: &mut RExpr, m: &HashMap<usize, usize>) {
     match e {
         RExpr::Var(v) => {
             if let Some(n) = m.get(v) {

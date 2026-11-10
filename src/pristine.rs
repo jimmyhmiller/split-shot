@@ -77,6 +77,12 @@ pub struct Writes {
     pub keys: BTreeSet<String>,
     /// A write may touch a watched object (see `writes_to`).
     pub watched: bool,
+    /// A write of a key not known (a computed one, an element, or a
+    /// mutating method's) to an object the residual did not plainly make,
+    /// or code the scan does not see (a class made from its source).
+    pub unknown_writes: bool,
+    /// The keys written to the global object (globals assigned).
+    pub global_keys: BTreeSet<String>,
 }
 
 impl Writes {
@@ -85,6 +91,8 @@ impl Writes {
         self.wild |= o.wild;
         self.keys.extend(o.keys.iter().cloned());
         self.watched |= o.watched;
+        self.unknown_writes |= o.unknown_writes;
+        self.global_keys.extend(o.global_keys.iter().cloned());
     }
 }
 
@@ -328,10 +336,14 @@ fn write(target: &RExpr, key: Option<&str>, cx: &Ctx, w: &mut Writes) {
     if let (false, Some(k)) = (plain_fresh(target, cx, 0), key) {
         w.keys.insert(k.to_string());
     }
+    if key.is_none() && !plain_fresh(target, cx, 0) {
+        w.unknown_writes = true;
+    }
     match class {
         Target::Fresh => {}
         Target::Builtin { root: _, global_object: true } => match key {
             Some(k) => {
+                w.global_keys.insert(k.to_string());
                 if tracked(k) {
                     w.names.insert(k.to_string());
                 }
@@ -353,6 +365,9 @@ fn write(target: &RExpr, key: Option<&str>, cx: &Ctx, w: &mut Writes) {
 /// built-in's name is): one to `Array.prototype` or `Object.prototype`
 /// gives arrays an inherited index (see `ARRAY_INDEXES`).
 fn index_write(target: &RExpr, cx: &Ctx, w: &mut Writes) {
+    if !plain_fresh(target, cx, 0) {
+        w.unknown_writes = true;
+    }
     if let Target::Builtin { root, global_object: false } = classify(target, cx, 0) {
         if root == "Array" || root == "Object" {
             w.names.insert(ARRAY_INDEXES.to_string());
@@ -377,6 +392,7 @@ fn scan_program(prog: &Program<Op, Cond>, cx: &Ctx, w: &mut Writes) {
         for op in &b.ops {
             match op {
                 Op::AssignGlobal { name, expr } => {
+                    w.global_keys.insert(name.clone());
                     if tracked(name) {
                         w.names.insert(name.clone());
                     }
@@ -411,6 +427,9 @@ fn scan_program(prog: &Program<Op, Cond>, cx: &Ctx, w: &mut Writes) {
                     scan_expr(index, cx, w);
                 }
                 Op::PushOp { arr, val } => {
+                    if !plain_fresh(arr, cx, 0) {
+                        w.unknown_writes = true;
+                    }
                     // (`push` on a built-in, `Array.prototype.push(v)`, writes
                     // it; on anything else, indices and `length`, never a
                     // built-in's name.)
@@ -441,6 +460,15 @@ fn scan_program(prog: &Program<Op, Cond>, cx: &Ctx, w: &mut Writes) {
     }
 }
 
+/// The standard methods that change their receiver (arrays', typed
+/// arrays', collections', dates', regular expressions' (`lastIndex`)).
+const MUTATING_METHODS: &[&str] = &[
+    "push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin", "set", "add", "delete", "clear",
+    "setDate", "setFullYear", "setHours", "setMilliseconds", "setMinutes", "setMonth", "setSeconds", "setTime", "setUTCDate",
+    "setUTCFullYear", "setUTCHours", "setUTCMilliseconds", "setUTCMinutes", "setUTCMonth", "setUTCSeconds", "setYear", "exec", "test",
+    "next", "return", "throw",
+];
+
 /// Writes made by calls of the reflective built-ins (`Object.defineProperty`,
 /// `Object.assign`, `Reflect.set`, ...), anywhere in an expression.
 fn scan_expr(e: &RExpr, cx: &Ctx, w: &mut Writes) {
@@ -450,9 +478,29 @@ fn scan_expr(e: &RExpr, cx: &Ctx, w: &mut Writes) {
                 RExpr::Global(g) => Some(format!("{g}.{m}")),
                 _ => None,
             },
+            // (The residual's helpers writing as code of the other
+            // strictness does: see `Js::in_mode`.)
+            RExpr::Global(g) if g.starts_with("__pe_") => Some(g.clone()),
             _ => None,
         };
         match name.as_deref() {
+            Some("__pe_strictSet") | Some("__pe_sloppySet") | Some("__pe_strictDelete") | Some("__pe_sloppyDelete") => {
+                if let Some(t) = args.first() {
+                    match args.get(1) {
+                        Some(k) if crate::inline::is_number(k, &cx.num) || is_symbol(k, cx) => index_write(t, cx, w),
+                        k => write(t, k.and_then(static_key).as_deref(), cx, w),
+                    }
+                }
+            }
+            Some("__pe_strictSetGlobal") | Some("__pe_sloppySetGlobal") => match args.first().and_then(static_key) {
+                Some(n) => {
+                    w.global_keys.insert(n.clone());
+                    if tracked(&n) {
+                        w.names.insert(n);
+                    }
+                }
+                None => w.wild = true,
+            },
             Some("Object.defineProperty") | Some("Reflect.defineProperty") | Some("Reflect.set") | Some("Reflect.deleteProperty") => {
                 if let (Some(t), false) = (args.first(), args.get(1).is_some_and(|k| is_symbol(k, cx))) {
                     write(t, args.get(1).and_then(static_key).as_deref(), cx, w);
@@ -476,6 +524,18 @@ fn scan_expr(e: &RExpr, cx: &Ctx, w: &mut Writes) {
             }
             _ => {}
         }
+        // (A mutating method called on an object the residual did not
+        // plainly make: what it writes, the scan does not know.)
+        if let RExpr::Get(recv, m) = &**callee {
+            if MUTATING_METHODS.contains(&m.as_str()) && !plain_fresh(recv, cx, 0) {
+                w.unknown_writes = true;
+            }
+        }
+    }
+    // (A class made from its source: its methods are code the scan does not
+    // see.)
+    if matches!(e, RExpr::ClassSrc { .. } | RExpr::Verbatim(..)) {
+        w.unknown_writes = true;
     }
     match e {
         RExpr::Bin(_, a, b) | RExpr::Index(a, b) => {

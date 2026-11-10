@@ -3,7 +3,11 @@
 // Corpus scoreboard: specialize every program in corpus/ and check it against
 // Node.
 //
-//   node tools/corpus.js [--bin path] [--json out.json] [filter...]
+//   node tools/corpus.js [--bin path] [--json out.json] [--no-repeat] [filter...]
+//
+// Besides one fresh load per input, every program is also loaded once and
+// its `main` called on all the inputs in turn, twice over (`--no-repeat`
+// skips this): a script's top-level code runs once, at load.
 //
 // Each corpus file is a plain script defining `main(input)`. Header comments:
 //   // inputs: [<JSON values>]     inputs main is called with (required)
@@ -23,7 +27,8 @@
 //                every folding claim
 //   UNSUPPORTED  the front end rejected the program
 //   CRASH        the specializer panicked, or the residual failed to load
-//   WRONG        the residual disagrees with the original on some input
+//   WRONG        the residual disagrees with the original on some input, or
+//                over repeated calls
 //   BLOAT        correct, but a folding claim failed (forbid / max-lines)
 //
 // Exit status is 0 only when every file passes.
@@ -37,10 +42,12 @@ const root = path.resolve(__dirname, '..');
 const argv = process.argv.slice(2);
 let bin = path.join(root, 'target/release/js-frontend');
 let jsonOut = null;
+let noRepeat = false;
 const filters = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--bin') bin = argv[++i];
   else if (argv[i] === '--json') jsonOut = argv[++i];
+  else if (argv[i] === '--no-repeat') noRepeat = true;
   else filters.push(argv[i]);
 }
 
@@ -108,6 +115,46 @@ function observe(code, input, after) {
   }
 }
 
+// One context, loaded once, with `main` called on every input in turn,
+// twice over: what each call gives, as a list. A script's top-level code
+// runs once when it loads, as it would for any caller; whatever main changes
+// in the state that code made, the next call sees.
+async function observeRepeated(code, inputs, isAsync) {
+  const sandbox = { console: { log() {} }, TextDecoder, TextEncoder };
+  const ctx = vm.createContext(sandbox);
+  try {
+    vm.runInContext(code + '\n;globalThis.__main = main;', ctx, { timeout: TIMEOUT_MS });
+  } catch (e) {
+    return { loaderr: String((e && e.message) || e) };
+  }
+  const outs = [];
+  for (const input of inputs.concat(inputs)) {
+    ctx.__in = JSON.parse(JSON.stringify(input));
+    try {
+      if (isAsync) {
+        vm.runInContext(
+          'globalThis.__done = false; globalThis.__rejected = undefined; Promise.resolve(__main(__in)).then((v) => { globalThis.__out = v; globalThis.__done = true; }, (e) => { globalThis.__rejected = String(e && e.message || e); globalThis.__done = true; });',
+          ctx,
+          { timeout: TIMEOUT_MS },
+        );
+        for (let i = 0; i < 100 && !ctx.__done; i++) await new Promise((r) => setImmediate(r));
+        if (!ctx.__done) { outs.push('timeout'); break; }
+        if (ctx.__rejected !== undefined) { outs.push('rejected: ' + ctx.__rejected); continue; }
+      } else {
+        vm.runInContext('globalThis.__out = __main(__in);', ctx, { timeout: TIMEOUT_MS });
+      }
+      outs.push(vm.runInContext(
+        'Object.is(__out, -0) ? "-0" : (typeof __out === "number" && !isFinite(__out)) ? String(__out) : JSON.stringify(__out) === undefined ? "<" + typeof __out + ">" : JSON.stringify(__out)',
+        ctx,
+      ));
+    } catch (e) {
+      if (e && e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') { outs.push('timeout'); break; }
+      outs.push('throw ' + String(e && e.name) + ': ' + String(e && e.message));
+    }
+  }
+  return { ok: outs.join(' ; ') };
+}
+
 function show(o) {
   if (o.loaderr) return 'loaderr: ' + o.loaderr;
   if (o.timeout) return 'timeout';
@@ -166,6 +213,16 @@ for (const f of files) {
       verdict = 'WRONG';
       detail = `main(${JSON.stringify(inp)}): original ${show(a)}, residual ${show(b)}`;
       break;
+    }
+  }
+  // (Called again and again in one loaded context, as a caller would.)
+  if (verdict === 'PASS' && !noRepeat) {
+    const isAsync = header(src, 'async') === 'true';
+    const a = await observeRepeated(src, inputs, isAsync);
+    const b = await observeRepeated(residual, inputs, isAsync);
+    if (show(a) !== show(b)) {
+      verdict = 'WRONG';
+      detail = `repeated calls: original ${show(a)}, residual ${show(b)}`;
     }
   }
   const lines = residual.trim().split('\n').length;

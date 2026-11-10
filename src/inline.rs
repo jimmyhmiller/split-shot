@@ -84,7 +84,7 @@ fn visit(e: &RExpr, f: &mut dyn FnMut(&RExpr)) {
 }
 
 /// The direct subexpressions of `e`, in evaluation order.
-fn children(e: &RExpr) -> Vec<&RExpr> {
+pub(crate) fn children(e: &RExpr) -> Vec<&RExpr> {
     match e {
         RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null | RExpr::This | RExpr::Var(_) | RExpr::Global(_) | RExpr::RegexLit(..) | RExpr::BigInt(_) | RExpr::NewFn { .. } | RExpr::Hole | RExpr::Verbatim(..) => {
             vec![]

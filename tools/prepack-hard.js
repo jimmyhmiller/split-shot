@@ -51,7 +51,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === '--suite') suite = argv[++i];
   else filters.push(argv[i]);
 }
-const bin = path.resolve(__dirname, '../target/release/js-frontend');
+// (`PE_BIN`: another build of the specializer.)
+const bin = process.env.PE_BIN ? path.resolve(process.env.PE_BIN) : path.resolve(__dirname, '../target/release/js-frontend');
 const hardDir = path.join(root, 'test/serializer', suite);
 
 function walk(d) {
@@ -328,9 +329,16 @@ async function runResidual(residual, runtime, names) {
   defineIntrinsics(ctx, names);
   try {
     vm.runInContext(runtime.join('\n'), ctx, { timeout: 5000 });
-    vm.runInContext(residual + '\n;globalThis.__main = __pe_entry;', ctx, { timeout: 5000 });
   } catch (e) {
     return { loaderr: String((e && e.message) || e) };
+  }
+  // (The residual's top-level code is the script's, run once as it loads:
+  // a throw there is the script's, as when the original runs.)
+  try {
+    vm.runInContext(residual + '\n;globalThis.__main = __pe_entry;', ctx, { timeout: 5000 });
+  } catch (e) {
+    if (e && e.name === 'SyntaxError') return { loaderr: String((e && e.message) || e) };
+    return { first: { value: '' + e, threw: true } };
   }
   try {
     vm.runInContext('__main()', ctx, { timeout: 5000 });

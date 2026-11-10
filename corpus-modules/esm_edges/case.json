@@ -1,1 +1,1 @@
-{ "entry": "main.mjs", "inputs": [1, 6] }
+{"entry": "main.mjs", "inputs": [1, 6], "repeat": true}

@@ -3,7 +3,10 @@
 //
 //   node [node flags] tools/modules-oracle.mjs <entry file> <entry name> <input JSON>
 //
-// Prints one JSON line: { logs: [...], result } (or { logs, threw }).
+// Prints one JSON line: { logs: [...], result } (or { logs, threw }). With
+// PE_ORACLE_SEQUENCE set, the input is a list: the entry function is called
+// on each in turn (the modules loaded once), and `result` lists what each
+// call gave.
 
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -30,9 +33,23 @@ try {
       fn = ns[name];
     }
   }
-  let r = self ? fn.call(self, input) : fn(input);
-  if (r && typeof r.then === 'function') r = await r;
-  out = { logs, result: show(r) };
+  if (process.env.PE_ORACLE_SEQUENCE) {
+    const results = [];
+    for (const one of input) {
+      try {
+        let r = self ? fn.call(self, one) : fn(one);
+        if (r && typeof r.then === 'function') r = await r;
+        results.push(show(r));
+      } catch (e) {
+        results.push('throw ' + String(e && e.name) + ': ' + String(e && e.message));
+      }
+    }
+    out = { logs, result: results.join(' ; ') };
+  } else {
+    let r = self ? fn.call(self, input) : fn(input);
+    if (r && typeof r.then === 'function') r = await r;
+    out = { logs, result: show(r) };
+  }
 } catch (e) {
   out = { logs, threw: String(e && e.name) + ': ' + String(e && e.message) };
 }

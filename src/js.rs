@@ -297,6 +297,11 @@ pub enum Stmt {
     /// assigns from here on (a `let`/`const` just initialized that no code
     /// assigns): its value is final. Nothing runs.
     FinalCell(usize),
+    /// The end of a whole script's top-level code, just before its
+    /// `return main(input)`: what precedes it runs once, when the script
+    /// loads; what follows, at each call of the entry (see
+    /// `Js::specialize_program`). Nothing runs.
+    EntryBoundary,
     /// `try { body } catch (e?) { handler }`. Exceptions are modeled as control
     /// flow: a `throw` reached during specialization becomes a jump to the
     /// catch. `finally` is not yet modeled.
@@ -538,6 +543,8 @@ enum Instr {
     AssumeType(usize, u16),
     /// `[] -> []`: see `Stmt::FinalCell`.
     FinalCell(usize),
+    /// `[] -> []`: see `Stmt::EntryBoundary`.
+    EntryBoundary,
     /// `[] -> (returns)`: see `Stmt::RerunAtRuntime`.
     RerunAtRuntime,
 }
@@ -1131,7 +1138,8 @@ fn stack_operands(i: &Instr) -> usize {
         | Instr::PopHandler
         | Instr::AssumeType(..)
         | Instr::FinalCell(_)
-        | Instr::RerunAtRuntime => 0,
+        | Instr::RerunAtRuntime
+        | Instr::EntryBoundary => 0,
     }
 }
 
@@ -1647,6 +1655,238 @@ impl HeapObj {
 /// The abstract heap: a persistent map from address to object, each object
 /// shared between the states (and memo keys) that hold it until one changes
 /// it (a path copy then copies small entries, not whole objects).
+/// The load-once split of a whole script (see `Stmt::EntryBoundary`):
+/// its top-level code specialized alone, to residual code run once when the
+/// residual loads (`load`), and `main` specialized from the state that code
+/// leaves (`boundary`). What a call of `main` may change of that state is
+/// runtime state from the boundary on (`dynamic`, `dynamic_globals`), found
+/// again and again until no call changes more (see `specialize_program`).
+///
+/// The residual's contract: once it has loaded, code outside calls `main`
+/// (and what `main` gives it), any number of times; it may read the
+/// program's open globals at any time, and call the functions they hold
+/// once it is done calling `main` (as Prepack's `inspect` is called). What
+/// those functions read the load code writes out; what they would change
+/// between calls of `main` is not taken into account (as built-ins are
+/// taken to be standard).
+#[derive(Default)]
+struct EntrySplit {
+    /// Specializing the top-level code alone: `EntryBoundary` stops there.
+    loading: std::cell::Cell<bool>,
+    /// The states the top-level code reached its end in, with the variables
+    /// each names (assigned by the load code, never by `main`).
+    boundary: std::cell::RefCell<Vec<(State, Vec<usize>, HashMap<usize, usize>)>>,
+    /// The residual load code, when the split was made.
+    load: std::cell::RefCell<Option<Program<Op, Cond>>>,
+    /// The variables the load code gives `main`.
+    exports: std::cell::RefCell<Vec<usize>>,
+    /// The boundary's objects a call may change (by address).
+    dynamic: std::cell::RefCell<std::collections::BTreeSet<usize>>,
+    /// The globals a call may assign.
+    dynamic_globals: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// Any global may be assigned at runtime.
+    all_globals_dynamic: std::cell::Cell<bool>,
+    /// No split: a pass cap reached before what `main` changes was found.
+    disabled: std::cell::Cell<bool>,
+    /// No other script reads the top-level lexical bindings (see
+    /// `Js::set_closed_script`).
+    closed: std::cell::Cell<bool>,
+    /// The globals residual code was found to read by name (or any: `every`).
+    read_globals: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    read_every: std::cell::Cell<bool>,
+    /// The globals the last pass's load code did not write out (a closed
+    /// script's, which no residual code was known to read).
+    skipped: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// The globals that keep their values while `main` runs, however runtime
+    /// code it runs (a closed script's lexical ones no residual code
+    /// assigns): known after runtime code too (see `sync_globals`).
+    stable: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// What the last split pass watched, and the boundary's objects.
+    watched: std::cell::RefCell<Option<(EntryWatch, std::collections::BTreeSet<usize>)>>,
+}
+
+/// What specializing `main` did to the state a script's top-level code left
+/// (see `Stmt::EntryBoundary`), while `Js::specialize_program` watches: the
+/// objects of that state (those at addresses below `limit`) it changed,
+/// those it made at runtime, and the globals it assigned. What a call
+/// changes, the next call sees: whatever a call may change, the residual
+/// must not take as known.
+///
+/// An object changed is one a write reached (`touched`) that differs from
+/// what it was at the boundary (`snapshot`) where the call is done with it:
+/// where a path of `main` ends, where `main` makes it at runtime, where the
+/// model drops it. (A write a later one undoes, a global RegExp's
+/// `lastIndex` through a `replace`, changes nothing a later call sees.)
+#[derive(Default)]
+struct EntryWatch {
+    limit: usize,
+    snapshot: Heap,
+    touched: std::collections::BTreeSet<usize>,
+    /// The boundary's objects the load code made (by the variable each is
+    /// in): what `main` makes of one at runtime is that object.
+    hoisted: HashMap<usize, usize>,
+    /// The boundary's weak collections given entries for objects this call
+    /// made (no change a later call sees: see `try_collection_method`).
+    weak_added: std::collections::BTreeSet<usize>,
+    /// The globals holding objects the load code made, and those objects.
+    global_roots: Vec<(String, usize)>,
+    /// What the load code does more: the boundary's objects `main` makes at
+    /// runtime, made by it instead (see `Js::entry_hoist`).
+    load_ops: Vec<Op>,
+    written: std::collections::BTreeSet<usize>,
+    escaped: std::collections::BTreeSet<usize>,
+    globals: std::collections::BTreeSet<String>,
+}
+
+thread_local! {
+    static ENTRY_WATCH: std::cell::RefCell<Option<EntryWatch>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `f` run without the `EntryWatch`: a residual function's body is a
+/// program of its own, from a heap of its own (its addresses name other
+/// objects than the boundary's).
+fn entry_watch_paused<T>(f: impl FnOnce() -> T) -> T {
+    let saved = ENTRY_WATCH.with(|w| w.borrow_mut().take());
+    let r = f();
+    ENTRY_WATCH.with(|w| *w.borrow_mut() = saved);
+    r
+}
+
+#[track_caller]
+fn note_entry_write(a: usize) {
+    let at = std::panic::Location::caller();
+    ENTRY_WATCH.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            if a < w.limit && w.touched.insert(a) && env_flag!("ENTRY_DEBUG") {
+                eprintln!("[ENTRY] write of {a} at {at}");
+            }
+        }
+    });
+}
+
+/// The boundary's object `a` as the model now has it (`None`: dropped),
+/// against what it was at the boundary, if a write reached it (see
+/// `EntryWatch`).
+fn entry_check(a: usize, now: Option<&HeapObj>) {
+    ENTRY_WATCH.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            if a < w.limit && w.touched.contains(&a) && !w.written.contains(&a) {
+                let same = match (now, w.snapshot.get_shared(&a)) {
+                    (Some(o), Some(was)) => std::ptr::eq(o, &**was) || *o == **was,
+                    _ => false,
+                };
+                if !same {
+                    if env_flag!("ENTRY_DEBUG") {
+                        eprintln!("[ENTRY] {a} changed");
+                    }
+                    w.written.insert(a);
+                }
+            }
+        }
+    });
+}
+
+/// `entry_check` of every object a write reached, in `heap` (a path's end).
+fn entry_check_heap(heap: &Heap) {
+    let touched: Vec<usize> = ENTRY_WATCH.with(|w| w.borrow().as_ref().map(|w| w.touched.difference(&w.written).copied().collect()).unwrap_or_default());
+    for a in touched {
+        if let Some(o) = heap.get(&a) {
+            entry_check(a, Some(o));
+        }
+    }
+}
+
+/// Whether `a` is an object of the boundary's state (see `EntryWatch`),
+/// while `main` is specialized from it.
+fn entry_boundary_object(a: usize) -> bool {
+    ENTRY_WATCH.with(|w| w.borrow().as_ref().is_some_and(|w| a < w.limit))
+}
+
+/// The variable the load code made the boundary's object `a` in, while
+/// `main` is specialized (see `EntryWatch::hoisted`): that object made at
+/// runtime by `main`.
+fn entry_hoisted(a: usize) -> Option<usize> {
+    ENTRY_WATCH.with(|w| {
+        let mut w = w.borrow_mut();
+        let w = w.as_mut()?;
+        let v = w.hoisted.get(&a).copied()?;
+        w.escaped.insert(a);
+        Some(v)
+    })
+}
+
+/// Whether the boundary's object `a` is one the load code made (see
+/// `EntryWatch::hoisted`): an object with a runtime identity.
+fn entry_is_hoisted(a: usize) -> bool {
+    ENTRY_WATCH.with(|w| w.borrow().as_ref().is_some_and(|w| w.hoisted.contains_key(&a)))
+}
+
+/// The load code's object `a` as `main` makes it at runtime, the model
+/// holding it as `now`: its variable, and the entries this call gave it
+/// that the runtime object lacks (a weak collection's, for objects the call
+/// made: key and value, or key alone of a set). `None` when it is no such
+/// object, or this call changed it otherwise (the pass is then done again
+/// with it a runtime value from the boundary on: see `EntrySplit`).
+fn entry_hoisted_now(a: usize, now: Option<&HeapObj>) -> Option<(usize, Vec<(Abs, Option<Abs>)>)> {
+    entry_check(a, now);
+    let (var, weak, was) = ENTRY_WATCH.with(|w| {
+        let w = w.borrow();
+        let w = w.as_ref()?;
+        let var = *w.hoisted.get(&a)?;
+        if w.written.contains(&a) {
+            return None;
+        }
+        let was = match w.snapshot.get(&a) {
+            Some(HeapObj::Builtin { data, .. }) => data.len(),
+            _ => 0,
+        };
+        Some((var, w.weak_added.contains(&a), was))
+    })?;
+    let mut added = Vec::new();
+    if weak {
+        let Some(HeapObj::Builtin { kind, data, .. }) = now else { return None };
+        let stride = collection_stride(kind);
+        let d = data.to_vec();
+        let mut i = was;
+        while i + stride <= d.len() {
+            if d[i + stride - 1] == Abs::Bool(true) {
+                added.push((d[i].clone(), (stride == 3).then(|| d[i + 1].clone())));
+            }
+            i += stride;
+        }
+    }
+    entry_hoisted(a);
+    Some((var, added))
+}
+
+fn note_entry_weak(a: usize) {
+    ENTRY_WATCH.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            if a < w.limit {
+                w.weak_added.insert(a);
+            }
+        }
+    });
+}
+
+fn note_entry_escape(a: usize) {
+    ENTRY_WATCH.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            if a < w.limit {
+                w.escaped.insert(a);
+            }
+        }
+    });
+}
+
+fn note_entry_global(name: &str) {
+    ENTRY_WATCH.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            w.globals.insert(name.to_string());
+        }
+    });
+}
+
 #[derive(Clone, Default)]
 struct Heap {
     m: im::OrdMap<usize, std::rc::Rc<HeapObj>>,
@@ -1677,14 +1917,28 @@ impl Heap {
     fn get(&self, k: &usize) -> Option<&HeapObj> {
         self.m.get(k).map(|r| &**r)
     }
+    /// The object at `k`, to change: a write of it (see `EntryWatch`).
+    #[track_caller]
     fn get_mut(&mut self, k: &usize) -> Option<&mut HeapObj> {
+        note_entry_write(*k);
+        self.get_mut_quiet(k)
+    }
+    /// `get_mut` for a change of how the object is modeled, not of what it
+    /// holds (a join's, a generalization's, a lazily made property's).
+    fn get_mut_quiet(&mut self, k: &usize) -> Option<&mut HeapObj> {
         let r = self.m.get_mut(k)?;
         if std::rc::Rc::strong_count(r) > 1 {
             self.charge += r.weight();
         }
         Some(std::rc::Rc::make_mut(r))
     }
+    #[track_caller]
     fn insert(&mut self, k: usize, v: HeapObj) -> Option<HeapObj> {
+        note_entry_write(k);
+        self.insert_quiet(k, v)
+    }
+    /// `insert` of a remodeled object (see `get_mut_quiet`).
+    fn insert_quiet(&mut self, k: usize, v: HeapObj) -> Option<HeapObj> {
         self.charge += v.weight();
         self.m.insert(k, std::rc::Rc::new(v)).map(|r| std::rc::Rc::unwrap_or_clone(r))
     }
@@ -1712,6 +1966,7 @@ impl Heap {
         let mut m = self.m.clone();
         for (a, o) in self.m.iter() {
             if !keep(*a) {
+                entry_check(*a, Some(o));
                 m.remove(a);
                 continue;
             }
@@ -1734,6 +1989,7 @@ impl Heap {
     fn retain(&mut self, keep: &dyn Fn(usize) -> bool) {
         let dead: Vec<usize> = self.m.keys().copied().filter(|a| !keep(*a)).collect();
         for a in dead {
+            entry_check(a, self.m.get(&a).map(|o| &**o));
             self.m.remove(&a);
         }
     }
@@ -2091,7 +2347,7 @@ impl State {
         }
         let addrs: Vec<usize> = self.heap.iter().filter(|(_, o)| weak(o)).map(|(a, _)| *a).collect();
         for a in addrs {
-            if let Some(HeapObj::Builtin { kind, data, .. }) = self.heap.get_mut(&a) {
+            if let Some(HeapObj::Builtin { kind, data, .. }) = self.heap.get_mut_quiet(&a) {
                 let stride = collection_stride(kind);
                 for i in (0..data.len()).step_by(stride) {
                     if matches!(&data[i], Abs::Ref(k) if !live.contains(k)) {
@@ -2126,6 +2382,47 @@ impl State {
             }
         }
         vars.into_iter().collect()
+    }
+
+    /// Rename the variables the state's values name (`m`): its frames',
+    /// functions', globals' and heap objects'.
+    fn rename_vars(&mut self, m: &HashMap<usize, usize>) {
+        if m.is_empty() {
+            return;
+        }
+        let ren = |v: &mut Abs| {
+            if let Abs::Dyn(e) = v {
+                crate::coalesce::rename_rexpr(e, m);
+            }
+        };
+        for f in self.frames.iter_mut() {
+            f.values_mut().for_each(ren);
+        }
+        self.fns = self.fns.iter().map(|(k, v)| {
+            let mut v = v.clone();
+            ren(&mut v);
+            (*k, v)
+        }).collect();
+        self.globals = self.globals.iter().map(|(k, (v, d))| {
+            let mut v = v.clone();
+            ren(&mut v);
+            (k.clone(), (v, *d))
+        }).collect();
+        let addrs: Vec<usize> = self.heap.keys().copied().collect();
+        for a in addrs {
+            let o = &self.heap[&a];
+            let named = matches!(o, HeapObj::Closure { ident: Some(v), .. } if m.contains_key(v));
+            if o.holds_no_dyn() && !named {
+                continue;
+            }
+            let o = self.heap.get_mut_quiet(&a).unwrap();
+            o.children_mut().into_iter().for_each(ren);
+            if let HeapObj::Closure { ident: Some(v), .. } = o {
+                if let Some(n) = m.get(v) {
+                    *v = *n;
+                }
+            }
+        }
     }
 
     /// Keep only the facts about variables some value of the state still
@@ -2500,7 +2797,7 @@ fn analyze_loop_mutations(
             }
             Instr::NewRegExp { .. } => stack.push(None),
             Instr::JmpIfFalsy(_) => popn!(1),
-            Instr::Jmp(_) | Instr::PushHandler { .. } | Instr::TryFinally { .. } | Instr::PopHandler | Instr::AssumeType(..) | Instr::FinalCell(_) | Instr::RerunAtRuntime => {}
+            Instr::Jmp(_) | Instr::PushHandler { .. } | Instr::TryFinally { .. } | Instr::PopHandler | Instr::AssumeType(..) | Instr::FinalCell(_) | Instr::RerunAtRuntime | Instr::EntryBoundary => {}
         }
     }
     (bases, true)
@@ -2703,7 +3000,7 @@ fn analyze_dispatch_drivers(
             Instr::DeletePropOp(_) => {
                 let _ = pop!();
             }
-            Instr::Jmp(_) | Instr::PushHandler { .. } | Instr::TryFinally { .. } | Instr::PopHandler | Instr::AssumeType(..) | Instr::FinalCell(_) | Instr::RerunAtRuntime => {}
+            Instr::Jmp(_) | Instr::PushHandler { .. } | Instr::TryFinally { .. } | Instr::PopHandler | Instr::AssumeType(..) | Instr::FinalCell(_) | Instr::RerunAtRuntime | Instr::EntryBoundary => {}
         }
     }
     drivers
@@ -3049,6 +3346,7 @@ fn compile_stmts(stmts: &[Stmt], code: &mut Vec<Instr>, aux: &mut CompileAux) {
             Stmt::AssumeType(slot, mask) => code.push(Instr::AssumeType(*slot, *mask)),
             Stmt::FinalCell(slot) => code.push(Instr::FinalCell(*slot)),
             Stmt::RerunAtRuntime => code.push(Instr::RerunAtRuntime),
+            Stmt::EntryBoundary => code.push(Instr::EntryBoundary),
             Stmt::Throw(e) => {
                 compile_expr(e, code, aux);
                 code.push(Instr::Throw);
@@ -3988,6 +4286,8 @@ pub struct Js {
     /// as `Halt`). Used to bound a residual `try`'s body/catch sub-programs and
     /// the foldability probe to their region. Empty for the main run.
     halt_at: std::cell::RefCell<Vec<usize>>,
+    /// The load-once split of a whole script (see `Stmt::EntryBoundary`).
+    entry: EntrySplit,
     /// Catch-`pc`s of residual `try`s currently being specialized (innermost
     /// last). A residual `try`'s `catch`/`body` is specialized as a fresh nested
     /// `specialize` call; if a `continue`/`break` inside it jumps back to an
@@ -4138,6 +4438,13 @@ impl Js {
     /// model's functions (`react_model.js`).
     pub fn set_react(&mut self) {
         self.react = Some(react::React::new(&self.names));
+    }
+
+    /// No other script reads the program's top-level lexical bindings (see
+    /// `lower::compile_full_opts`): the load code writes one out only when
+    /// residual code reads it (see `entry_boundary`).
+    pub fn set_closed_script(&mut self) {
+        self.entry.closed.set(true);
     }
 }
 
@@ -4867,6 +5174,7 @@ impl Js {
             no_unbox_fids: std::cell::RefCell::new(std::collections::HashSet::new()),
             resume_memo: std::cell::RefCell::new(HashMap::new()),
             halt_at: std::cell::RefCell::new(Vec::new()),
+            entry: EntrySplit::default(),
             residual_try_stack: std::cell::RefCell::new(Vec::new()),
             halt_locals: std::cell::RefCell::new(Vec::new()),
             probing: std::cell::Cell::new(false),
@@ -5149,6 +5457,8 @@ impl Js {
         let mut keep: std::collections::HashSet<usize> = std::collections::HashSet::new();
         keep.insert(self.input_var());
         keep.insert(ARGUMENTS_VAR_ID);
+        // (And what the load code gives it: see `EntrySplit`.)
+        keep.extend(self.entry.exports.borrow().iter().copied());
         self.settle_branches(main);
         crate::inline::strip_bound_methods(main);
         crate::inline::drop_number_coercions(main, &keep);
@@ -5892,6 +6202,11 @@ impl Js {
     /// `forms` says (the rest, and the parameters, bound to the function's
     /// parameter variables).
     fn make_residual_fn(&self, fid: usize, rfid: usize, forms: &[CapForm]) -> usize {
+        // (A body specialized from a heap of its own: see `entry_watch_paused`.)
+        entry_watch_paused(|| self.make_residual_fn_unwatched(fid, rfid, forms))
+    }
+
+    fn make_residual_fn_unwatched(&self, fid: usize, rfid: usize, forms: &[CapForm]) -> usize {
         let ncap = self.ncaptured[fid];
         let nparams = self.nparams[fid];
         let ntake = ncap + Js::import_paths(forms).len();
@@ -6236,7 +6551,7 @@ impl Js {
         let saved_body = self.current_body.replace(Some(rfid));
         let saved_mat = self.take_mat_state();
         self.building_fns.borrow_mut().insert(rfid);
-        let body = self.specialize_nested(start);
+        let body = entry_watch_paused(|| self.specialize_nested(start));
         self.building_fns.borrow_mut().remove(&rfid);
         self.restore_mat_state(saved_mat);
         self.current_body.set(saved_body);
@@ -6283,6 +6598,11 @@ impl Js {
     /// `extra` what is known of them and of its captures (by variable).
     #[allow(clippy::too_many_arguments)]
     fn make_model_body_fn(&self, fid: usize, rfid: usize, forms: &[CapForm], model: usize, me: usize, param_facts: &[(usize, Info)], extra: &[(usize, Info)], nextra: usize) -> bool {
+        // (A body specialized from a heap of its own: see `entry_watch_paused`.)
+        entry_watch_paused(|| self.make_model_body_fn_unwatched(fid, rfid, forms, model, me, param_facts, extra, nextra))
+    }
+
+    fn make_model_body_fn_unwatched(&self, fid: usize, rfid: usize, forms: &[CapForm], model: usize, me: usize, param_facts: &[(usize, Info)], extra: &[(usize, Info)], nextra: usize) -> bool {
         let ncap = self.ncaptured[fid];
         let nparams = self.nparams[model];
         let ntake = ncap + Js::import_paths(forms).len();
@@ -6377,6 +6697,11 @@ impl Js {
     /// generator object in the activation's state: the consumer's `next(v)`
     /// resumes it with `v`, `return`/`throw` act at that `yield`.
     fn resume_fn_for(&self, fid: usize, pc: usize, nostack: usize) -> usize {
+        // (A body specialized from a heap of its own: see `entry_watch_paused`.)
+        entry_watch_paused(|| self.resume_fn_for_unwatched(fid, pc, nostack))
+    }
+
+    fn resume_fn_for_unwatched(&self, fid: usize, pc: usize, nostack: usize) -> usize {
         if let Some(&r) = self.resume_memo.borrow().get(&(fid, pc, nostack)) {
             return r;
         }
@@ -6445,7 +6770,7 @@ impl Js {
         let saved_try_stack = std::mem::take(&mut *self.residual_try_stack.borrow_mut());
         let saved_resid = self.in_residual_body.replace(true);
         let saved_mat = self.take_mat_state();
-        let mut body = self.specialize_nested(start);
+        let mut body = entry_watch_paused(|| self.specialize_nested(start));
         self.restore_mat_state(saved_mat);
         self.in_residual_body.set(saved_resid);
         self.probing.set(saved_probing);
@@ -6993,17 +7318,27 @@ impl Js {
         let mut last = None;
         for _ in 0..MAX_PASSES {
             self.reset_for_respecialization();
-            let prog = crate::engine::specialize(self, self.start());
+            let prog = self.specialize_entry();
             let mut added = false;
+            let load = self.entry.load.borrow();
             // (The residual functions the residual has: those it reaches.
             // Others were made on a path given up, or to be measured.)
-            let live = reachable_residual_fns(&prog, &self.residual_fns.borrow());
+            let mut live = reachable_residual_fns(&prog, &self.residual_fns.borrow());
+            if let Some(l) = load.as_ref() {
+                live.extend(reachable_residual_fns(l, &self.residual_fns.borrow()));
+            }
+            // What a call of `main` may change of the state the load code
+            // leaves: runtime state from the boundary on.
+            if load.is_some() && self.entry_conflicts(&prog, &live) {
+                added = true;
+            }
             // Built-ins assumed standard that the residual may write: treat
             // them as unknown and specialize again (see `crate::pristine`).
             {
                 let (w, react_again) = {
                     let fns = self.residual_fns.borrow();
                     let mut progs: Vec<&Program<Op, Cond>> = vec![&prog];
+                    progs.extend(load.as_ref());
                     progs.extend(fns.iter().enumerate().filter(|(r, _)| live.contains(r)).map(|(_, rf)| &rf.body));
                     let w = crate::pristine::scan_all(&progs);
                     // (A class's method read from its instance where nothing
@@ -7057,7 +7392,9 @@ impl Js {
                     }
                 }
             }
+            drop(load);
             if !added {
+                self.prune_entry_exports(&prog);
                 // Converged: this residual already escaped everything that
                 // duplicated, so no abstract object is realized more than once,
                 // and assumed no built-in it may replace.
@@ -7067,7 +7404,314 @@ impl Js {
         }
         // Did not converge within the cap. The last residual is still sound; any
         // residual duplication would surface in the differential oracle/fuzzer.
+        // (Not one split at the boundary: what a call of `main` changes was
+        // still found to be taken as known. The whole script as `main`.)
+        if self.entry.load.borrow().is_some() {
+            self.entry.disabled.set(true);
+            self.reset_for_respecialization();
+            return self.specialize_entry();
+        }
         last.expect("at least one specialization pass ran")
+    }
+
+    /// Specialize the program once: a whole script's top-level code to the
+    /// residual load code (`EntrySplit::load`), and `main` from the state
+    /// it leaves, while watching what `main` does to that state (see
+    /// `EntryWatch`). The whole script as `main` when its top-level code
+    /// does not end in one state (or names `main`'s input), or with
+    /// `PE_NO_ENTRY_SPLIT`.
+    fn specialize_entry(&self) -> Program<Op, Cond> {
+        *self.entry.load.borrow_mut() = None;
+        self.entry.exports.borrow_mut().clear();
+        self.entry.boundary.borrow_mut().clear();
+        self.entry.skipped.borrow_mut().clear();
+        self.entry.stable.borrow_mut().clear();
+        let whole = |js: &Js| crate::engine::specialize(js, js.start());
+        if !self.code.iter().any(|i| matches!(i, Instr::EntryBoundary)) || env_flag!("PE_NO_ENTRY_SPLIT") || self.entry.disabled.get() {
+            return whole(self);
+        }
+        self.entry.loading.set(true);
+        let load = crate::engine::specialize(self, self.start());
+        self.entry.loading.set(false);
+        let mut ends = std::mem::take(&mut *self.entry.boundary.borrow_mut());
+        let names_input = program_names_var(&load, self.input_var());
+        if ends.len() != 1 || names_input {
+            if env_flag!("ENTRY_DEBUG") {
+                eprintln!("[ENTRY] no split: {} end states, names input {names_input}", ends.len());
+            }
+            self.reset_for_respecialization();
+            return whole(self);
+        }
+        let (state, exports, hoisted) = ends.pop().unwrap();
+        // (The objects the load code made are runtime objects from the start,
+        // which runtime code reaches through the globals holding them: see
+        // `entry_conflicts`.)
+        let global_roots: Vec<(String, usize)> = state.globals.iter().filter_map(|(g, (v, _))| match v {
+            Abs::Ref(a) => Some((g.clone(), *a)),
+            _ => None,
+        }).collect();
+        ENTRY_WATCH.with(|w| *w.borrow_mut() = Some(EntryWatch { limit: state.next_addr, snapshot: state.heap.clone(), hoisted, global_roots, ..Default::default() }));
+        let boundary_heap: std::collections::BTreeSet<usize> = state.heap.keys().copied().collect();
+        let main = crate::engine::specialize(self, state);
+        let watch = ENTRY_WATCH.with(|w| w.borrow_mut().take()).expect("the watch set above");
+        self.entry.stable.borrow_mut().clear();
+        if env_flag!("ENTRY_DEBUG") {
+            eprintln!(
+                "[ENTRY] split: {} exports, boundary heap {}, written {:?}, escaped {:?}, globals {:?}",
+                exports.len(),
+                boundary_heap.len(),
+                watch.written.intersection(&boundary_heap).collect::<Vec<_>>(),
+                watch.escaped.intersection(&boundary_heap).collect::<Vec<_>>(),
+                watch.globals
+            );
+        }
+        let mut watch = watch;
+        let mut load = load;
+        let mut exports = exports;
+        // (What the load code does more, at its end: see `entry_hoist`.)
+        if !watch.load_ops.is_empty() {
+            let ends: Vec<usize> = (0..load.blocks.len())
+                .filter(|&b| matches!(load.blocks[b].term, Terminator::Halt) && !matches!(load.blocks[b].ops.last(), Some(Op::Throw(_) | Op::Return(_))))
+                .collect();
+            assert_eq!(ends.len(), 1, "the load code ends in one block, where the top-level code ends (see `entry_boundary`)");
+            load.blocks[ends[0]].ops.append(&mut watch.load_ops);
+            for v in watch.hoisted.values() {
+                if !exports.contains(v) {
+                    exports.push(*v);
+                }
+            }
+        }
+        *self.entry.watched.borrow_mut() = Some((watch, boundary_heap));
+        *self.entry.load.borrow_mut() = Some(load);
+        *self.entry.exports.borrow_mut() = exports;
+        main
+    }
+
+    /// The boundary's object `addr` as `main` makes it at runtime (the model
+    /// holding it as `now`), while `main` is specialized: the object the load
+    /// code made (see `entry_hoisted_now`). One it did not yet make, and
+    /// `main` did not change, it makes now (with what it reaches): made once,
+    /// not on each call, and the same object on each.
+    fn entry_hoist(&self, addr: usize, now: Option<&HeapObj>) -> Option<(usize, Vec<(Abs, Option<Abs>)>)> {
+        if let Some(r) = entry_hoisted_now(addr, now) {
+            return Some(r);
+        }
+        let (snapshot, mut seen) = ENTRY_WATCH.with(|w| {
+            let w = w.borrow();
+            let w = w.as_ref()?;
+            (addr < w.limit && !w.written.contains(&addr) && w.snapshot.contains_key(&addr)).then(|| (w.snapshot.clone(), w.hoisted.clone()))
+        })?;
+        let mut ops = Vec::new();
+        entry_watch_paused(|| self.hoist_object(addr, &snapshot, &mut seen, &mut ops));
+        ENTRY_WATCH.with(|w| {
+            if let Some(w) = w.borrow_mut().as_mut() {
+                w.load_ops.extend(ops);
+                w.hoisted.extend(seen);
+            }
+        });
+        entry_hoisted_now(addr, now)
+    }
+
+    /// The load code's making of the boundary's object `addr` and every
+    /// object it reaches (see `EntryWatch::hoisted`), each in its own
+    /// variable (`seen`), as `main` refers to each: what it reaches first,
+    /// each a literal of the ones made before it; a cyclic graph in two
+    /// phases (see `mat_value`). Its variable.
+    fn hoist_object(&self, addr: usize, heap: &Heap, seen: &mut HashMap<usize, usize>, out: &mut Vec<Op>) -> usize {
+        if let Some(&v) = seen.get(&addr) {
+            return v;
+        }
+        if Self::graph_cyclic(heap, addr) {
+            let (mut shells, mut fills) = (Vec::new(), Vec::new());
+            self.mat_value(&Abs::Ref(addr), heap, &mut shells, &mut fills, seen);
+            out.append(&mut shells);
+            out.append(&mut fills);
+            return seen[&addr];
+        }
+        // (Children first, in the order the object holds them; of a
+        // collection, its live entries'.)
+        let children: Vec<usize> = match heap.get(&addr) {
+            Some(HeapObj::Builtin { kind, data, .. }) if is_collection(kind) => {
+                let stride = collection_stride(kind);
+                let d = data.to_vec();
+                d.chunks(stride).filter(|e| e.last() == Some(&Abs::Bool(true))).flat_map(|e| e[..stride - 1].iter().filter_map(as_ref_addr)).collect()
+            }
+            Some(o) => o.child_refs(),
+            None => Vec::new(),
+        };
+        for c in children {
+            if heap.contains_key(&c) && !seen.contains_key(&c) {
+                self.hoist_object(c, heap, seen, out);
+            }
+        }
+        let dst = self.escape_var(addr);
+        self.materialize_into_seen(dst, &Abs::Ref(addr), heap, out, seen);
+        seen.get(&addr).copied().unwrap_or(dst)
+    }
+
+    /// After a pass split at the boundary: the boundary's objects and the
+    /// globals a call of `main` may change, added to `EntrySplit::dynamic`
+    /// and `dynamic_globals`; whether any was new. An object a call writes
+    /// as it specializes; one it makes at runtime that the residual may write
+    /// (one its residual code may reach and write: see `pristine::Writes`);
+    /// a global it assigns, or its residual code does.
+    fn entry_conflicts(&self, main: &Program<Op, Cond>, live: &std::collections::HashSet<usize>) -> bool {
+        let Some((watch, boundary_heap)) = self.entry.watched.borrow_mut().take() else { return false };
+        let fns = self.residual_fns.borrow();
+        // The code that may run at runtime once the load code has: `main`'s,
+        // the functions it makes or names, those of the load code's objects
+        // runtime code reaches (those `main` makes at runtime, and those of
+        // the globals the code reads by name), and those the load code gave
+        // runtime code otherwise (a callback it registered), until no more.
+        let hoisted_fids: std::collections::HashSet<usize> = watch
+            .hoisted
+            .keys()
+            .filter_map(|a| match watch.snapshot.get(a) {
+                Some(HeapObj::Closure { fid, .. }) => Some(*fid),
+                _ => None,
+            })
+            .collect();
+        let mut seed: std::collections::HashSet<usize> = reachable_residual_fns(main, &fns);
+        for r in live.iter().copied() {
+            if fns[r].fid.is_none_or(|f| !hoisted_fids.contains(&f)) {
+                seed.insert(r);
+            }
+        }
+        // (The code and objects reachable from `code` and the globals in
+        // `read`: what it makes or names, the globals it reads, their objects
+        // and the functions of those, until no more.)
+        let close = |mut code: std::collections::HashSet<usize>, mut read: std::collections::BTreeSet<String>| {
+            let mut every = false;
+            let mut reached: std::collections::HashSet<usize>;
+            loop {
+                let mut work: Vec<usize> = code.iter().copied().collect();
+                while let Some(r) = work.pop() {
+                    for n in reachable_residual_fns(&fns[r].body, &fns) {
+                        if code.insert(n) {
+                            work.push(n);
+                        }
+                    }
+                }
+                program_globals_read(main, &mut read, &mut every);
+                for &r in &code {
+                    program_globals_read(&fns[r].body, &mut read, &mut every);
+                }
+                reached = std::collections::HashSet::new();
+                for a in watch.escaped.iter().filter(|a| watch.snapshot.contains_key(a)) {
+                    Js::reachable(&watch.snapshot, *a, &mut reached);
+                }
+                for (g, a) in &watch.global_roots {
+                    if every || read.contains(g) {
+                        Js::reachable(&watch.snapshot, *a, &mut reached);
+                    }
+                }
+                let reached_fids: std::collections::HashSet<usize> = reached
+                    .iter()
+                    .filter_map(|a| match watch.snapshot.get(a) {
+                        Some(HeapObj::Closure { fid, .. }) => Some(*fid),
+                        _ => None,
+                    })
+                    .collect();
+                let before = code.len();
+                for r in live.iter().copied() {
+                    if fns[r].fid.is_some_and(|f| reached_fids.contains(&f)) {
+                        code.insert(r);
+                    }
+                }
+                if code.len() == before {
+                    return (code, read, every, reached);
+                }
+            }
+        };
+        // What runs while the program is used: `main`, and what it reaches.
+        // (Between calls, code outside calls nothing else of the program: its
+        // entry is `main`. See `EntrySplit`.)
+        let (code, _, _, reached) = close(seed.clone(), std::collections::BTreeSet::new());
+        // What code outside may read: the program's open globals (all but a
+        // closed script's lexical bindings), and what the functions they hold
+        // read when called (after the calls of `main`, as Prepack's
+        // `inspect`): written out by the load code.
+        let open: std::collections::BTreeSet<String> = watch
+            .global_roots
+            .iter()
+            .map(|(g, _)| g)
+            .filter(|g| !(self.entry.closed.get() && self.is_lexical_global(g)))
+            .cloned()
+            .collect();
+        let (_, outside_read, outside_every, _) = close(seed, open);
+        let mut progs: Vec<&Program<Op, Cond>> = vec![main];
+        progs.extend(code.iter().map(|&r| &fns[r].body));
+        let w = crate::pristine::scan_all(&progs);
+        let runtime_writes = w.unknown_writes || !w.keys.is_empty();
+        // (A global the load code did not write out that residual code reads.)
+        let unwritten_read = {
+            let skipped = self.entry.skipped.borrow();
+            outside_every && !skipped.is_empty() || skipped.iter().any(|g| outside_read.contains(g))
+        };
+        self.entry.read_globals.borrow_mut().extend(outside_read.iter().cloned());
+        if outside_every {
+            self.entry.read_every.set(true);
+        }
+        let mut dynamic = self.entry.dynamic.borrow_mut();
+        let before = dynamic.len();
+        dynamic.extend(watch.written.intersection(&boundary_heap).copied());
+        if runtime_writes {
+            // (A frozen ordinary object no write changes.)
+            let frozen = |a: &usize| {
+                matches!(watch.snapshot.get(a), Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. })
+                    if private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)))
+            };
+            dynamic.extend(reached.iter().filter(|a| boundary_heap.contains(a) && !frozen(a)).copied());
+        }
+        let mut globals = self.entry.dynamic_globals.borrow_mut();
+        let globals_before = globals.len();
+        globals.extend(watch.globals.iter().cloned());
+        globals.extend(w.global_keys.iter().cloned());
+        let all_before = self.entry.all_globals_dynamic.get();
+        if w.wild {
+            self.entry.all_globals_dynamic.set(true);
+        }
+        let added = dynamic.len() > before || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
+        if env_flag!("ENTRY_DEBUG") {
+            eprintln!("[ENTRY] conflicts: dynamic {:?} globals {:?} all {} (runtime writes {runtime_writes}) -> again {added}", dynamic, globals, self.entry.all_globals_dynamic.get());
+        }
+        added
+    }
+
+    /// Keep only the variables the load code gives `main` that `main` (or a
+    /// residual function) names: the others are the load code's own.
+    fn prune_entry_exports(&self, main: &Program<Op, Cond>) {
+        if self.entry.load.borrow().is_none() {
+            return;
+        }
+        let fns = self.residual_fns.borrow();
+        let live = reachable_residual_fns(main, &fns);
+        let mut progs: Vec<&Program<Op, Cond>> = vec![main];
+        progs.extend(fns.iter().enumerate().filter(|(r, _)| live.contains(r)).map(|(_, rf)| &rf.body));
+        self.entry.exports.borrow_mut().retain(|v| progs.iter().any(|p| program_names_var(p, *v)));
+    }
+
+    /// The residual load code of a whole script, when it was split (see
+    /// `EntrySplit`), and the variables it gives `main`.
+    pub fn entry_load(&self) -> Option<(std::cell::Ref<'_, Program<Op, Cond>>, Vec<usize>)> {
+        let l = self.entry.load.borrow();
+        l.is_some().then(|| (std::cell::Ref::map(l, |l| l.as_ref().unwrap()), self.entry.exports.borrow().clone()))
+    }
+
+    /// Clean up the residual load code (see `coalesce`): the variables it
+    /// gives `main` are kept.
+    pub fn coalesce_load(&self) {
+        if env_flag!("PE_NO_CLEANUP") {
+            return;
+        }
+        let mut l = self.entry.load.borrow_mut();
+        let Some(load) = l.as_mut() else { return };
+        crate::residual::simplify(load);
+        let mut keep: std::collections::HashSet<usize> = self.entry.exports.borrow().iter().copied().collect();
+        keep.insert(self.input_var());
+        keep.insert(ARGUMENTS_VAR_ID);
+        self.clean_up(load, &keep);
+        crate::coalesce::coalesce_vars(load, &keep);
     }
 
     /// Clear all per-specialization mutable state so a fresh `engine::specialize`
@@ -7973,6 +8617,16 @@ fn own_string_keys_order(props: &[Prop]) -> Vec<(&str, &Prop)> {
 
 /// Update own data property `k` of `o`, or append it with default attributes.
 /// The caller has checked `set_resolves_statically`.
+/// `set_data_prop` on the object at `addr`, when it changes it (a write of
+/// the value an own data property already holds is none: see `EntryWatch`).
+fn set_heap_data_prop(heap: &mut Heap, addr: usize, k: impl Into<PKey>, v: Abs) {
+    let k = k.into();
+    let same = heap[&addr].props().is_some_and(|ps| ps.iter().any(|p| p.key == k && matches!(&p.val, PVal::Data(x) if *x == v)));
+    if !same {
+        set_data_prop(heap.get_mut(&addr).unwrap(), k, v);
+    }
+}
+
 fn set_data_prop(o: &mut HeapObj, k: impl Into<PKey>, v: Abs) {
     let k = k.into();
     let props = o.props_mut().expect("set_data_prop on an object without properties");
@@ -9354,7 +10008,10 @@ impl Client for Js {
                 f.prune_facts();
                 Step::Branch { cond, t, f }
             }
-            Step::Halt => Step::Halt,
+            Step::Halt => {
+                entry_check_heap(&s.heap);
+                Step::Halt
+            }
         }
     }
 
@@ -9768,6 +10425,7 @@ impl Js {
                 };
                 self.push(s, v)
             }
+            Instr::EntryBoundary => self.entry_boundary(s, out),
             Instr::FinalCell(slot) => {
                 if let Abs::Ref(a) = s.top().locals[*slot] {
                     if let Some(HeapObj::Object { props, class: class @ ObjClass::Ordinary, .. }) = s.heap.get_mut(&a) {
@@ -9859,6 +10517,9 @@ impl Js {
                     let fresh = |v: &Abs| match v {
                         Abs::Ref(a) => {
                             !s.escaped.contains(a)
+                                // (One the load code made is a runtime object
+                                // from the start: see `EntryWatch::hoisted`.)
+                                && !entry_is_hoisted(*a)
                                 && matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_)))
                                 && self.creation_pc.borrow().get(a).is_some_and(|pc| *pc < self.code.len() && matches!(self.code[*pc], Instr::NewObject(_) | Instr::NewArray(_)))
                         }
@@ -9998,12 +10659,17 @@ impl Js {
                 // (Not a script's top-level `let`/`const`/`class` name: that
                 // global binding is no property of the global object.)
                 if is_global_object(&o) && !self.in_residual_body.get() && !self.is_lexical_global(k) && self.global_write_tracked(k) {
+                    note_entry_global(k);
                     s.globals.insert(k.clone(), (v, true));
                     return self.advance(s);
                 }
                 // A RegExp's `lastIndex` is a plain writable property.
                 if let Abs::Ref(addr) = &o {
-                    if k == "lastIndex" {
+                    if k == "lastIndex" && matches!(s.heap.get(addr), Some(HeapObj::Builtin { kind, .. }) if kind == "RegExp") {
+                        // (Its value again is no write: see `EntryWatch`.)
+                        if matches!(s.heap.get(addr), Some(HeapObj::Builtin { data, .. }) if data.get(2) == Some(&v)) {
+                            return self.advance(s);
+                        }
                         if let Some(HeapObj::Builtin { kind, data, .. }) = s.heap.get_mut(addr) {
                             if kind == "RegExp" {
                                 data.set(2, v);
@@ -10094,7 +10760,7 @@ impl Js {
                             } =>
                     {
                         let v = self.emit_if_maythrow(s, pc, 0, v, out);
-                        set_data_prop(s.heap.get_mut(&addr).unwrap(), k, v);
+                        set_heap_data_prop(&mut s.heap, addr, k, v);
                     }
                     // A named-property write on a non-object ref (e.g. `arr.foo =
                     // v`, `arr.length = n`): the abstract heap doesn't model it,
@@ -10156,7 +10822,7 @@ impl Js {
                     let addr = *addr;
                     if self.sym_set_static(&s.heap, addr, &sym) {
                         let v = self.emit_if_maythrow(s, pc, 0, v, out);
-                        set_data_prop(s.heap.get_mut(&addr).unwrap(), PKey::Sym(sym), v);
+                        set_heap_data_prop(&mut s.heap, addr, PKey::Sym(sym), v);
                         return self.advance(s);
                     }
                 }
@@ -10304,6 +10970,7 @@ impl Js {
                 // tracked and emitted later).
                 let nm = name.clone();
                 self.freeze_readers(s, pc, out, &|e| matches!(e, RExpr::Global(n) if *n == nm));
+                note_entry_global(name);
                 s.globals.insert(name.clone(), (v, true));
                 self.advance(s)
             }
@@ -10315,6 +10982,7 @@ impl Js {
                 let nm = name.clone();
                 self.freeze_readers(s, pc, out, &|e| matches!(e, RExpr::Global(n) if *n == nm));
                 out.push(self.in_mode(s, Op::AssignGlobal { name: name.clone(), expr }));
+                note_entry_global(name);
                 // (No longer tracked: it is the runtime's from here.)
                 s.globals.remove(name);
                 self.advance(s)
@@ -12296,7 +12964,7 @@ impl Js {
                     Js::reachable(&st.heap, root, &mut reach);
                     for r in reach {
                         if r >= base && keep.insert(r) {
-                            m.heap.insert(r, st.heap[&r].clone());
+                            m.heap.insert_quiet(r, st.heap[&r].clone());
                         }
                     }
                 }
@@ -12313,7 +12981,7 @@ impl Js {
                     }
                     for r in reach {
                         if r >= base && keep.insert(r) {
-                            m.heap.insert(r, st.heap[&r].clone());
+                            m.heap.insert_quiet(r, st.heap[&r].clone());
                         }
                     }
                 }
@@ -12374,7 +13042,7 @@ impl Js {
             let cond = Abs::from_const_rexpr(&c).unwrap_or_else(|| Abs::Dyn(c.clone()));
             let x = m.alloc(a.heap[&addr].clone());
             let y = m.alloc(b.heap[&addr].clone());
-            m.heap.insert(addr, HeapObj::Choice { cond, a: Abs::Ref(x), b: Abs::Ref(y) });
+            m.heap.insert_quiet(addr, HeapObj::Choice { cond, a: Abs::Ref(x), b: Abs::Ref(y) });
         }
         let atom = |e: &RExpr| matches!(e, RExpr::Var(_) | RExpr::Global(_)) || Info::of_const(e).is_some();
         for (slot, ea, eb, object) in choices {
@@ -14316,11 +14984,15 @@ impl Js {
             fields.push(("enumerable".to_string(), RExpr::Bool(p.attrs & ENUMERABLE != 0)));
             fields.push(("configurable".to_string(), RExpr::Bool(p.attrs & CONFIGURABLE != 0)));
             // An ordinary object's shell has no own properties, so this
-            // defines a new one: a field at its default (`false`,
-            // `undefined`) can go. (A function or array has intrinsic own
-            // properties a definition could be updating.)
+            // defines a new one: a field at its default (an attribute's
+            // `false`, a value's or accessor's `undefined`) can go. (A
+            // function or array has intrinsic own properties a definition
+            // could be updating.)
             if matches!(obj, HeapObj::Object { .. }) {
-                fields.retain(|(_, v)| !matches!(v, RExpr::Bool(false) | RExpr::Undef));
+                fields.retain(|(k, v)| match k.as_str() {
+                    "value" | "get" | "set" => !matches!(v, RExpr::Undef),
+                    _ => !matches!(v, RExpr::Bool(false) | RExpr::Undef),
+                });
             }
             let PKey::Str(key) = &p.key else {
                 // (A symbol key: defined alone, by its expression.)
@@ -14701,7 +15373,7 @@ impl Js {
         self.creation_pc.borrow_mut().insert(proto, self.code.len() + 2 * fid + 1);
         // A class's `prototype` is read-only; a function's is writable.
         let attrs = if matches!(kind, FnKind::ClassCtor { .. }) { 0 } else { WRITABLE };
-        if let Some(props) = s.heap.get_mut(&addr).unwrap().props_mut() {
+        if let Some(props) = s.heap.get_mut_quiet(&addr).unwrap().props_mut() {
             props.push(Prop { key: "prototype".into(), val: PVal::Data(Abs::Ref(proto)), attrs });
         }
     }
@@ -17342,7 +18014,7 @@ impl Js {
                     return None;
                 }
                 for (k, v) in all {
-                    set_data_prop(s.heap.get_mut(&t).unwrap(), k, v);
+                    set_heap_data_prop(&mut s.heap, t, k, v);
                 }
                 Some(Abs::Ref(t))
             }
@@ -17886,6 +18558,9 @@ impl Js {
         let stride = collection_stride(kind);
         let arg = |i: usize| args.get(i).cloned().unwrap_or(Abs::Undef);
         let set_data = |s: &mut State, d: BData| {
+            if env_flag!("ENTRY_DEBUG") && entry_boundary_object(recv) {
+                eprintln!("[ENTRY] collection {kind}.{m} of {recv} with {args:?}");
+            }
             if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&recv) {
                 *data = d;
             }
@@ -17899,7 +18574,14 @@ impl Js {
             "set" | "add" => {
                 let k = collection_key(arg(0));
                 let mut d = data.clone();
-                match collection_find(kind, &d.to_vec(), &k)? {
+                let found = collection_find(kind, &d.to_vec(), &k)?;
+                // (An entry a weak collection of the load code's state has
+                // for an object this call made: no later call reaches
+                // that object, so none sees the entry. No change of that
+                // state: see `EntryWatch`.)
+                let weak = matches!(&s.heap[&recv], HeapObj::Builtin { kind, .. } if is_weak(kind));
+                let unseen = weak && matches!(&k, Abs::Ref(a) if !entry_boundary_object(*a));
+                match found {
                     Some(i) => {
                         if kind == "Map" {
                             d.set(i + 1, arg(1));
@@ -17913,7 +18595,14 @@ impl Js {
                         d.push(Abs::Bool(true));
                     }
                 }
-                set_data(s, d);
+                if unseen {
+                    note_entry_weak(recv);
+                    if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut_quiet(&recv) {
+                        *data = d;
+                    }
+                } else {
+                    set_data(s, d);
+                }
                 Some(Abs::Ref(recv))
             }
             "delete" => {
@@ -17951,6 +18640,107 @@ impl Js {
 
     /// The compiled pattern of a modeled RegExp (cached), or `None` when this
     /// model cannot run it (an unsupported flag or pattern).
+    /// `Instr::EntryBoundary`: the end of a whole script's top-level code
+    /// (see `specialize_program`). Outside the split, nothing.
+    /// The end of a whole script's top-level code (see
+    /// `Stmt::EntryBoundary`). While `specialize_program` specializes that
+    /// code alone (`EntrySplit::loading`), the state here is what every call
+    /// of `main` starts from, and the residual code here runs once, at load:
+    /// the objects and globals a call may change (`EntrySplit::dynamic`) are
+    /// made at runtime here, and each runtime value the state names is given
+    /// a variable of its own (one `main` never assigns), and the code stops.
+    fn entry_boundary(&self, s: &mut State, out: &mut Vec<Op>) -> Step<Js> {
+        let at_top = s.frames.len() == 1
+            && s.handlers.is_empty()
+            && s.pending_joins.is_empty()
+            && !self.probing.get()
+            && self.halt_at.borrow().is_empty()
+            && !self.in_residual_body.get();
+        if !self.entry.loading.get() || !at_top {
+            return self.advance(s);
+        }
+        let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
+        let mut escaped = std::collections::HashSet::new();
+        for a in dynamic {
+            if s.heap.contains_key(&a) {
+                self.escape(s, a, &mut escaped, out);
+            }
+        }
+        // (What `main` can no longer reach is gone: the top-level code's dead
+        // locals, a weak collection's entries for objects nothing else holds.)
+        let mut pc_after = s.clone();
+        pc_after.top_mut().pc += 1;
+        self.clear_dead(&mut pc_after);
+        for (slot, v) in pc_after.top().locals.iter().enumerate() {
+            s.top_mut().locals[slot] = v.clone();
+        }
+        s.gc();
+        s.prune_weak_entries();
+        // The globals the code assigned, written out; their objects made at
+        // runtime once (in one go: an object two of them reach is made once),
+        // and still known to `main` (`hoisted`).
+        let heap = s.heap.clone();
+        let mut seen: HashMap<usize, usize> = HashMap::new();
+        let dirty: Vec<(String, Abs)> = s.globals.iter().filter(|(_, (_, d))| *d).map(|(k, (v, _))| (k.clone(), v.clone())).collect();
+        // (A closed script's lexical binding `main` does not assign: known
+        // throughout, and written out only if residual code reads it.)
+        let closed_lexical = |g: &str| {
+            self.entry.closed.get() && self.is_lexical_global(g) && !self.entry.all_globals_dynamic.get() && !self.entry.dynamic_globals.borrow().contains(g)
+        };
+        for (name, _) in s.globals.iter() {
+            if closed_lexical(name) {
+                self.entry.stable.borrow_mut().insert(name.clone());
+            }
+        }
+        for (name, v) in dirty {
+            if closed_lexical(&name) && !self.entry.read_every.get() && !self.entry.read_globals.borrow().contains(&name) {
+                self.entry.skipped.borrow_mut().insert(name.clone());
+                s.globals.insert(name, (v, false));
+                continue;
+            }
+            let expr = match &v {
+                Abs::Ref(a) => RExpr::Var(self.hoist_object(*a, &heap, &mut seen, out)),
+                other => other.to_rexpr(),
+            };
+            out.push(Op::AssignGlobal { name: name.clone(), expr });
+            s.globals.insert(name, (v, false));
+        }
+        if self.entry.all_globals_dynamic.get() {
+            s.globals = im::OrdMap::new();
+        } else {
+            for g in self.entry.dynamic_globals.borrow().iter() {
+                s.globals.remove(g);
+            }
+        }
+        s.gc();
+        let hoisted: HashMap<usize, usize> = seen.into_iter().filter(|(a, _)| s.heap.contains_key(a)).collect();
+        // (Every variable the state names, but `main`'s parameter.)
+        let mut vars = s.value_vars();
+        for (_, o) in s.heap.iter() {
+            if let HeapObj::Closure { ident: Some(v), .. } = o {
+                vars.insert(*v);
+            }
+        }
+        vars.remove(&self.input_var());
+        vars.remove(&ARGUMENTS_VAR_ID);
+        let mut vars: Vec<usize> = vars.into_iter().collect();
+        vars.sort_unstable();
+        let mut rename: HashMap<usize, usize> = HashMap::new();
+        let mut exports: Vec<usize> = hoisted.values().copied().collect();
+        exports.sort_unstable();
+        for v in vars {
+            let n = self.fresh_var();
+            out.push(Op::Assign { var: n, expr: RExpr::Var(v) });
+            rename.insert(v, n);
+            exports.push(n);
+        }
+        s.rename_vars(&rename);
+        s.facts = crate::facts::Facts::new();
+        s.top_mut().pc += 1;
+        self.entry.boundary.borrow_mut().push((s.clone(), exports, hoisted));
+        Step::Halt
+    }
+
     /// `Instr::GetProp(k)`: read property `k` of the value on top of the stack.
     fn get_prop_step(&self, s: &mut State, k: &String, pc: usize, out: &mut Vec<Op>) -> Step<Js> {
         // A choice of objects: the property of each, chosen.
@@ -19068,7 +19858,9 @@ impl Js {
             self.write_global(s, &name, out);
         }
         if forget {
-            s.globals = im::OrdMap::new();
+            // (Not those no runtime code changes: see `EntrySplit::stable`.)
+            let stable = self.entry.stable.borrow();
+            s.globals = if stable.is_empty() { im::OrdMap::new() } else { s.globals.iter().filter(|(k, _)| stable.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect() };
         }
     }
 
@@ -19987,6 +20779,21 @@ impl Js {
         out: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        // (One the load code made: see `mat_obj`.)
+        if let Some((var, added)) = self.entry_hoist(addr, heap.get(&addr)) {
+            if var != dst {
+                out.push(Op::Assign { var: dst, expr: RExpr::Var(var) });
+            }
+            for (k, v) in added {
+                let k = self.mat_inline(&k, heap, out, seen);
+                let (m, args) = match v {
+                    Some(v) => ("set", vec![k, self.mat_inline(&v, heap, out, seen)]),
+                    None => ("add", vec![k]),
+                };
+                out.push(Op::Effect(RExpr::Call(Box::new(RExpr::Get(Box::new(RExpr::Var(var)), m.into())), args)));
+            }
+            return;
+        }
         // (An ES5 class whose `render` is a root's: see `mat_obj`.)
         let saved = self.react_es5_render_root(addr, heap);
         self.mat_inline_obj_now(dst, addr, heap, out, seen);
@@ -20370,6 +21177,7 @@ impl Js {
                 }
                 let dst = self.escape_var(*addr);
                 seen.insert(*addr, dst);
+                note_entry_escape(*addr);
                 self.mat_pending.borrow_mut().insert(*addr);
                 self.mat_obj(dst, *addr, heap, shells, fills, seen);
                 self.mat_pending.borrow_mut().remove(addr);
@@ -20756,6 +21564,21 @@ impl Js {
         fills: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        // (One the load code made: that object, see `EntryWatch::hoisted`.)
+        if let Some((var, added)) = self.entry_hoist(addr, heap.get(&addr)) {
+            if var != dst {
+                shells.push(Op::Assign { var: dst, expr: RExpr::Var(var) });
+            }
+            for (k, v) in added {
+                let k = self.mat_value(&k, heap, shells, fills, seen);
+                let (m, args) = match v {
+                    Some(v) => ("set", vec![k, self.mat_value(&v, heap, shells, fills, seen)]),
+                    None => ("add", vec![k]),
+                };
+                fills.push(Op::Effect(RExpr::Call(Box::new(RExpr::Get(Box::new(RExpr::Var(var)), m.into())), args)));
+            }
+            return;
+        }
         let closure = matches!(heap.get(&addr), Some(HeapObj::Closure { .. }));
         // (An ES5 class whose `render` is a root's: that render given the
         // class, see `react_method_root_fn`.)
@@ -21413,7 +22236,7 @@ impl Js {
             probe.prune_weak_entries();
             for (a, o) in probe.heap.iter() {
                 if matches!(o, HeapObj::Builtin { kind, .. } if is_weak(kind)) {
-                    s.heap.insert(*a, o.clone());
+                    s.heap.insert_quiet(*a, o.clone());
                 }
             }
         }
@@ -21496,7 +22319,9 @@ impl Js {
         let heap = s.heap.clone();
         let (root, made) = self.materialize_value_made(&Abs::Ref(addr), &heap, out);
         for p in detached {
-            assert_eq!(made.get(&p), Some(&self.escape_var(p)), "a private store made into a variable other than its escape variable");
+            // (Or one the load code made, in that variable: see `EntryWatch::hoisted`.)
+            let var = made.get(&p).copied().or_else(|| entry_hoisted(p));
+            assert_eq!(var, Some(self.escape_var(p)), "a private store made into a variable other than its escape variable");
         }
         self.react_note_escape(&heap, &made);
         // (A host model's handle whose knowledge runtime code may change,
@@ -21616,7 +22441,7 @@ impl Js {
         }
         // (A final cell made is that object from now on.)
         for (a, var) in &made {
-            if let Some(HeapObj::Object { class: ObjClass::FinalCell { made }, .. }) = s.heap.get_mut(a) {
+            if let Some(HeapObj::Object { class: ObjClass::FinalCell { made }, .. }) = s.heap.get_mut_quiet(a) {
                 *made = Some(*var);
             }
         }
@@ -22061,7 +22886,7 @@ impl Js {
                     s.globals.insert(name, (fresh, d));
                 }
                 Loc::Heap(addr, i) => {
-                    if let Some(o) = s.heap.get_mut(&addr) {
+                    if let Some(o) = s.heap.get_mut_quiet(&addr) {
                         *o.children_mut()[i] = fresh;
                     }
                 }
@@ -22237,7 +23062,7 @@ impl Js {
         for a in addrs {
             let needs = !s.heap[&a].holds_no_dyn() && s.heap[&a].children().into_iter().any(|v| matches!(v, Abs::Dyn(e) if !rexpr_is_atom(e) && rexpr_contains(e, reads)));
             if needs {
-                let obj = s.heap.get_mut(&a).unwrap();
+                let obj = s.heap.get_mut_quiet(&a).unwrap();
                 for v in obj.children_mut() {
                     freeze(v, out, self);
                 }
@@ -22934,7 +23759,7 @@ impl Js {
         for &(addr, idx) in fields {
             let Some(&cpc) = self.creation_pc.borrow().get(&addr) else { continue };
             let id = self.heap_field_id(cpc, addr, idx);
-            let cell: Option<&mut Abs> = match ns.heap.get_mut(&addr) {
+            let cell: Option<&mut Abs> = match ns.heap.get_mut_quiet(&addr) {
                 Some(o @ (HeapObj::Array(_) | HeapObj::Object { .. })) => o.children_mut().into_iter().nth(idx),
                 _ => None,
             };
@@ -23420,7 +24245,7 @@ impl Js {
                     "the Rust reference interpreter cannot run a function kept as source; validate with the Node oracle"
                 ),
                 Instr::PushBool(b) => ostack.push(JsVal::Bool(*b)),
-                Instr::AssumeType(..) | Instr::FinalCell(_) => {}
+                Instr::AssumeType(..) | Instr::FinalCell(_) | Instr::EntryBoundary => {}
                 Instr::PushUndef => ostack.push(JsVal::Undef),
                 Instr::PushNull => ostack.push(JsVal::Null),
                 Instr::PushThis => panic!(
@@ -23973,7 +24798,7 @@ fn canonicalize_state(s: &State) -> State {
             if unchanged {
                 new_heap.insert_shared(new, shared.clone());
             } else {
-                new_heap.insert(new, shared.map_children(&remap));
+                new_heap.insert_quiet(new, shared.map_children(&remap));
             }
         }
     }
@@ -24057,6 +24882,68 @@ fn visit_rexpr(e: &RExpr, f: &mut dyn FnMut(&RExpr)) {
 
 /// The residual functions `prog` makes or refers to, and those they do, of
 /// `fns` (by index).
+/// The globals the residual program `prog` reads by name (`read`), or
+/// whether it may read any (`every`: the global object as a value, not a
+/// static property read of it).
+fn program_globals_read(prog: &Program<Op, Cond>, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
+    fn expr(e: &RExpr, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
+        match e {
+            RExpr::Get(o, k) if is_global_object(&Abs::Dyn((**o).clone())) => {
+                read.insert(k.clone());
+            }
+            // (Code made from a string reads what it names.)
+            RExpr::Global(g) if is_global_object(&Abs::Dyn(e.clone())) || g == "eval" || g == "Function" => {
+                *every = true;
+            }
+            RExpr::Global(g) => {
+                read.insert(g.clone());
+            }
+            _ => {}
+        }
+        if !matches!(e, RExpr::Get(o, _) if is_global_object(&Abs::Dyn((**o).clone()))) {
+            for c in crate::inline::children(e) {
+                expr(c, read, every);
+            }
+        }
+    }
+    for b in &prog.blocks {
+        for op in &b.ops {
+            if let Op::Try { body, catch_body, finally_body, .. } = op {
+                program_globals_read(body, read, every);
+                program_globals_read(catch_body, read, every);
+                if let Some(f) = finally_body {
+                    program_globals_read(f, read, every);
+                }
+                continue;
+            }
+            // (A global assigned by name is reached by name too.)
+            if let Op::AssignGlobal { name, .. } = op {
+                read.insert(name.clone());
+            }
+            for e in crate::inline::op_exprs(op) {
+                expr(e, read, every);
+            }
+        }
+        if let Terminator::Cond { cond: Cond::Falsy(e), .. } = &b.term {
+            expr(e, read, every);
+        }
+    }
+}
+
+/// Whether the residual program `prog` names the variable `v` anywhere.
+fn program_names_var(prog: &Program<Op, Cond>, v: usize) -> bool {
+    let named = |e: &RExpr| rexpr_contains(e, &|x| matches!(x, RExpr::Var(w) if *w == v));
+    prog.blocks.iter().any(|b| {
+        b.ops.iter().any(|op| match op {
+            Op::Try { body, catch_body, finally_body, catch_slot } => {
+                *catch_slot == Some(v) || program_names_var(body, v) || program_names_var(catch_body, v) || finally_body.as_ref().is_some_and(|f| program_names_var(f, v))
+            }
+            Op::Assign { var, .. } | Op::Eval { dst: var, .. } | Op::NewObject { dst: var, .. } | Op::NewArray { dst: var, .. } if *var == v => true,
+            _ => crate::inline::op_exprs(op).into_iter().any(named),
+        }) || matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(e), .. } if named(e))
+    })
+}
+
 fn reachable_residual_fns(prog: &Program<Op, Cond>, fns: &[ResidualFn]) -> std::collections::HashSet<usize> {
     fn expr(e: &RExpr, out: &mut Vec<usize>) {
         visit_rexpr(e, &mut |x| {

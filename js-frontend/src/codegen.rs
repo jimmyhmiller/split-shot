@@ -42,10 +42,24 @@ pub fn program_to_js(
     sources: &[Option<crate::lower::FnSource>],
 ) -> String {
     let mut s = String::new();
+    // A whole script's load code, run once (see `Js::entry_load`), and the
+    // variables it gives `main`: named apart, by every function alike.
+    let load = vm.entry_load();
+    let load_prog: Option<&Program<Op, Cond>> = load.as_ref().map(|(p, _)| &**p);
+    EXPORTED.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        for v in load.as_ref().map(|(_, e)| e.as_slice()).unwrap_or(&[]) {
+            m.insert(*v, format!("__x{v}"));
+        }
+    });
+    let roots: Vec<&Program<Op, Cond>> = std::iter::once(main_prog).chain(load_prog).collect();
     // Residual functions some code calls directly (`__rf<id>(captures...,
     // args...)`), as opposed to only through closure values.
     let mut flat_refs: HashSet<usize> = HashSet::new();
-    program_flat_refs(main_prog, &mut flat_refs);
+    for r in &roots {
+        program_flat_refs(r, &mut flat_refs);
+    }
     for rf in vm.residual_fns().iter() {
         program_flat_refs(&rf.body, &mut flat_refs);
     }
@@ -54,7 +68,9 @@ pub fn program_to_js(
     let fns = vm.residual_fns();
     let mut reachable: HashSet<usize> = HashSet::new();
     let mut work: Vec<usize> = Vec::new();
-    program_fn_refs(main_prog, &mut work);
+    for r in &roots {
+        program_fn_refs(r, &mut work);
+    }
     while let Some(r) = work.pop() {
         if reachable.insert(r) {
             program_fn_refs(&fns[r].body, &mut work);
@@ -81,7 +97,7 @@ pub fn program_to_js(
     let mut made_in_strict: HashSet<usize> = HashSet::new();
     let mut strict_bodies: Vec<&Program<Op, Cond>> = fns.iter().filter(|rf| rf.strict).map(|rf| &rf.body).collect();
     if vm.main_is_strict() {
-        strict_bodies.push(main_prog);
+        strict_bodies.extend(roots.iter().copied());
     }
     for body in strict_bodies {
         let mut refs = Vec::new();
@@ -92,7 +108,7 @@ pub fn program_to_js(
     let mut inline_from_source: HashSet<usize> = HashSet::new();
     // (A function made more than once is written once, in its factory.)
     let mut made: HashMap<usize, usize> = HashMap::new();
-    for body in std::iter::once(main_prog).chain(fns.iter().map(|rf| &rf.body)) {
+    for body in roots.iter().copied().chain(fns.iter().map(|rf| &rf.body)) {
         for_each_program_expr(body, &mut |e| count_new_fns(e, &mut made));
     }
     let candidates: HashSet<usize> = fns
@@ -149,16 +165,19 @@ pub fn program_to_js(
     INLINE_VALUE.with(|m| m.borrow_mut().clear());
     let once_in_main: HashSet<usize> = {
         let mut counts: HashMap<usize, usize> = HashMap::new();
-        count_fn_refs(main_prog, &mut counts);
+        for r in &roots {
+            count_fn_refs(r, &mut counts);
+        }
         for &r in &reachable {
             count_fn_refs(&fns[r].body, &mut counts);
         }
-        let cyclic = cyclic_blocks(main_prog);
         let mut once = HashSet::new();
-        for (bi, b) in main_prog.blocks.iter().enumerate() {
-            if cyclic.contains(&bi) {
-                continue;
-            }
+        // (Or by the load code.)
+        let blocks = roots.iter().flat_map(|r| {
+            let cyclic = cyclic_blocks(r);
+            r.blocks.iter().enumerate().filter(move |(bi, _)| !cyclic.contains(bi)).map(|(_, b)| b)
+        });
+        for b in blocks {
             let mut here: HashMap<usize, usize> = HashMap::new();
             for op in &b.ops {
                 if matches!(op, Op::Try { .. }) {
@@ -183,7 +202,7 @@ pub fn program_to_js(
         // (In a fixed order: the pools' and factories' numbering follows it.)
         let mut order: Vec<usize> = reachable.iter().copied().collect();
         order.sort_unstable();
-        let mut progs: Vec<&Program<Op, Cond>> = vec![main_prog];
+        let mut progs: Vec<&Program<Op, Cond>> = roots.clone();
         progs.extend(order.iter().map(|&r| &fns[r].body));
         let pool = string_pool(&progs);
         STRING_POOL.with(|p| *p.borrow_mut() = pool);
@@ -429,7 +448,9 @@ pub fn program_to_js(
     // specialized body) is not needed.
     let mut needed: HashSet<usize> = HashSet::new();
     let mut work: Vec<usize> = Vec::new();
-    program_fn_refs(main_prog, &mut work);
+    for r in &roots {
+        program_fn_refs(r, &mut work);
+    }
     while let Some(r) = work.pop() {
         if needed.insert(r) && (!from_source_used.contains(&r) || specialized_factory.contains(&r)) {
             program_fn_refs(&fns[r].body, &mut work);
@@ -442,6 +463,33 @@ pub fn program_to_js(
         }
     }
     s = kept;
+    // The load code: the variables it gives `main` declared at the top
+    // level, it run in a function of its own.
+    if let (Some(lp), Some((_, exports))) = (load_prog, load.as_ref()) {
+        if !exports.is_empty() {
+            let names: Vec<String> = exports.iter().map(|v| var_js(*v)).collect();
+            let _ = writeln!(s, "let {};", names.join(", "));
+        }
+        // (Straight-line code of a sloppy script runs as its top-level
+        // statements, in a block if it has variables of its own.)
+        let mut locals: BTreeSet<usize> = BTreeSet::new();
+        collect_decls(lp, &mut locals);
+        EXPORTED.with(|m| locals.retain(|v| !m.borrow().contains_key(v)));
+        let straight = lp.blocks.len() == 1 && matches!(lp.blocks[0].term, partial::residual::Terminator::Halt) && !vm.main_is_strict();
+        if lp.blocks.iter().all(|b| b.ops.is_empty()) {
+        } else if straight && locals.is_empty() {
+            let body = render_blocks(lp, "", false);
+            s.push_str(body.strip_suffix("return;\n").unwrap_or(&body));
+        } else if straight {
+            let text = render_function("", &[], usize::MAX, lp, short_names, false);
+            // (`function () {` ... `}` as a block.)
+            let open = text.find('{').expect("a function body");
+            let _ = writeln!(s, "{}", text[open..].trim_end());
+        } else {
+            let text = render_function("(function ", &[], usize::MAX, lp, short_names, vm.main_is_strict());
+            let _ = writeln!(s, "{})();", text.trim_end());
+        }
+    }
     let main_head = format!("{}function {}", if vm.main_is_async() { "async " } else { "" }, vm.entry_name());
     let _ = write!(s, "{}", render_function(&main_head, &[input_var], usize::MAX, main_prog, short_names, vm.main_is_strict()));
     // A script's top-level declarations, declared by the residual script.
@@ -1166,6 +1214,8 @@ fn render_function_with(
     for p in params {
         decls.remove(p); // parameters are not `let`-declared locals
     }
+    // (Nor what the load code gives `main`: declared at the top level.)
+    EXPORTED.with(|m| decls.retain(|v| !m.borrow().contains_key(v)));
     if short_names {
         SHORT.with(|n| *n.borrow_mut() = Some(ShortNames::for_function(params, prog, &[])));
     }
@@ -1200,6 +1250,9 @@ fn render_function_with(
 }
 
 thread_local! {
+    /// The variables the load code gives `main` (see `Js::entry_load`), with
+    /// the name every function knows each by.
+    static EXPORTED: RefCell<HashMap<usize, String>> = RefCell::new(HashMap::new());
     /// The short names of the function being rendered, when enabled.
     static SHORT: RefCell<Option<ShortNames>> = const { RefCell::new(None) };
     /// The function being rendered is strict code.
@@ -1292,6 +1345,7 @@ impl ShortNames {
         }
         count_program(prog, &mut counts, &mut globals);
         counts.remove(&partial::js::ARGUMENTS_VAR_ID);
+        EXPORTED.with(|m| counts.retain(|v, _| !m.borrow().contains_key(v)));
         let mut order: Vec<(usize, usize)> = counts.into_iter().collect();
         // Most used first; ties by id, for a deterministic result.
         order.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -1427,6 +1481,9 @@ fn count_rexpr(e: &RExpr, counts: &mut HashMap<usize, usize>, globals: &mut Hash
 pub(crate) fn var_js(v: usize) -> String {
     if v == partial::js::ARGUMENTS_VAR_ID {
         return "arguments".to_string();
+    }
+    if let Some(n) = EXPORTED.with(|m| m.borrow().get(&v).cloned()) {
+        return n;
     }
     SHORT.with(|n| match &*n.borrow() {
         Some(names) => names.vars.get(&v).cloned().unwrap_or_else(|| panic!("internal: no short name for v{v}")),

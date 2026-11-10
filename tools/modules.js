@@ -9,6 +9,8 @@
 //   entry        the entry file (relative to the case)
 //   name         the entry's function (default "main")
 //   inputs       inputs it is called with (each run is a fresh program)
+//   repeat       also load the program once and call it on every input in
+//                turn, twice over: what one call leaves, the next sees
 //   conditions   package conditions (node --conditions / js-frontend --conditions)
 //   node_flags   extra flags for Node's run (e.g. --experimental-transform-types)
 //   forbid       a regex the residual must not match (a folding claim)
@@ -41,7 +43,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 let showMod;
-async function runIn(code, name, input) {
+async function runIn(code, name, input, sequence) {
   const logs = [];
   const sandbox = {
     console: { log: (...a) => logs.push(a.map((x) => (typeof x === 'string' ? x : showMod.show(x))).join(' ')) },
@@ -60,14 +62,29 @@ async function runIn(code, name, input) {
   } catch (e) {
     return { logs, loaderr: String(e && e.name) + ': ' + String(e && e.message) };
   }
-  ctx.__in = JSON.parse(JSON.stringify(input));
   let out;
-  try {
-    let r = vm.runInContext('__main(__in)', ctx, { timeout: 10000 });
-    if (r && typeof r.then === 'function') r = await r;
-    out = { logs, result: showMod.show(r) };
-  } catch (e) {
-    out = { logs, threw: String(e && e.name) + ': ' + String(e && e.message) };
+  if (sequence) {
+    const results = [];
+    for (const one of input) {
+      ctx.__in = JSON.parse(JSON.stringify(one));
+      try {
+        let r = vm.runInContext('__main(__in)', ctx, { timeout: 10000 });
+        if (r && typeof r.then === 'function') r = await r;
+        results.push(showMod.show(r));
+      } catch (e) {
+        results.push('throw ' + String(e && e.name) + ': ' + String(e && e.message));
+      }
+    }
+    out = { logs, result: results.join(' ; ') };
+  } else {
+    ctx.__in = JSON.parse(JSON.stringify(input));
+    try {
+      let r = vm.runInContext('__main(__in)', ctx, { timeout: 10000 });
+      if (r && typeof r.then === 'function') r = await r;
+      out = { logs, result: showMod.show(r) };
+    } catch (e) {
+      out = { logs, threw: String(e && e.name) + ': ' + String(e && e.message) };
+    }
   }
   await new Promise((r) => setTimeout(r, 20));
   out.logs = logs;
@@ -168,12 +185,15 @@ const same = (a, b) => fmt(a) === fmt(b);
         oracleDir = transpiledCopy(cdir);
         oracleEntry = path.join(oracleDir, spec.entry.replace(/\.ts$/, '.js').replace(/\.mts$/, '.mjs').replace(/\.cts$/, '.cjs'));
       }
-      for (const input of spec.inputs) {
+      // (Each input on a fresh load; and, with `repeat`, all of them on one.)
+      const runs = spec.inputs.map((input) => ({ input, sequence: false }));
+      if (spec.repeat) runs.push({ input: spec.inputs.concat(spec.inputs), sequence: true });
+      for (const { input, sequence } of runs) {
         const o = spawnSync(process.execPath, [...(spec.node_flags || []), ...(spec.conditions || []).map((x) => `--conditions=${x}`), path.join(__dirname, 'modules-oracle.mjs'), oracleEntry, name, JSON.stringify(input)], {
           encoding: 'utf8',
           cwd: oracleDir,
           timeout: 60000,
-          env: { ...process.env, NODE_NO_WARNINGS: '1', ...(spec.oracle_require ? { PE_ORACLE_REQUIRE: '1' } : {}) },
+          env: { ...process.env, NODE_NO_WARNINGS: '1', ...(spec.oracle_require ? { PE_ORACLE_REQUIRE: '1' } : {}), ...(sequence ? { PE_ORACLE_SEQUENCE: '1' } : {}) },
         });
         let want;
         try {
@@ -184,14 +204,14 @@ const same = (a, b) => fmt(a) === fmt(b);
           continue;
         }
         if (linked) {
-          const l = await runIn(linked, name, input);
+          const l = await runIn(linked, name, input, sequence);
           if (!same(l, want)) {
             verdict = 'LINK-WRONG';
             notes.push(`${JSON.stringify(input)}: node=${fmt(want)}  linked=${fmt(l)}`);
             continue;
           }
         }
-        const got = await runIn(residual, name, input);
+        const got = await runIn(residual, name, input, sequence);
         if (!same(got, want)) {
           if (verdict === 'PASS') verdict = 'WRONG';
           notes.push(`${JSON.stringify(input)}: node=${fmt(want)}  residual=${fmt(got)}`);
