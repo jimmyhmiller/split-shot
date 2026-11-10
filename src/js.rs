@@ -18055,6 +18055,21 @@ impl Js {
                 return self.push(s, Abs::Ref(b));
             }
         }
+        // `G.m` for a standard constructor G (pristine) and `m` a method of
+        // `Object.prototype` that `Function.prototype` does not shadow: G has
+        // no own `m`, so it is `Object.prototype.m` (LiquidJS's
+        // `var hasOwnProperty = Object.hasOwnProperty`).
+        if let Abs::Dyn(RExpr::Global(g)) = &o {
+            if matches!(k.as_str(), "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" | "valueOf")
+                && builtin_typeof(g) == Some("function")
+                && self.pristine(g)
+                && self.pristine("Function")
+                && self.pristine("Object")
+            {
+                let b = s.alloc(HeapObj::Builtin { kind: format!("Object.prototype.{k}"), data: vec![].into(), ext: None });
+                return self.push(s, Abs::Ref(b));
+            }
+        }
         // `.call` / `.apply` of an intrinsic method value.
         if let Abs::Ref(a) = &o {
             if let HeapObj::Builtin { kind, .. } = &s.heap[a] {
