@@ -44,6 +44,31 @@ function plain(n) {
   return e.pos.x + e.pos.y;
 }
 
+// Flatten the syntax: every expression, statement and block becomes a row
+// in `nodes` whose children are node ids. Rows have one fixed width (see
+// the note at the top of interpreter.js).
+const NODE_WIDTH = 17;
+const nodes = [];
+function row(fields) {
+  if (fields.length > NODE_WIDTH) throw new Error('node row wider than NODE_WIDTH: ' + JSON.stringify(fields));
+  while (fields.length < NODE_WIDTH) fields.push(0);
+  return nodes.push(fields) - 1;
+}
+function flattenBlock(statements) { return row(['block', statements.map(flatten)]); }
+function flatten(e) {
+  const tag = e[0];
+  if (tag === 'num' || tag === 'local' || tag === 'this') return row(e.slice());
+  if (tag === 'bin') return row([tag, e[1], flatten(e[2]), flatten(e[3])]);
+  if (tag === 'get') return row([tag, flatten(e[1]), e[2]]);
+  if (tag === 'new') return row([tag, e[1], e[2].map(flatten)]);
+  if (tag === 'call') return row([tag, flatten(e[1]), e[2], e[3].map(flatten)]);
+  if (tag === 'setprop') return row([tag, flatten(e[1]), e[2], flatten(e[3])]);
+  if (tag === 'setlocal') return row([tag, e[1], flatten(e[2])]);
+  if (tag === 'while') return row([tag, flatten(e[1]), flattenBlock(e[2])]);
+  if (tag === 'return' || tag === 'expr') return row([tag, flatten(e[1])]);
+  throw new Error('unknown syntax tag ' + tag);
+}
+for (const f of prog.functions) f.body = flattenBlock(f.body);
 const shapes = [{ cls: 0, keys: [] }, { cls: 1, keys: [] }];
 const transitions = {}, exits = {};
 // A variant is "code:shape:exact"; shape "dyn" means nothing is known about
@@ -59,6 +84,7 @@ function specialize(key) {
   // declarations the specializer leaves them all in the residual.
   const source = `function entry(carrier) {
 var prog = ${JSON.stringify(prog)};
+var nodes = ${JSON.stringify(nodes)};
 var shapes = ${JSON.stringify(shapes)};
 var transitions = ${JSON.stringify(transitions)};
 var exits = ${JSON.stringify(exits)};
@@ -72,7 +98,7 @@ values[self] = me;
 known[self] = ${receiver};
 exact[self] = ${exact};
 var frame = { result: 0 };
-execute(f.body, self, values, known, exact, frame);
+execute(nodes[f.body], self, values, known, exact, frame);
 hostExit(known[self]);
 return frame.result;
 }

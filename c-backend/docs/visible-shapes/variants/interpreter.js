@@ -14,8 +14,19 @@
 // `shapeOut`, written immediately before the return and read immediately
 // after the call.
 //
+// Guest syntax is one flat table: `nodes[id]` is the row of an expression,
+// a statement or a block, and a row names its children by id. The evaluator's
+// recursive calls pass the ROW, not the id. That is what lets the
+// specializer unfold them under a residual loop: it unfolds a recursive call
+// made under dynamic control only when an argument moved to a different
+// static structure than every active activation has, and it counts all
+// static numbers as the same value (so a counter cannot drive unbounded
+// unfolding). Rows are NODE_WIDTH wide, which is past the width up to which
+// the specializer compares arrays by content, so a row is told apart by
+// which row it is.
+//
 // Static tables, supplied by the driver around this text:
-//   prog.functions[code] = { params, locals, body }
+//   prog.functions[code] = { params, locals, body: block node id }
 //   prog.classes[cls]    = { ctor: code, methods: { name: code }, empty: shape }
 //   shapes[id]           = { cls, keys: [...] }
 //   transitions["id:key"] = id of the shape with that key added
@@ -91,8 +102,8 @@ function evaluate(e, self, values, known, exact) {
     return values[named];
   }
   if (tag === "bin") {
-    var a = evaluate(e[2], self, values, known, exact), aShape = shapeOut;
-    var b = evaluate(e[3], self, values, known, exact), bShape = shapeOut;
+    var a = evaluate(nodes[e[2]], self, values, known, exact), aShape = shapeOut;
+    var b = evaluate(nodes[e[3]], self, values, known, exact), bShape = shapeOut;
     var numbers = (aShape === -1) & (bShape === -1);
     var out = 0;
     if (numbers) { if (e[1] === "+") out = a + b; else out = a < b ? 1 : 0; }
@@ -101,9 +112,9 @@ function evaluate(e, self, values, known, exact) {
     return out;
   }
   if (tag === "get") {
-    var holder = variable(e[1], self), ref = 0, id = -1;
+    var holder = variable(nodes[e[1]], self), ref = 0, id = -1;
     if (holder >= 0) { ref = values[holder]; id = known[holder]; }
-    else { ref = evaluate(e[1], self, values, known, exact); id = shapeOut; }
+    else { ref = evaluate(nodes[e[1]], self, values, known, exact); id = shapeOut; }
     return get(id, ref, e[2]);
   }
   if (tag === "new") {
@@ -116,9 +127,9 @@ function evaluate(e, self, values, known, exact) {
     return made;
   }
   // A method call. The callee is specialized for the receiver's shape.
-  var target = variable(e[1], self), receiver = 0, shape = -1;
+  var target = variable(nodes[e[1]], self), receiver = 0, shape = -1;
   if (target >= 0) { receiver = values[target]; shape = known[target]; exact[target] = 0; }
-  else { receiver = evaluate(e[1], self, values, known, exact); shape = shapeOut; }
+  else { receiver = evaluate(nodes[e[1]], self, values, known, exact); shape = shapeOut; }
   var code = findMethod(shape, e[2], 0), variant = findMethod(shape, e[2], 1);
   if (code < 0) {
     var actual = hostShapeOf(receiver);
@@ -131,25 +142,25 @@ function evaluate(e, self, values, known, exact) {
 }
 function argumentsOf(list, self, values, known, exact) {
   var out = [], i = 0;
-  while (i < list.length) { out[i] = evaluate(list[i], self, values, known, exact); i = i + 1; }
+  while (i < list.length) { out[i] = evaluate(nodes[list[i]], self, values, known, exact); i = i + 1; }
   return out;
 }
-function execute(list, self, values, known, exact, frame) {
-  var i = 0;
+function execute(block, self, values, known, exact, frame) {
+  var list = block[1], i = 0;
   while (i < list.length) {
-    var s = list[i], tag = s[0];
+    var s = nodes[list[i]], tag = s[0];
     if (tag === "setprop") {
-      var stored = evaluate(s[3], self, values, known, exact);
-      set(variable(s[1], self), s[2], stored, values, known, exact);
+      var stored = evaluate(nodes[s[3]], self, values, known, exact);
+      set(variable(nodes[s[1]], self), s[2], stored, values, known, exact);
     } else if (tag === "setlocal") {
-      var value = evaluate(s[2], self, values, known, exact);
+      var value = evaluate(nodes[s[2]], self, values, known, exact);
       values[s[1]] = value;
       known[s[1]] = shapeOut;
       exact[s[1]] = 0;
     } else if (tag === "while") {
-      while (evaluate(s[1], self, values, known, exact)) execute(s[2], self, values, known, exact, frame);
-    } else if (tag === "return") frame.result = evaluate(s[1], self, values, known, exact);
-    else evaluate(s[1], self, values, known, exact);
+      while (evaluate(nodes[s[1]], self, values, known, exact)) execute(nodes[s[2]], self, values, known, exact, frame);
+    } else if (tag === "return") frame.result = evaluate(nodes[s[1]], self, values, known, exact);
+    else evaluate(nodes[s[1]], self, values, known, exact);
     i = i + 1;
   }
 }

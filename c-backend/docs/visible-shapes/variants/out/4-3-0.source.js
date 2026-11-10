@@ -1,5 +1,6 @@
 function entry(carrier) {
-var prog = {"functions":[{"name":"main","params":1,"locals":3,"body":[["setlocal",1,["new",1,[["new",0,[["num",1],["num",2]]],["new",0,[["local",0],["num",3]]]]]],["setlocal",2,["num",0]],["while",["bin","<",["local",2],["num",3]],[["expr",["call",["local",1],"step",[]]],["setlocal",2,["bin","+",["local",2],["num",1]]]]],["return",["bin","+",["get",["get",["local",1],"pos"],"x"],["get",["get",["local",1],"pos"],"y"]]]]},{"name":"Vec","params":2,"locals":2,"body":[["setprop",["this"],"x",["local",0]],["setprop",["this"],"y",["local",1]]]},{"name":"Vec.add","params":1,"locals":1,"body":[["return",["new",0,[["bin","+",["get",["this"],"x"],["get",["local",0],"x"]],["bin","+",["get",["this"],"y"],["get",["local",0],"y"]]]]]]},{"name":"Ent","params":2,"locals":2,"body":[["setprop",["this"],"pos",["local",0]],["setprop",["this"],"vel",["local",1]]]},{"name":"Ent.step","params":0,"locals":0,"body":[["setprop",["this"],"pos",["call",["get",["this"],"pos"],"add",[["get",["this"],"vel"]]]]]}],"classes":[{"ctor":1,"methods":{"add":2},"empty":0},{"ctor":3,"methods":{"step":4},"empty":1}]};
+var prog = {"functions":[{"name":"main","params":1,"locals":3,"body":30},{"name":"Vec","params":2,"locals":2,"body":37},{"name":"Vec.add","params":1,"locals":1,"body":50},{"name":"Ent","params":2,"locals":2,"body":57},{"name":"Ent.step","params":0,"locals":0,"body":65}],"classes":[{"ctor":1,"methods":{"add":2},"empty":0},{"ctor":3,"methods":{"step":4},"empty":1}]};
+var nodes = [["num",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["num",2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["new",0,[0,1],0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["num",3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["new",0,[3,4],0,0,0,0,0,0,0,0,0,0,0,0,0,0],["new",1,[2,5],0,0,0,0,0,0,0,0,0,0,0,0,0,0],["setlocal",1,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["num",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["setlocal",2,8,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["num",3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["bin","<",10,11,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["call",13,"step",[],0,0,0,0,0,0,0,0,0,0,0,0,0],["expr",14,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["num",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["bin","+",16,17,0,0,0,0,0,0,0,0,0,0,0,0,0],["setlocal",2,18,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["block",[15,19],0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["while",12,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",22,"pos",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",23,"x",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",25,"pos",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",26,"y",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["bin","+",24,27,0,0,0,0,0,0,0,0,0,0,0,0,0],["return",28,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["block",[7,9,21,29],0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["setprop",31,"x",32,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["setprop",34,"y",35,0,0,0,0,0,0,0,0,0,0,0,0,0],["block",[33,36],0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",38,"x",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",40,"x",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["bin","+",39,41,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",43,"y",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",45,"y",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["bin","+",44,46,0,0,0,0,0,0,0,0,0,0,0,0,0],["new",0,[42,47],0,0,0,0,0,0,0,0,0,0,0,0,0,0],["return",48,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["block",[49],0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["setprop",51,"pos",52,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["local",1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["setprop",54,"vel",55,0,0,0,0,0,0,0,0,0,0,0,0,0],["block",[53,56],0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",59,"pos",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["this",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],["get",61,"vel",0,0,0,0,0,0,0,0,0,0,0,0,0,0],["call",60,"add",[62],0,0,0,0,0,0,0,0,0,0,0,0,0],["setprop",58,"pos",63,0,0,0,0,0,0,0,0,0,0,0,0,0],["block",[64],0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]];
 var shapes = [{"cls":0,"keys":[]},{"cls":1,"keys":[]},{"cls":0,"keys":["x"]},{"cls":1,"keys":["pos"]},{"cls":0,"keys":["x","y"]},{"cls":1,"keys":["pos","vel"]}];
 var transitions = {"0:x":2,"1:pos":3,"2:y":4,"3:vel":5};
 var exits = {"1:0":4,"3:1":5};
@@ -19,8 +20,19 @@ var exits = {"1:0":4,"3:1":5};
 // `shapeOut`, written immediately before the return and read immediately
 // after the call.
 //
+// Guest syntax is one flat table: `nodes[id]` is the row of an expression,
+// a statement or a block, and a row names its children by id. The evaluator's
+// recursive calls pass the ROW, not the id. That is what lets the
+// specializer unfold them under a residual loop: it unfolds a recursive call
+// made under dynamic control only when an argument moved to a different
+// static structure than every active activation has, and it counts all
+// static numbers as the same value (so a counter cannot drive unbounded
+// unfolding). Rows are NODE_WIDTH wide, which is past the width up to which
+// the specializer compares arrays by content, so a row is told apart by
+// which row it is.
+//
 // Static tables, supplied by the driver around this text:
-//   prog.functions[code] = { params, locals, body }
+//   prog.functions[code] = { params, locals, body: block node id }
 //   prog.classes[cls]    = { ctor: code, methods: { name: code }, empty: shape }
 //   shapes[id]           = { cls, keys: [...] }
 //   transitions["id:key"] = id of the shape with that key added
@@ -96,8 +108,8 @@ function evaluate(e, self, values, known, exact) {
     return values[named];
   }
   if (tag === "bin") {
-    var a = evaluate(e[2], self, values, known, exact), aShape = shapeOut;
-    var b = evaluate(e[3], self, values, known, exact), bShape = shapeOut;
+    var a = evaluate(nodes[e[2]], self, values, known, exact), aShape = shapeOut;
+    var b = evaluate(nodes[e[3]], self, values, known, exact), bShape = shapeOut;
     var numbers = (aShape === -1) & (bShape === -1);
     var out = 0;
     if (numbers) { if (e[1] === "+") out = a + b; else out = a < b ? 1 : 0; }
@@ -106,9 +118,9 @@ function evaluate(e, self, values, known, exact) {
     return out;
   }
   if (tag === "get") {
-    var holder = variable(e[1], self), ref = 0, id = -1;
+    var holder = variable(nodes[e[1]], self), ref = 0, id = -1;
     if (holder >= 0) { ref = values[holder]; id = known[holder]; }
-    else { ref = evaluate(e[1], self, values, known, exact); id = shapeOut; }
+    else { ref = evaluate(nodes[e[1]], self, values, known, exact); id = shapeOut; }
     return get(id, ref, e[2]);
   }
   if (tag === "new") {
@@ -121,9 +133,9 @@ function evaluate(e, self, values, known, exact) {
     return made;
   }
   // A method call. The callee is specialized for the receiver's shape.
-  var target = variable(e[1], self), receiver = 0, shape = -1;
+  var target = variable(nodes[e[1]], self), receiver = 0, shape = -1;
   if (target >= 0) { receiver = values[target]; shape = known[target]; exact[target] = 0; }
-  else { receiver = evaluate(e[1], self, values, known, exact); shape = shapeOut; }
+  else { receiver = evaluate(nodes[e[1]], self, values, known, exact); shape = shapeOut; }
   var code = findMethod(shape, e[2], 0), variant = findMethod(shape, e[2], 1);
   if (code < 0) {
     var actual = hostShapeOf(receiver);
@@ -136,25 +148,25 @@ function evaluate(e, self, values, known, exact) {
 }
 function argumentsOf(list, self, values, known, exact) {
   var out = [], i = 0;
-  while (i < list.length) { out[i] = evaluate(list[i], self, values, known, exact); i = i + 1; }
+  while (i < list.length) { out[i] = evaluate(nodes[list[i]], self, values, known, exact); i = i + 1; }
   return out;
 }
-function execute(list, self, values, known, exact, frame) {
-  var i = 0;
+function execute(block, self, values, known, exact, frame) {
+  var list = block[1], i = 0;
   while (i < list.length) {
-    var s = list[i], tag = s[0];
+    var s = nodes[list[i]], tag = s[0];
     if (tag === "setprop") {
-      var stored = evaluate(s[3], self, values, known, exact);
-      set(variable(s[1], self), s[2], stored, values, known, exact);
+      var stored = evaluate(nodes[s[3]], self, values, known, exact);
+      set(variable(nodes[s[1]], self), s[2], stored, values, known, exact);
     } else if (tag === "setlocal") {
-      var value = evaluate(s[2], self, values, known, exact);
+      var value = evaluate(nodes[s[2]], self, values, known, exact);
       values[s[1]] = value;
       known[s[1]] = shapeOut;
       exact[s[1]] = 0;
     } else if (tag === "while") {
-      while (evaluate(s[1], self, values, known, exact)) execute(s[2], self, values, known, exact, frame);
-    } else if (tag === "return") frame.result = evaluate(s[1], self, values, known, exact);
-    else evaluate(s[1], self, values, known, exact);
+      while (evaluate(nodes[s[1]], self, values, known, exact)) execute(nodes[s[2]], self, values, known, exact, frame);
+    } else if (tag === "return") frame.result = evaluate(nodes[s[1]], self, values, known, exact);
+    else evaluate(nodes[s[1]], self, values, known, exact);
     i = i + 1;
   }
 }
@@ -168,7 +180,7 @@ values[self] = me;
 known[self] = 3;
 exact[self] = 0;
 var frame = { result: 0 };
-execute(f.body, self, values, known, exact, frame);
+execute(nodes[f.body], self, values, known, exact, frame);
 hostExit(known[self]);
 return frame.result;
 }
