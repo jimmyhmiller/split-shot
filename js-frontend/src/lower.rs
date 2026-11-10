@@ -714,6 +714,26 @@ fn reject_unsupported(module: &ast::Module) -> R<()> {
     }
 }
 
+/// Does this constructor body read a `super` property (`super.m`,
+/// `super[k]`)? Arrows share the constructor's; a nested function or class
+/// has its own.
+fn super_prop_in(body: &[ast::Stmt]) -> bool {
+    use swc_ecma_visit::{Visit, VisitWith};
+    struct Finder(bool);
+    impl Visit for Finder {
+        fn visit_function(&mut self, _: &ast::Function) {}
+        fn visit_class(&mut self, _: &ast::Class) {}
+        fn visit_super_prop_expr(&mut self, _: &ast::SuperPropExpr) {
+            self.0 = true;
+        }
+    }
+    let mut f = Finder(false);
+    for st in body {
+        st.visit_with(&mut f);
+    }
+    f.0
+}
+
 /// The self-hosted built-ins (see `prelude.js`).
 const PRELUDE: &str = include_str!("prelude.js");
 
@@ -2552,16 +2572,27 @@ impl Compiler {
             }
             None => (vec![], vec![]),
         };
-        // Bind the home object for `super.m` inside the constructor.
-        let (fid, caps) = {
-            // (`%home` is bound below; the constructor reads it lazily, so
-            // capture the class and derive the prototype in the body.)
-            self.lift_arrow(&params, ArrowBody::BlockOwned(body), ctx, opts)?
+        // The home object `super.m` reads from in the constructor is the
+        // class's prototype, read only after the constructor is made: a cell
+        // the constructor captures, filled once the prototype is known
+        // (below). (Only for a constructor that reads a `super` property.)
+        let home_cell = if super_prop_in(&body) {
+            let cell = ctx.declare_boxed("%ctorhome", true);
+            stmts.push(Stmt::Let(cell, Expr::Object(vec![("value".into(), Expr::Undefined)])));
+            Some(cell)
+        } else {
+            None
         };
+        ctx.push();
+        if let Some(cell) = home_cell {
+            ctx.scopes.last_mut().unwrap().insert("%home".into(), Binding { slot: cell, boxed: true, mapped: None });
+        }
+        let (fid, caps) = self.lift_arrow(&params, ArrowBody::BlockOwned(body), ctx, opts)?;
         let source_caps: Option<Vec<usize>> = source.as_ref().map(|src| {
             src.vars.iter().map(|(n, _)| caps.iter().position(|(c, _)| c == n).expect("the constructor captures what its class's source names")).collect()
         });
         let caps = self.capture_exprs(&caps, ctx)?;
+        ctx.pop();
         stmts.push(Stmt::Let(class_slot, Expr::Closure(fid, caps)));
         let ctor_fid = fid;
         // (A class's source text is the whole class's.)
@@ -2618,6 +2649,9 @@ impl Compiler {
         }
         let proto_slot = ctx.declare_boxed("%proto", false);
         stmts.push(Stmt::Let(proto_slot, Expr::Get(Box::new(Expr::Var(class_slot)), "prototype".into())));
+        if let Some(cell) = home_cell {
+            stmts.push(Stmt::SetProp(Expr::Var(cell), "value".into(), Expr::Var(proto_slot)));
+        }
         // Methods and accessors: non-enumerable. (Private ones fill their
         // name's cell; a computed field key is evaluated here, in order.)
         let mut private_accessors: Vec<(String, bool, Option<Expr>, Option<Expr>)> = Vec::new();
@@ -4544,12 +4578,14 @@ impl Compiler {
             // with `this` as the receiver (an accessor's `this`):
             // `__pe_superGet(home, key, this)`.
             ast::Expr::SuperProp(sp) => {
-                let home = ctx.resolve("%home").ok_or("`super` property outside a method")?;
+                let home = ctx.resolve_binding("%home").ok_or("`super` property outside a method")?;
+                // (A constructor's is a cell: see `lower_class`.)
+                let home = if home.boxed { Expr::Get(Box::new(Expr::Var(home.slot)), "value".into()) } else { Expr::Var(home.slot) };
                 let key = match &sp.prop {
                     ast::SuperProp::Ident(id) => Expr::Str(id.sym.to_string()),
                     ast::SuperProp::Computed(c) => self.lower_expr(&c.expr, ctx)?,
                 };
-                Ok(Expr::Call(Box::new(Expr::Global(SUPER_GET_HELPER.into())), vec![Expr::Var(home), key, self.lower_this(ctx)]))
+                Ok(Expr::Call(Box::new(Expr::Global(SUPER_GET_HELPER.into())), vec![home, key, self.lower_this(ctx)]))
             }
             ast::Expr::MetaProp(m) if matches!(m.kind, ast::MetaPropKind::NewTarget) => Ok(Expr::NewTarget),
             ast::Expr::Await(a) => {

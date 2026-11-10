@@ -20872,15 +20872,16 @@ impl Js {
                 let (Abs::Str(src), Abs::Str(flags)) = (&data[0], &data[1]) else {
                     unreachable!("a modeled RegExp has a static pattern and flags")
                 };
-                let mut ops = vec![Op::Eval { dst, expr: RExpr::RegexLit(src.clone(), flags.clone()) }];
+                // (Made with the shells: it needs nothing, and a closure
+                // made there may capture it, by value.)
+                shells.push(Op::Eval { dst, expr: RExpr::RegexLit(src.clone(), flags.clone()) });
                 if data[2] != Abs::Num(JsNum::int(0)) {
                     let li = match &data[2] {
                         Abs::Ref(_) => RExpr::Num(JsNum::int(0)),
                         v => v.to_rexpr(),
                     };
-                    ops.push(Op::SetProp { obj: RExpr::Var(dst), key: "lastIndex".into(), val: li });
+                    fills.push(Op::SetProp { obj: RExpr::Var(dst), key: "lastIndex".into(), val: li });
                 }
-                fills.extend(ops);
             }
             HeapObj::Builtin { kind, data, .. } => {
                 let expr = if let Some(e) = intrinsic_method_expr(kind) {
