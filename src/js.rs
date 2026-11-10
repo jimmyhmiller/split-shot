@@ -7343,6 +7343,11 @@ fn mutates_array(m: &str) -> bool {
 /// Does the array method `m` make its result with ArraySpeciesCreate (the
 /// receiver's `constructor[Symbol.species]`): of a subclass's instance, an
 /// instance of the subclass, made by running its constructor?
+/// An array method whose result is a new array.
+fn makes_array(m: &str) -> bool {
+    uses_species(m) || matches!(m, "toReversed" | "toSorted" | "toSpliced" | "with" | "keys" | "values" | "entries")
+}
+
 fn uses_species(m: &str) -> bool {
     matches!(m, "concat" | "filter" | "flat" | "flatMap" | "map" | "slice" | "splice")
 }
@@ -9216,7 +9221,22 @@ impl Client for Js {
         canonicalize_state(s)
     }
     fn point(&self, s: &State) -> Vec<usize> {
-        s.frames.iter().map(|f| f.pc).collect()
+        if !env_flag!("PE_CONTEXT_POINTS") {
+            return s.frames.iter().map(|f| f.pc).collect();
+        }
+        // (`PE_CONTEXT_POINTS`, for object-projection's first-projection
+        // experiments: several distinct static syntax positions driven
+        // through one interpreter loop keep their entry contexts apart,
+        // instead of a code index widening into runtime data.)
+        use std::hash::{Hash, Hasher};
+        let mut point = Vec::with_capacity(s.frames.len() * 2);
+        for frame in &s.frames {
+            point.push(frame.pc);
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            frame.entry_skel.hash(&mut hash);
+            point.push(hash.finish() as usize);
+        }
+        point
     }
 
     fn step(&self, s: &mut State, out: &mut Vec<Op>, at_entry: bool) -> Step<Self> {
@@ -9894,473 +9914,7 @@ impl Js {
                 }
                 self.push(s, Abs::Ref(addr))
             }
-            Instr::GetProp(k) => {
-                // A choice of objects: the property of each, chosen.
-                if let Some(c) = Js::choice_at(s, 0) {
-                    if let Some(r) = self.choice_read(s, c, k) {
-                        if let Some(v) = self.build_choice_read(s, r) {
-                            s.top_mut().ostack.pop();
-                            return self.push(s, v);
-                        }
-                    }
-                    self.escape_choice_at(s, 0, out);
-                }
-                let o = s.top_mut().ostack.pop().unwrap();
-                // A member of the standard `Symbol` it does not have
-                // (`Symbol.metadata`, a proposal's): `undefined`.
-                if matches!(&o, Abs::Dyn(RExpr::Global(g)) if g == "Symbol") && self.pristine("Symbol") && !is_symbol_ctor_member(k) {
-                    return self.push(s, Abs::Undef);
-                }
-                // A constant of the standard `Math` or `Number` (`Math.PI`,
-                // `Number.EPSILON`: non-writable, non-configurable).
-                if let Abs::Dyn(RExpr::Global(g)) = &o {
-                    if let Some(n) = builtin_constant(g, k) {
-                        if self.pristine(g) {
-                            return self.push(s, Abs::Num(JsNum(n)));
-                        }
-                    }
-                }
-                // A well-known symbol's `description` (`Symbol.iterator`).
-                if k == "description" && self.well_known_symbol(&o).is_some() {
-                    let name = self.well_known_symbol(&o).unwrap();
-                    return self.push(s, Abs::Str(format!("Symbol.{name}")));
-                }
-                // `globalThis.x` for a tracked global `x` (a script's lexical
-                // global is no property).
-                if is_global_object(&o) && !self.is_lexical_global(k) {
-                    if let Some((v, _)) = s.globals.get(k) {
-                        let v = v.clone();
-                        return self.push(s, v);
-                    }
-                    // `global.__optimize`: the intrinsic the environment
-                    // defines (a data property of the global object).
-                    if self.intrinsics.contains(&k.as_str()) {
-                        return self.push(s, Abs::Dyn(RExpr::Global(k.clone())));
-                    }
-                    // A standard global the program does not write
-                    // (`stdlib.Math` of an asm.js module given `globalThis`):
-                    // that global.
-                    if crate::pristine::BUILTIN_GLOBALS.contains(&k.as_str()) && crate::pristine::tracked(k) && self.pristine(k) {
-                        return self.push(s, Abs::Dyn(RExpr::Global(k.clone())));
-                    }
-                }
-                // (A class root's `this.props`: React's props, see
-                // `react_this_props`; a method of its class, see
-                // `react_this_method`.)
-                if k == "props" && matches!(o, Abs::Dyn(RExpr::This)) {
-                    if let Some(v) = self.react.as_ref().and_then(|_| self.react_this_props(s, pc, out)) {
-                        return self.push(s, v);
-                    }
-                }
-                if matches!(o, Abs::Dyn(RExpr::This)) {
-                    if let Some(v) = self.react.as_ref().and_then(|_| self.react_this_method(s, k)) {
-                        return self.push(s, v);
-                    }
-                }
-                // A property of a frozen object the path knows.
-                if let Abs::Dyn(RExpr::Var(v)) = &o {
-                    if let Some(e) = s.facts.get(v).and_then(|i| i.fixed.iter().find(|(pk, _)| pk == k).map(|(_, e)| e.clone())) {
-                        let val = Abs::from_const_rexpr(&e).unwrap_or(Abs::Dyn(e));
-                        return self.push(s, val);
-                    }
-                    // A data property the path knows something of (nothing
-                    // has changed it since): its constant, or read with what
-                    // is known.
-                    let known = s.facts.get(v).and_then(|i| i.props.iter().find(|(pk, _)| pk == k).map(|(_, pi)| pi.clone()));
-                    if let Some(c) = known.as_ref().and_then(|pi| pi.eq.as_ref()).and_then(Abs::from_const_rexpr) {
-                        return self.push(s, c);
-                    }
-                    // (Or a variable it is known to hold: that value.)
-                    if let Some(e @ RExpr::Var(_)) = known.as_ref().and_then(|pi| pi.eq.clone()) {
-                        return self.push(s, Abs::Dyn(e));
-                    }
-                    // (React's props, read-only: read once.)
-                    if let Some(val) = self.react.as_ref().and_then(|_| self.react_props_read(s, *v, k, known.clone(), pc, out)) {
-                        return self.push(s, val);
-                    }
-                    if let Some(pi) = known {
-                        let t = self.aux_var(52, pc, *v);
-                        let read = RExpr::Get(Box::new(RExpr::Var(*v)), k.clone());
-                        self.declared_types.borrow_mut().insert(t, (read.clone(), pi));
-                        self.emit_temp(s, t, read, pc, out);
-                        return self.push(s, Abs::Dyn(RExpr::Var(t)));
-                    }
-                }
-                // `Object.prototype.m` (pristine): the modeled intrinsic.
-                if let Abs::Dyn(RExpr::Get(base, p)) = &o {
-                    if p == "prototype"
-                        && matches!(&**base, RExpr::Global(g) if g == "Object")
-                        && MODELED_OBJECT_PROTO_METHODS.contains(&k.as_str())
-                        && self.pristine("Object")
-                    {
-                        let b = s.alloc(HeapObj::Builtin { kind: format!("Object.prototype.{k}"), data: vec![].into(), ext: None });
-                        return self.push(s, Abs::Ref(b));
-                    }
-                }
-                // `.call` / `.apply` of an intrinsic method value.
-                if let Abs::Ref(a) = &o {
-                    if let HeapObj::Builtin { kind, .. } = &s.heap[a] {
-                        if intrinsic_method_expr(kind).is_some() && (k == "call" || k == "apply") && self.pristine("Function") {
-                            let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
-                            return self.push(s, Abs::Ref(b));
-                        }
-                        // Any other property of an intrinsic function value
-                        // (`bind`, `name`, `length`, ...): read at runtime from
-                        // the intrinsic itself (it is no modeled instance with
-                        // bound methods).
-                        if let Some(f) = intrinsic_method_expr(kind) {
-                            return self.push(s, Abs::Dyn(RExpr::Get(Box::new(f), k.clone())));
-                        }
-                    }
-                }
-                // A module handle's member; a modeled element's type, key, ref
-                // or props (see `react`).
-                if let Abs::Ref(addr) = &o {
-                    let addr = *addr;
-                    match &s.heap[&addr] {
-                        HeapObj::Builtin { kind, .. } if kind == react::MODULE => {
-                            let v = self.module_member(s, addr, k, pc, out);
-                            return self.push(s, v);
-                        }
-                        HeapObj::Builtin { kind, .. } if kind == react::CONTEXT => {
-                            let v = self.context_member(s, addr, k);
-                            return self.push(s, v);
-                        }
-                        // (`React.Children.map`: see `react_children_map`; its
-                        // other members read at runtime.)
-                        HeapObj::Builtin { kind, data, .. } if kind == react::REACT_CHILDREN => {
-                            let v = if k == "map" {
-                                Abs::Ref(s.alloc(HeapObj::Builtin { kind: react::CHILDREN_MAP.into(), data: vec![Abs::Ref(addr)].into(), ext: None }))
-                            } else {
-                                let Abs::Ref(m) = &data[0] else { unreachable!("React.Children of a module") };
-                                let HeapObj::Builtin { data: md, .. } = &s.heap[m] else { unreachable!("a module handle") };
-                                Abs::Dyn(RExpr::Get(Box::new(RExpr::Get(Box::new(react::module_value(md)), "Children".into())), k.clone()))
-                            };
-                            return self.push(s, v);
-                        }
-                        HeapObj::Builtin { kind, .. } if kind == react::ELEMENT => {
-                            if let Some(v) = Js::element_member(&s.heap, addr, k) {
-                                return self.push(s, v);
-                            }
-                            if k == "props" {
-                                if let Some(v) = self.element_props(s, addr, pc, out) {
-                                    return self.push(s, v);
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                // A property the abstract heap can't serve (an array method like
-                // `.slice`, or anything on a function value such as `.prototype`)
-                // makes the value escape to a residual variable; the access then
-                // passes through as `base.key`. Object fields and array `.length`
-                // stay modeled. A modeled built-in instance yields a bound method
-                // (itself a built-in value) so the following call can fold.
-                if let Abs::Ref(addr) = &o {
-                    let addr = *addr;
-                    // A function's `prototype` object is created on first use.
-                    if k == "prototype" {
-                        self.ensure_prototype(s, addr);
-                    }
-                    // (An instance of a class extending a built-in: its
-                    // subclass's members, before the built-in's.)
-                    if let Some(proto) = Js::subclass_proto(&s.heap[&addr]).cloned() {
-                        let base = Js::subclass_base(&s.heap[&addr]);
-                        if !array_element_key(&s.heap[&addr], k) {
-                            let own = s.heap[&addr].own(k).map(|p| match &p.val {
-                                PVal::Data(v) => Found::Data(v.clone()),
-                                PVal::Accessor { get, set } => Found::Accessor { get: get.clone(), set: set.clone() },
-                            });
-                            match own.or_else(|| self.subclass_member(&s.heap, &proto, base, k)) {
-                                None => {}
-                                Some(Found::Data(v)) => return self.push(s, v),
-                                Some(Found::Missing) => return self.push(s, Abs::Undef),
-                                Some(Found::Accessor { get, .. }) => {
-                                    if get == Abs::Undef {
-                                        return self.push(s, Abs::Undef);
-                                    }
-                                    s.top_mut().ostack.push(get);
-                                    return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
-                                }
-                                Some(Found::Unknown) => {
-                                    let mut escaped = std::collections::HashSet::new();
-                                    let base_r = self.escape(s, addr, &mut escaped, out);
-                                    return self.push(s, Abs::Dyn(RExpr::Get(Box::new(base_r), k.clone())));
-                                }
-                            }
-                        }
-                    }
-                    let needs_escape = match &s.heap[&addr] {
-                        HeapObj::Choice { .. } | HeapObj::Log { .. } => true,
-                        // A generator's `next`/`return`/`throw`.
-                        HeapObj::Generator { .. } if matches!(k.as_str(), "next" | "return" | "throw") => {
-                            let b = s.alloc(HeapObj::Builtin { kind: format!("Generator.prototype.{k}"), data: vec![].into(), ext: None });
-                            return self.push(s, Abs::Ref(b));
-                        }
-                        HeapObj::Generator { .. } => match self.lookup_prop(&s.heap, addr, k) {
-                            Found::Missing => return self.push(s, Abs::Undef),
-                            _ => true,
-                        },
-                        // An array's own named property (a match's `index`, ...).
-                        HeapObj::Array(a) if a.props.iter().any(|p| p.key == *k && matches!(p.val, PVal::Data(_))) => {
-                            let v = match &a.props.iter().find(|p| p.key == *k).unwrap().val {
-                                PVal::Data(v) => v.clone(),
-                                _ => unreachable!(),
-                            };
-                            return self.push(s, v);
-                        }
-                        HeapObj::Array(_) => {
-                            // `length` stays modeled. The mutating accessors we
-                            // model (`pop`, `shift`) become a bound-array-method
-                            // marker so the call site can fold them on a static
-                            // array (keeps a worklist-driven loop static — the
-                            // self-application memo driver). Anything else escapes.
-                            if (k == "pop" || (k == "shift" && matches!(&s.heap[&addr], HeapObj::Array(a) if a.holes.is_empty())))
-                                && !matches!(&s.heap[&addr], HeapObj::Array(a) if a.frozen)
-                                && self.pristine("Array")
-                            {
-                                let baddr = s.alloc(HeapObj::Builtin {
-                                    kind: format!("Array.{k}"),
-                                    data: vec![Abs::Ref(addr)].into(),
-                                    ext: None,
-                                });
-                                return self.push(s, Abs::Ref(baddr));
-                            }
-                            // A self-hosted method: `Array.prototype.<k>`. Unfolded
-                            // only under static control, where it terminates with
-                            // the (static) array; under dynamic control the
-                            // call stays a runtime call (the array escapes), so a
-                            // data-driven loop or recursion cannot keep building
-                            // fresh static arrays through it.
-                            //
-                            // Built-ins fold under static control. Under dynamic
-                            // control (a loop or recursion following runtime
-                            // data) the array escapes and the call happens at
-                            // runtime instead: folding there makes fresh static
-                            // arrays that multiply the specializer's states
-                            // without bound (a specializer running over an
-                            // unknown program walks its static tables this way).
-                            if self.array_prelude.contains_key(k.as_str()) && self.may_fold_builtins(s) && self.pristine("Array") {
-                                let baddr = s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{k}"), data: vec![].into(), ext: None });
-                                return self.push(s, Abs::Ref(baddr));
-                            }
-                            // (An own property, or a miss on standard
-                            // prototypes: see `get_prop_opt`.)
-                            k != "length" && self.get_prop_opt(s, &o, k).is_none()
-                        }
-                        // A modeled RegExp: its flags/source accessors, `lastIndex`,
-                        // and `exec`/`test`.
-                        // (Its accessors and methods are RegExp.prototype's.)
-                        HeapObj::Builtin { kind, .. } if kind == "RegExp" && k != "lastIndex" && !self.pristine("RegExp") => true,
-                        // A typed array: its geometry, its buffer, and its methods.
-                        HeapObj::Builtin { kind, .. } if kind == "TypedArray" => match ta_view(&s.heap, addr) {
-                            Some((ctor, buf, off, len)) => {
-                                let bpe = ta_bpe(&ctor);
-                                let num = |n: usize| Abs::Num(JsNum::int(n as i64));
-                                let v = match k.as_str() {
-                                    "length" => Some(num(len)),
-                                    "byteLength" => Some(num(len * bpe)),
-                                    "byteOffset" => Some(num(off * bpe)),
-                                    "BYTES_PER_ELEMENT" => Some(num(bpe)),
-                                    "buffer" => Some(Abs::Ref(buf)),
-                                    _ => None,
-                                };
-                                if let Some(v) = v {
-                                    return self.push(s, v);
-                                }
-                                if TYPED_ARRAY_METHODS.contains(&k.as_str()) && self.pristine(&ctor) {
-                                    let b = s.alloc(HeapObj::Builtin { kind: format!("TypedArray.prototype.{k}"), data: vec![].into(), ext: None });
-                                    return self.push(s, Abs::Ref(b));
-                                }
-                                true
-                            }
-                            None => true,
-                        },
-                        HeapObj::Builtin { kind, data, .. } if kind == "ArrayBuffer" => {
-                            if k == "byteLength" {
-                                let n = data.len() - 1;
-                                let bytes = match &data[0] {
-                                    Abs::Str(c) if !c.is_empty() => n * ta_bpe(c),
-                                    _ => n,
-                                };
-                                return self.push(s, Abs::Num(JsNum::int(bytes as i64)));
-                            }
-                            true
-                        }
-                        HeapObj::Builtin { kind, data, .. } if kind == "RegExp" => {
-                            let (Abs::Str(src), Abs::Str(flags)) = (&data[0], &data[1]) else { unreachable!() };
-                            let flag = |c: char| Abs::Bool(flags.contains(c));
-                            let v = match k.as_str() {
-                                "lastIndex" => Some(data[2].clone()),
-                                // (EscapeRegExpPattern: what a literal of it has.)
-                                "source" => Some(Abs::Str(regex_literal_source(src))),
-                                "flags" => Some(Abs::Str("dgimsuvy".chars().filter(|c| flags.contains(*c)).collect())),
-                                "global" => Some(flag('g')),
-                                "ignoreCase" => Some(flag('i')),
-                                "multiline" => Some(flag('m')),
-                                "dotAll" => Some(flag('s')),
-                                "unicode" => Some(flag('u')),
-                                "unicodeSets" => Some(flag('v')),
-                                "sticky" => Some(flag('y')),
-                                "hasIndices" => Some(flag('d')),
-                                _ => None,
-                            };
-                            if let Some(v) = v {
-                                return self.push(s, v);
-                            }
-                            if matches!(k.as_str(), "exec" | "test") {
-                                let b = s.alloc(HeapObj::Builtin { kind: format!("RegExp.prototype.{k}"), data: vec![].into(), ext: None });
-                                return self.push(s, Abs::Ref(b));
-                            }
-                            // A key no one has: a modeled RegExp's only own
-                            // property is `lastIndex` (a write of another one
-                            // escapes it), and neither RegExp.prototype nor
-                            // Object.prototype (pristine) has it.
-                            if !is_regexp_proto_member(k) && !is_object_proto_member(k) && self.pristine("RegExp") && self.pristine("Object") {
-                                return self.push(s, Abs::Undef);
-                            }
-                            true
-                        }
-                        // A modeled Map/Set: `size`, and its methods.
-                        HeapObj::Builtin { kind, data, .. } if is_collection(kind) => {
-                            if k == "size" && !is_weak(kind) {
-                                let n = collection_size(kind, data);
-                                return self.push(s, Abs::Num(JsNum::int(n as i64)));
-                            }
-                            if collection_methods(kind).contains(&k.as_str()) {
-                                let b = s.alloc(HeapObj::Builtin { kind: format!("{kind}.prototype.{k}"), data: vec![].into(), ext: None });
-                                return self.push(s, Abs::Ref(b));
-                            }
-                            true
-                        }
-                        // A modeled iterator's `next` (called with the iterator
-                        // as `this`). Any other member is read at runtime.
-                        HeapObj::Builtin { kind, .. } if is_iterator_kind(kind) => {
-                            if k == "next" {
-                                let baddr = s.alloc(HeapObj::Builtin { kind: format!("{kind}.prototype.next"), data: vec![].into(), ext: None });
-                                return self.push(s, Abs::Ref(baddr));
-                            }
-                            true
-                        }
-                        // A proxy whose handler has no `get`: its target's
-                        // member (an accessor's `this` the proxy). A bound
-                        // function's members: at runtime.
-                        HeapObj::Builtin { kind, data, .. } if kind == BOUND_FUNCTION && matches!(k.as_str(), "name" | "length") => {
-                            let v = if k == "name" { data[2].clone() } else { data[3].clone() };
-                            return self.push(s, v);
-                        }
-                        // (A bound function's `call`, `apply`, `bind`:
-                        // `Function.prototype`'s.)
-                        HeapObj::Builtin { kind, .. } if kind == BOUND_FUNCTION && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") => {
-                            let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
-                            return self.push(s, Abs::Ref(b));
-                        }
-                        HeapObj::Builtin { kind, .. } if kind == PROXY || kind == BOUND_FUNCTION => {
-                            if proxy_trap(&s.heap, &s.heap[&addr], "get") == Some(None) {
-                                if k == "prototype" {
-                                    self.ensure_prototype(s, addr);
-                                }
-                                match self.lookup_prop(&s.heap, addr, k) {
-                                    Found::Data(v) => return self.push(s, v),
-                                    Found::Missing | Found::Accessor { get: Abs::Undef, .. } => return self.push(s, Abs::Undef),
-                                    Found::Accessor { get, .. } => {
-                                        s.top_mut().ostack.push(get);
-                                        return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
-                                    }
-                                    Found::Unknown => true,
-                                }
-                            } else {
-                                true
-                            }
-                        }
-                        // (Any other member of a model's value: read at
-                        // runtime from it.)
-                        HeapObj::Builtin { kind, .. } if kind == react::ELEMENT || react::is_handle(kind) || react::is_callable_model(kind) => true,
-                        HeapObj::Builtin { kind, data, .. } => {
-                            let bound = HeapObj::Builtin {
-                                kind: format!("{kind}.{k}"),
-                                data: data.clone(),
-                                ext: None,
-                            };
-                            let baddr = s.alloc(bound);
-                            return self.push(s, Abs::Ref(baddr));
-                        }
-                        // An own or inherited data property folds, as does a
-                        // genuine miss (`undefined`). A member of an intrinsic
-                        // prototype (`toString`, `call`, ...) or an accessor
-                        // makes the object escape so the read happens at
-                        // runtime.
-                        HeapObj::Object { .. } | HeapObj::Closure { .. } => {
-                            match self.lookup_prop(&s.heap, addr, k) {
-                                Found::Unknown => {
-                                    // (Read from React's `Component`, as it
-                                    // defines it.)
-                                    if let Some(v) = self.react.as_ref().and_then(|_| self.react_proto_member(s, addr, k)) {
-                                        return self.push(s, v);
-                                    }
-                                    // A modeled intrinsic method (`hasOwnProperty`,
-                                    // `call`, ...) is a built-in value; the call
-                                    // folds when it can.
-                                    let is_fn = matches!(&s.heap[&addr], HeapObj::Closure { .. });
-                                    // (A function of known code's own `name`, as
-                                    // made: its name. One defined since is an
-                                    // own property of the model's.)
-                                    if k == "name" {
-                                        if let HeapObj::Closure { fid, known: true, ident: None, .. } = &s.heap[&addr] {
-                                            if s.heap[&addr].own("name").is_none() {
-                                                let n = self.names[*fid].clone();
-                                                return self.push(s, Abs::Str(n));
-                                            }
-                                        }
-                                    }
-                                    // (`f.bind` of a function of known code, with
-                                    // React's model: see `react::BOUND`.)
-                                    if is_fn && k == "bind" && self.react.is_some() && self.pristine("Function") && matches!(&s.heap[&addr], HeapObj::Closure { known: true, ident: None, .. }) {
-                                        let b = s.alloc(HeapObj::Builtin { kind: react::BIND_FN.into(), data: vec![Abs::Ref(addr)].into(), ext: None });
-                                        return self.push(s, Abs::Ref(b));
-                                    }
-                                    let kind = if is_fn && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") {
-                                        Some(format!("Function.prototype.{k}"))
-                                    } else if MODELED_OBJECT_PROTO_METHODS.contains(&k.as_str())
-                                        && !(is_fn && k == "toString")
-                                        && self.pristine("Object")
-                                    {
-                                        Some(format!("Object.prototype.{k}"))
-                                    } else {
-                                        None
-                                    };
-                                    match kind {
-                                        Some(kind) => {
-                                            let b = s.alloc(HeapObj::Builtin { kind, data: vec![].into(), ext: None });
-                                            return self.push(s, Abs::Ref(b));
-                                        }
-                                        None => true,
-                                    }
-                                }
-                                // A getter runs with the original receiver as
-                                // `this`; a missing getter reads `undefined`.
-                                Found::Accessor { get, .. } => {
-                                    if get == Abs::Undef {
-                                        return self.push(s, Abs::Undef);
-                                    }
-                                    s.top_mut().ostack.push(get);
-                                    return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
-                                }
-                                _ => false,
-                            }
-                        }
-                    };
-                    if needs_escape {
-                        let mut escaped = std::collections::HashSet::new();
-                        let base_r = self.escape(s, addr, &mut escaped, out);
-                        let v = Abs::Dyn(RExpr::Get(Box::new(base_r), k.clone()));
-                        return self.push(s, v);
-                    }
-                }
-                let v = self.get_prop(s, &o, k);
-                self.push(s, v)
-            }
+            Instr::GetProp(k) => self.get_prop_step(s, k, pc, out),
             Instr::SetPropOp(k) => {
                 // A choice of objects: each written, as it is the one.
                 if let Some(c) = Js::choice_at(s, 1) {
@@ -10917,6 +10471,25 @@ impl Js {
                             return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
                         }
                         Found::Unknown => {}
+                    }
+                }
+                // A static key on a modeled built-in (a RegExp, a Map, a
+                // proxy ...; not a typed array or buffer, which have
+                // elements): the property of that name, as `.k` reads it
+                // (`x['default']` in rollup's interop helper).
+                if let Abs::Ref(addr) = &a {
+                    let builtin = matches!(&s.heap[addr], HeapObj::Builtin { kind, .. } if kind != "TypedArray" && kind != "ArrayBuffer");
+                    let key = match &i {
+                        Abs::Str(k) => Some(k.clone()),
+                        Abs::Num(n) => Some(n.to_js_string()),
+                        Abs::Bool(b) => Some(b.to_string()),
+                        Abs::Null => Some("null".to_string()),
+                        Abs::Undef => Some("undefined".to_string()),
+                        _ => None,
+                    };
+                    if let (true, Some(k)) = (builtin, key) {
+                        s.top_mut().ostack.push(a);
+                        return self.get_prop_step(s, &k, pc, out);
                     }
                 }
                 let i = object_key(&s.heap, &a, i);
@@ -11524,6 +11097,26 @@ impl Js {
                             }
                             if matches!(&operands[0], Abs::Str(k) if k == "length") {
                                 return self.push(s, Abs::Bool(true));
+                            }
+                            // Any other string key: an own property, a member
+                            // of the standard `Array.prototype` or
+                            // `Object.prototype`, or missing (see
+                            // `get_prop_opt`).
+                            if let Abs::Str(k) = &operands[0] {
+                                let addr = *addr;
+                                let present = match self.lookup_prop(&s.heap, addr, k) {
+                                    Found::Data(_) | Found::Accessor { .. } => Some(true),
+                                    Found::Missing => Some(false),
+                                    Found::Unknown if !self.pristine("Array") || !self.pristine("Object") => None,
+                                    Found::Unknown if is_array_proto_member(k) || is_object_proto_member(k) => Some(true),
+                                    Found::Unknown => {
+                                        let lacks = matches!(&s.heap[&addr], o @ HeapObj::Array(a) if o.own(k).is_none() && self.subclass_lacks(&s.heap, &a.proto, "Array", k));
+                                        (lacks && k.parse::<f64>().is_err()).then_some(false)
+                                    }
+                                };
+                                if let Some(p) = present {
+                                    return self.push(s, Abs::Bool(p));
+                                }
                             }
                         }
                     }
@@ -12999,7 +12592,7 @@ impl Js {
                 if let Some(i) = JsNum::parse(k).as_index().filter(|i| JsNum::int(*i as i64).to_js_string() == k) {
                     return Some(ChoiceRead::Val(if i < arr.len() && !arr.holes.contains(&i) { arr.elems[i].clone() } else { Abs::Undef }));
                 }
-                (self.array_prelude.contains_key(k) && self.may_fold_builtins(s) && self.pristine("Array") && self.subclass_lacks(&s.heap, &arr.proto, "Array", k))
+                (self.array_prelude.contains_key(k) && self.may_fold_builtins(s, k) && self.pristine("Array") && self.subclass_lacks(&s.heap, &arr.proto, "Array", k))
                     .then(|| ChoiceRead::Method(k.to_string()))
             }
             _ => None,
@@ -16258,7 +15851,7 @@ impl Js {
                     // once per element.)
                     let known_callback = matches!(m, "filter" | "reduce" | "reduceRight" | "forEach" | "map" | "flatMap" | "some" | "every")
                         && matches!(args.first(), Some(Abs::Ref(f)) if matches!(&s.heap[f], HeapObj::Closure { known: true, .. }));
-                    if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), self.may_fold_builtins(s), native_only, species) {
+                    if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), self.may_fold_builtins(s, m), native_only, species) {
                       if known_callback || self.prelude_unfolds(s, fid, &args, &this, pc) {
                         let f = s.alloc(HeapObj::closure(fid, vec![]));
                         let n = args.len();
@@ -16282,7 +15875,7 @@ impl Js {
                     }
                     // The ones that only read run self-hosted, like an array's.
                     let read_only = !matches!(m.as_str(), "subarray" | "slice" | "fill" | "set" | "reverse" | "sort");
-                    if let (Some(&fid), true, true) = (self.array_prelude.get(m.as_str()), read_only, self.may_fold_builtins(s)) {
+                    if let (Some(&fid), true, true) = (self.array_prelude.get(m.as_str()), read_only, self.may_fold_builtins(s, &m)) {
                         if self.prelude_unfolds(s, fid, &args, &this, pc) {
                             let f = s.alloc(HeapObj::closure(fid, vec![]));
                             let n = args.len();
@@ -16999,14 +16592,22 @@ impl Js {
         // program calls its small helpers everywhere), that duplication is
         // unbounded. A context whose inlining folded to straight-line code
         // keeps being inlined: there is nothing to share.
+        // (`PE_NO_SHARED_CONTEXTS`, for object-projection: an interpreted
+        // program known statically keeps its static AST, which sharing
+        // through a generic residual helper discards. It changes only this
+        // duplication optimization, not the recursion checks or budgets.)
+        let shared_context = !env_flag!("PE_NO_SHARED_CONTEXTS")
+            && s.top().dyn_ctl
+            && !context.is_empty()
+            && self.branched_contexts.borrow().contains(&(fid, std::rc::Rc::from(now.as_slice())));
         let dynamic_recursion = dynamic_recursion
-            || (s.top().dyn_ctl && !context.is_empty() && self.branched_contexts.borrow().contains(&(fid, std::rc::Rc::from(now.as_slice()))))
+            || shared_context
             // Static recursion deeper than the inliner goes (it may terminate
             // deeper, or never: either way the runtime does what the original
             // does) continues as a runtime call.
             || s.frames.len() >= MAX_DEPTH;
         if dynamic_recursion && env_flag!("RESID_DEBUG") {
-            eprintln!("[RESID] {} depth={}", self.names[fid], s.frames.len());
+            eprintln!("[RESID] {} depth={} shared={shared_context}", self.names[fid], s.frames.len());
         }
         // An async function's body runs partly after the script (its awaits
         // resume from the microtask queue): it is always a residual call.
@@ -17551,6 +17152,79 @@ impl Js {
                 // configurable.)
                 let truthy = |v: Option<Abs>, dflt: bool| -> Option<bool> { v.map_or(Some(dflt), |v| v.truthy()) };
                 let (value, get, set) = (field("value")?, field("get")?, field("set")?);
+                // Redefining an existing own property (not a function's
+                // implicit `name`/`length`): ValidateAndApplyPropertyDescriptor.
+                if let (false, Some(cur)) = (implicit, s.heap[&o].own_key(&k).cloned()) {
+                    let present = |v: Option<Abs>| -> Option<Option<bool>> { v.map(|v| v.truthy()).map_or(Some(None), |b| b.map(Some)) };
+                    let (enumerable, configurable, writable) = (present(field("enumerable")?)?, present(field("configurable")?)?, present(field("writable")?)?);
+                    let accessor_desc = get.is_some() || set.is_some();
+                    let data_desc = value.is_some() || writable.is_some();
+                    if accessor_desc && data_desc {
+                        return None; // a TypeError
+                    }
+                    // (Two values the same, statically: SameValue.)
+                    let same = |a: &Abs, b: &Abs| -> Option<bool> {
+                        match (a, b) {
+                            (Abs::Num(x), Abs::Num(y)) => Some(x == y),
+                            (Abs::Ref(x), Abs::Ref(y)) => Some(x == y),
+                            (a, b) if !a.is_dynamic() && !b.is_dynamic() && !matches!(a, Abs::Ref(_)) && !matches!(b, Abs::Ref(_)) => Some(static_strict_eq(a, b)),
+                            _ => None,
+                        }
+                    };
+                    let cur_accessor = matches!(cur.val, PVal::Accessor { .. });
+                    if cur.attrs & CONFIGURABLE == 0 {
+                        // (What a non-configurable property refuses: a TypeError
+                        // at runtime.)
+                        if configurable == Some(true) || enumerable.is_some_and(|e| e != (cur.attrs & ENUMERABLE != 0)) {
+                            return None;
+                        }
+                        if (accessor_desc || data_desc) && accessor_desc != cur_accessor {
+                            return None;
+                        }
+                        match &cur.val {
+                            PVal::Accessor { get: g, set: st } => {
+                                if get.as_ref().is_some_and(|v| same(v, g) != Some(true)) || set.as_ref().is_some_and(|v| same(v, st) != Some(true)) {
+                                    return None;
+                                }
+                            }
+                            PVal::Data(v) => {
+                                if cur.attrs & WRITABLE == 0 && (writable == Some(true) || value.as_ref().is_some_and(|x| same(x, v) != Some(true))) {
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                    let mut attrs = cur.attrs & (ENUMERABLE | CONFIGURABLE);
+                    if let Some(e) = enumerable {
+                        attrs = if e { attrs | ENUMERABLE } else { attrs & !ENUMERABLE };
+                    }
+                    if let Some(c) = configurable {
+                        attrs = if c { attrs | CONFIGURABLE } else { attrs & !CONFIGURABLE };
+                    }
+                    let val = match (&cur.val, accessor_desc, data_desc) {
+                        // To an accessor: the fields not given undefined.
+                        (PVal::Data(_), true, _) => PVal::Accessor { get: get.unwrap_or(Abs::Undef), set: set.unwrap_or(Abs::Undef) },
+                        (PVal::Accessor { get: g, set: st }, _, false) => {
+                            PVal::Accessor { get: get.unwrap_or_else(|| g.clone()), set: set.unwrap_or_else(|| st.clone()) }
+                        }
+                        // To a data property: not writable unless said.
+                        (PVal::Accessor { .. }, _, true) => {
+                            if writable == Some(true) {
+                                attrs |= WRITABLE;
+                            }
+                            PVal::Data(value.unwrap_or(Abs::Undef))
+                        }
+                        (PVal::Data(v), false, _) => {
+                            let w = writable.unwrap_or(cur.attrs & WRITABLE != 0);
+                            if w {
+                                attrs |= WRITABLE;
+                            }
+                            PVal::Data(value.unwrap_or_else(|| v.clone()))
+                        }
+                    };
+                    define_own(s.heap.get_mut(&o).unwrap(), &k, val, attrs);
+                    return Some(given);
+                }
                 let mut attrs = 0;
                 if truthy(field("enumerable")?, false)? {
                     attrs |= ENUMERABLE;
@@ -17647,14 +17321,21 @@ impl Js {
         }
     }
 
-    /// Whether array built-ins fold in the current activation: under static
-    /// control and outside recursion. A recursive walk that rebuilds arrays
-    /// with them (`f(xs.slice(1))`, `[x].concat(env)`) under a specializer's
-    /// unknown input multiplies its static work and states; there, as under
-    /// dynamic control, the array escapes and the call happens at runtime.
-    fn may_fold_builtins(&self, s: &State) -> bool {
+    /// Whether array built-in `m` folds in the current activation: outside
+    /// recursion; in a recursion, only one that makes no array, and only
+    /// under static control. A recursive walk that rebuilds arrays
+    /// (`f(xs.slice(1))`, `[x].concat(env)`) multiplies its static work and
+    /// states (a specializer specialized on itself does that over static
+    /// data too); there the array escapes and the call happens at runtime.
+    /// A method that makes no array (`forEach`, `some`, `indexOf`) adds
+    /// nothing a recursion could grow on, and where no runtime value has
+    /// decided anything (a parser over a static source: engine262's scope
+    /// `with` walks its flags with `forEach`) it ends where the program's
+    /// own run would.
+    fn may_fold_builtins(&self, s: &State, m: &str) -> bool {
         let f = s.top();
-        !self.is_recursive[f.func] && !s.frames[..s.frames.len() - 1].iter().any(|g| g.func == f.func)
+        let recursive = self.is_recursive[f.func] || s.frames[..s.frames.len() - 1].iter().any(|g| g.func == f.func);
+        !recursive || (!f.dyn_ctl && !makes_array(m))
     }
 
     /// An `Array.prototype` method that runs no user code, on the modeled
@@ -17954,6 +17635,475 @@ impl Js {
 
     /// The compiled pattern of a modeled RegExp (cached), or `None` when this
     /// model cannot run it (an unsupported flag or pattern).
+    /// `Instr::GetProp(k)`: read property `k` of the value on top of the stack.
+    fn get_prop_step(&self, s: &mut State, k: &String, pc: usize, out: &mut Vec<Op>) -> Step<Js> {
+        // A choice of objects: the property of each, chosen.
+        if let Some(c) = Js::choice_at(s, 0) {
+            if let Some(r) = self.choice_read(s, c, k) {
+                if let Some(v) = self.build_choice_read(s, r) {
+                    s.top_mut().ostack.pop();
+                    return self.push(s, v);
+                }
+            }
+            self.escape_choice_at(s, 0, out);
+        }
+        let o = s.top_mut().ostack.pop().unwrap();
+        // A member of the standard `Symbol` it does not have
+        // (`Symbol.metadata`, a proposal's): `undefined`.
+        if matches!(&o, Abs::Dyn(RExpr::Global(g)) if g == "Symbol") && self.pristine("Symbol") && !is_symbol_ctor_member(k) {
+            return self.push(s, Abs::Undef);
+        }
+        // A constant of the standard `Math` or `Number` (`Math.PI`,
+        // `Number.EPSILON`: non-writable, non-configurable).
+        if let Abs::Dyn(RExpr::Global(g)) = &o {
+            if let Some(n) = builtin_constant(g, k) {
+                if self.pristine(g) {
+                    return self.push(s, Abs::Num(JsNum(n)));
+                }
+            }
+        }
+        // A well-known symbol's `description` (`Symbol.iterator`).
+        if k == "description" && self.well_known_symbol(&o).is_some() {
+            let name = self.well_known_symbol(&o).unwrap();
+            return self.push(s, Abs::Str(format!("Symbol.{name}")));
+        }
+        // `globalThis.x` for a tracked global `x` (a script's lexical
+        // global is no property).
+        if is_global_object(&o) && !self.is_lexical_global(k) {
+            if let Some((v, _)) = s.globals.get(k) {
+                let v = v.clone();
+                return self.push(s, v);
+            }
+            // `global.__optimize`: the intrinsic the environment
+            // defines (a data property of the global object).
+            if self.intrinsics.contains(&k.as_str()) {
+                return self.push(s, Abs::Dyn(RExpr::Global(k.clone())));
+            }
+            // A standard global the program does not write
+            // (`stdlib.Math` of an asm.js module given `globalThis`):
+            // that global.
+            if crate::pristine::BUILTIN_GLOBALS.contains(&k.as_str()) && crate::pristine::tracked(k) && self.pristine(k) {
+                return self.push(s, Abs::Dyn(RExpr::Global(k.clone())));
+            }
+        }
+        // (A class root's `this.props`: React's props, see
+        // `react_this_props`; a method of its class, see
+        // `react_this_method`.)
+        if k == "props" && matches!(o, Abs::Dyn(RExpr::This)) {
+            if let Some(v) = self.react.as_ref().and_then(|_| self.react_this_props(s, pc, out)) {
+                return self.push(s, v);
+            }
+        }
+        if matches!(o, Abs::Dyn(RExpr::This)) {
+            if let Some(v) = self.react.as_ref().and_then(|_| self.react_this_method(s, k)) {
+                return self.push(s, v);
+            }
+        }
+        // A property of a frozen object the path knows.
+        if let Abs::Dyn(RExpr::Var(v)) = &o {
+            if let Some(e) = s.facts.get(v).and_then(|i| i.fixed.iter().find(|(pk, _)| pk == k).map(|(_, e)| e.clone())) {
+                let val = Abs::from_const_rexpr(&e).unwrap_or(Abs::Dyn(e));
+                return self.push(s, val);
+            }
+            // A data property the path knows something of (nothing
+            // has changed it since): its constant, or read with what
+            // is known.
+            let known = s.facts.get(v).and_then(|i| i.props.iter().find(|(pk, _)| pk == k).map(|(_, pi)| pi.clone()));
+            if let Some(c) = known.as_ref().and_then(|pi| pi.eq.as_ref()).and_then(Abs::from_const_rexpr) {
+                return self.push(s, c);
+            }
+            // (Or a variable it is known to hold: that value.)
+            if let Some(e @ RExpr::Var(_)) = known.as_ref().and_then(|pi| pi.eq.clone()) {
+                return self.push(s, Abs::Dyn(e));
+            }
+            // (React's props, read-only: read once.)
+            if let Some(val) = self.react.as_ref().and_then(|_| self.react_props_read(s, *v, k, known.clone(), pc, out)) {
+                return self.push(s, val);
+            }
+            if let Some(pi) = known {
+                let t = self.aux_var(52, pc, *v);
+                let read = RExpr::Get(Box::new(RExpr::Var(*v)), k.clone());
+                self.declared_types.borrow_mut().insert(t, (read.clone(), pi));
+                self.emit_temp(s, t, read, pc, out);
+                return self.push(s, Abs::Dyn(RExpr::Var(t)));
+            }
+        }
+        // `Object.prototype.m` (pristine): the modeled intrinsic.
+        if let Abs::Dyn(RExpr::Get(base, p)) = &o {
+            if p == "prototype"
+                && matches!(&**base, RExpr::Global(g) if g == "Object")
+                && MODELED_OBJECT_PROTO_METHODS.contains(&k.as_str())
+                && self.pristine("Object")
+            {
+                let b = s.alloc(HeapObj::Builtin { kind: format!("Object.prototype.{k}"), data: vec![].into(), ext: None });
+                return self.push(s, Abs::Ref(b));
+            }
+        }
+        // `.call` / `.apply` of an intrinsic method value.
+        if let Abs::Ref(a) = &o {
+            if let HeapObj::Builtin { kind, .. } = &s.heap[a] {
+                if intrinsic_method_expr(kind).is_some() && (k == "call" || k == "apply") && self.pristine("Function") {
+                    let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
+                    return self.push(s, Abs::Ref(b));
+                }
+                // Any other property of an intrinsic function value
+                // (`bind`, `name`, `length`, ...): read at runtime from
+                // the intrinsic itself (it is no modeled instance with
+                // bound methods).
+                if let Some(f) = intrinsic_method_expr(kind) {
+                    return self.push(s, Abs::Dyn(RExpr::Get(Box::new(f), k.clone())));
+                }
+            }
+        }
+        // A module handle's member; a modeled element's type, key, ref
+        // or props (see `react`).
+        if let Abs::Ref(addr) = &o {
+            let addr = *addr;
+            match &s.heap[&addr] {
+                HeapObj::Builtin { kind, .. } if kind == react::MODULE => {
+                    let v = self.module_member(s, addr, k, pc, out);
+                    return self.push(s, v);
+                }
+                HeapObj::Builtin { kind, .. } if kind == react::CONTEXT => {
+                    let v = self.context_member(s, addr, k);
+                    return self.push(s, v);
+                }
+                // (`React.Children.map`: see `react_children_map`; its
+                // other members read at runtime.)
+                HeapObj::Builtin { kind, data, .. } if kind == react::REACT_CHILDREN => {
+                    let v = if k == "map" {
+                        Abs::Ref(s.alloc(HeapObj::Builtin { kind: react::CHILDREN_MAP.into(), data: vec![Abs::Ref(addr)].into(), ext: None }))
+                    } else {
+                        let Abs::Ref(m) = &data[0] else { unreachable!("React.Children of a module") };
+                        let HeapObj::Builtin { data: md, .. } = &s.heap[m] else { unreachable!("a module handle") };
+                        Abs::Dyn(RExpr::Get(Box::new(RExpr::Get(Box::new(react::module_value(md)), "Children".into())), k.clone()))
+                    };
+                    return self.push(s, v);
+                }
+                HeapObj::Builtin { kind, .. } if kind == react::ELEMENT => {
+                    if let Some(v) = Js::element_member(&s.heap, addr, k) {
+                        return self.push(s, v);
+                    }
+                    if k == "props" {
+                        if let Some(v) = self.element_props(s, addr, pc, out) {
+                            return self.push(s, v);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A property the abstract heap can't serve (an array method like
+        // `.slice`, or anything on a function value such as `.prototype`)
+        // makes the value escape to a residual variable; the access then
+        // passes through as `base.key`. Object fields and array `.length`
+        // stay modeled. A modeled built-in instance yields a bound method
+        // (itself a built-in value) so the following call can fold.
+        if let Abs::Ref(addr) = &o {
+            let addr = *addr;
+            // A function's `prototype` object is created on first use.
+            if k == "prototype" {
+                self.ensure_prototype(s, addr);
+            }
+            // (An instance of a class extending a built-in: its
+            // subclass's members, before the built-in's.)
+            if let Some(proto) = Js::subclass_proto(&s.heap[&addr]).cloned() {
+                let base = Js::subclass_base(&s.heap[&addr]);
+                if !array_element_key(&s.heap[&addr], k) {
+                    let own = s.heap[&addr].own(k).map(|p| match &p.val {
+                        PVal::Data(v) => Found::Data(v.clone()),
+                        PVal::Accessor { get, set } => Found::Accessor { get: get.clone(), set: set.clone() },
+                    });
+                    match own.or_else(|| self.subclass_member(&s.heap, &proto, base, k)) {
+                        None => {}
+                        Some(Found::Data(v)) => return self.push(s, v),
+                        Some(Found::Missing) => return self.push(s, Abs::Undef),
+                        Some(Found::Accessor { get, .. }) => {
+                            if get == Abs::Undef {
+                                return self.push(s, Abs::Undef);
+                            }
+                            s.top_mut().ostack.push(get);
+                            return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
+                        }
+                        Some(Found::Unknown) => {
+                            let mut escaped = std::collections::HashSet::new();
+                            let base_r = self.escape(s, addr, &mut escaped, out);
+                            return self.push(s, Abs::Dyn(RExpr::Get(Box::new(base_r), k.clone())));
+                        }
+                    }
+                }
+            }
+            let needs_escape = match &s.heap[&addr] {
+                HeapObj::Choice { .. } | HeapObj::Log { .. } => true,
+                // A generator's `next`/`return`/`throw`.
+                HeapObj::Generator { .. } if matches!(k.as_str(), "next" | "return" | "throw") => {
+                    let b = s.alloc(HeapObj::Builtin { kind: format!("Generator.prototype.{k}"), data: vec![].into(), ext: None });
+                    return self.push(s, Abs::Ref(b));
+                }
+                HeapObj::Generator { .. } => match self.lookup_prop(&s.heap, addr, k) {
+                    Found::Missing => return self.push(s, Abs::Undef),
+                    _ => true,
+                },
+                // An array's own named property (a match's `index`, ...).
+                HeapObj::Array(a) if a.props.iter().any(|p| p.key == *k && matches!(p.val, PVal::Data(_))) => {
+                    let v = match &a.props.iter().find(|p| p.key == *k).unwrap().val {
+                        PVal::Data(v) => v.clone(),
+                        _ => unreachable!(),
+                    };
+                    return self.push(s, v);
+                }
+                HeapObj::Array(_) => {
+                    // `length` stays modeled. The mutating accessors we
+                    // model (`pop`, `shift`) become a bound-array-method
+                    // marker so the call site can fold them on a static
+                    // array (keeps a worklist-driven loop static — the
+                    // self-application memo driver). Anything else escapes.
+                    if (k == "pop" || (k == "shift" && matches!(&s.heap[&addr], HeapObj::Array(a) if a.holes.is_empty())))
+                        && !matches!(&s.heap[&addr], HeapObj::Array(a) if a.frozen)
+                        && self.pristine("Array")
+                    {
+                        let baddr = s.alloc(HeapObj::Builtin {
+                            kind: format!("Array.{k}"),
+                            data: vec![Abs::Ref(addr)].into(),
+                            ext: None,
+                        });
+                        return self.push(s, Abs::Ref(baddr));
+                    }
+                    // A self-hosted method: `Array.prototype.<k>`. Unfolded
+                    // only under static control, where it terminates with
+                    // the (static) array; under dynamic control the
+                    // call stays a runtime call (the array escapes), so a
+                    // data-driven loop or recursion cannot keep building
+                    // fresh static arrays through it.
+                    //
+                    // Built-ins fold under static control. Under dynamic
+                    // control (a loop or recursion following runtime
+                    // data) the array escapes and the call happens at
+                    // runtime instead: folding there makes fresh static
+                    // arrays that multiply the specializer's states
+                    // without bound (a specializer running over an
+                    // unknown program walks its static tables this way).
+                    if self.array_prelude.contains_key(k.as_str()) && self.may_fold_builtins(s, k) && self.pristine("Array") {
+                        let baddr = s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{k}"), data: vec![].into(), ext: None });
+                        return self.push(s, Abs::Ref(baddr));
+                    }
+                    // (An own property, or a miss on standard
+                    // prototypes: see `get_prop_opt`.)
+                    k != "length" && self.get_prop_opt(s, &o, k).is_none()
+                }
+                // A modeled RegExp: its flags/source accessors, `lastIndex`,
+                // and `exec`/`test`.
+                // (Its accessors and methods are RegExp.prototype's.)
+                HeapObj::Builtin { kind, .. } if kind == "RegExp" && k != "lastIndex" && !self.pristine("RegExp") => true,
+                // A typed array: its geometry, its buffer, and its methods.
+                HeapObj::Builtin { kind, .. } if kind == "TypedArray" => match ta_view(&s.heap, addr) {
+                    Some((ctor, buf, off, len)) => {
+                        let bpe = ta_bpe(&ctor);
+                        let num = |n: usize| Abs::Num(JsNum::int(n as i64));
+                        let v = match k.as_str() {
+                            "length" => Some(num(len)),
+                            "byteLength" => Some(num(len * bpe)),
+                            "byteOffset" => Some(num(off * bpe)),
+                            "BYTES_PER_ELEMENT" => Some(num(bpe)),
+                            "buffer" => Some(Abs::Ref(buf)),
+                            _ => None,
+                        };
+                        if let Some(v) = v {
+                            return self.push(s, v);
+                        }
+                        if TYPED_ARRAY_METHODS.contains(&k.as_str()) && self.pristine(&ctor) {
+                            let b = s.alloc(HeapObj::Builtin { kind: format!("TypedArray.prototype.{k}"), data: vec![].into(), ext: None });
+                            return self.push(s, Abs::Ref(b));
+                        }
+                        true
+                    }
+                    None => true,
+                },
+                HeapObj::Builtin { kind, data, .. } if kind == "ArrayBuffer" => {
+                    if k == "byteLength" {
+                        let n = data.len() - 1;
+                        let bytes = match &data[0] {
+                            Abs::Str(c) if !c.is_empty() => n * ta_bpe(c),
+                            _ => n,
+                        };
+                        return self.push(s, Abs::Num(JsNum::int(bytes as i64)));
+                    }
+                    true
+                }
+                HeapObj::Builtin { kind, data, .. } if kind == "RegExp" => {
+                    let (Abs::Str(src), Abs::Str(flags)) = (&data[0], &data[1]) else { unreachable!() };
+                    let flag = |c: char| Abs::Bool(flags.contains(c));
+                    let v = match k.as_str() {
+                        "lastIndex" => Some(data[2].clone()),
+                        // (EscapeRegExpPattern: what a literal of it has.)
+                        "source" => Some(Abs::Str(regex_literal_source(src))),
+                        "flags" => Some(Abs::Str("dgimsuvy".chars().filter(|c| flags.contains(*c)).collect())),
+                        "global" => Some(flag('g')),
+                        "ignoreCase" => Some(flag('i')),
+                        "multiline" => Some(flag('m')),
+                        "dotAll" => Some(flag('s')),
+                        "unicode" => Some(flag('u')),
+                        "unicodeSets" => Some(flag('v')),
+                        "sticky" => Some(flag('y')),
+                        "hasIndices" => Some(flag('d')),
+                        _ => None,
+                    };
+                    if let Some(v) = v {
+                        return self.push(s, v);
+                    }
+                    if matches!(k.as_str(), "exec" | "test") {
+                        let b = s.alloc(HeapObj::Builtin { kind: format!("RegExp.prototype.{k}"), data: vec![].into(), ext: None });
+                        return self.push(s, Abs::Ref(b));
+                    }
+                    // A key no one has: a modeled RegExp's only own
+                    // property is `lastIndex` (a write of another one
+                    // escapes it), and neither RegExp.prototype nor
+                    // Object.prototype (pristine) has it.
+                    if !is_regexp_proto_member(k) && !is_object_proto_member(k) && self.pristine("RegExp") && self.pristine("Object") {
+                        return self.push(s, Abs::Undef);
+                    }
+                    true
+                }
+                // A modeled Map/Set: `size`, and its methods.
+                HeapObj::Builtin { kind, data, .. } if is_collection(kind) => {
+                    if k == "size" && !is_weak(kind) {
+                        let n = collection_size(kind, data);
+                        return self.push(s, Abs::Num(JsNum::int(n as i64)));
+                    }
+                    if collection_methods(kind).contains(&k.as_str()) {
+                        let b = s.alloc(HeapObj::Builtin { kind: format!("{kind}.prototype.{k}"), data: vec![].into(), ext: None });
+                        return self.push(s, Abs::Ref(b));
+                    }
+                    true
+                }
+                // A modeled iterator's `next` (called with the iterator
+                // as `this`). Any other member is read at runtime.
+                HeapObj::Builtin { kind, .. } if is_iterator_kind(kind) => {
+                    if k == "next" {
+                        let baddr = s.alloc(HeapObj::Builtin { kind: format!("{kind}.prototype.next"), data: vec![].into(), ext: None });
+                        return self.push(s, Abs::Ref(baddr));
+                    }
+                    true
+                }
+                // A proxy whose handler has no `get`: its target's
+                // member (an accessor's `this` the proxy). A bound
+                // function's members: at runtime.
+                HeapObj::Builtin { kind, data, .. } if kind == BOUND_FUNCTION && matches!(k.as_str(), "name" | "length") => {
+                    let v = if k == "name" { data[2].clone() } else { data[3].clone() };
+                    return self.push(s, v);
+                }
+                // (A bound function's `call`, `apply`, `bind`:
+                // `Function.prototype`'s.)
+                HeapObj::Builtin { kind, .. } if kind == BOUND_FUNCTION && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") => {
+                    let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
+                    return self.push(s, Abs::Ref(b));
+                }
+                HeapObj::Builtin { kind, .. } if kind == PROXY || kind == BOUND_FUNCTION => {
+                    if proxy_trap(&s.heap, &s.heap[&addr], "get") == Some(None) {
+                        if k == "prototype" {
+                            self.ensure_prototype(s, addr);
+                        }
+                        match self.lookup_prop(&s.heap, addr, k) {
+                            Found::Data(v) => return self.push(s, v),
+                            Found::Missing | Found::Accessor { get: Abs::Undef, .. } => return self.push(s, Abs::Undef),
+                            Found::Accessor { get, .. } => {
+                                s.top_mut().ostack.push(get);
+                                return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
+                            }
+                            Found::Unknown => true,
+                        }
+                    } else {
+                        true
+                    }
+                }
+                // (Any other member of a model's value: read at
+                // runtime from it.)
+                HeapObj::Builtin { kind, .. } if kind == react::ELEMENT || react::is_handle(kind) || react::is_callable_model(kind) => true,
+                HeapObj::Builtin { kind, data, .. } => {
+                    let bound = HeapObj::Builtin {
+                        kind: format!("{kind}.{k}"),
+                        data: data.clone(),
+                        ext: None,
+                    };
+                    let baddr = s.alloc(bound);
+                    return self.push(s, Abs::Ref(baddr));
+                }
+                // An own or inherited data property folds, as does a
+                // genuine miss (`undefined`). A member of an intrinsic
+                // prototype (`toString`, `call`, ...) or an accessor
+                // makes the object escape so the read happens at
+                // runtime.
+                HeapObj::Object { .. } | HeapObj::Closure { .. } => {
+                    match self.lookup_prop(&s.heap, addr, k) {
+                        Found::Unknown => {
+                            // (Read from React's `Component`, as it
+                            // defines it.)
+                            if let Some(v) = self.react.as_ref().and_then(|_| self.react_proto_member(s, addr, k)) {
+                                return self.push(s, v);
+                            }
+                            // A modeled intrinsic method (`hasOwnProperty`,
+                            // `call`, ...) is a built-in value; the call
+                            // folds when it can.
+                            let is_fn = matches!(&s.heap[&addr], HeapObj::Closure { .. });
+                            // (A function of known code's own `name`, as
+                            // made: its name. One defined since is an
+                            // own property of the model's.)
+                            if k == "name" {
+                                if let HeapObj::Closure { fid, known: true, ident: None, .. } = &s.heap[&addr] {
+                                    if s.heap[&addr].own("name").is_none() {
+                                        let n = self.names[*fid].clone();
+                                        return self.push(s, Abs::Str(n));
+                                    }
+                                }
+                            }
+                            // (`f.bind` of a function of known code, with
+                            // React's model: see `react::BOUND`.)
+                            if is_fn && k == "bind" && self.react.is_some() && self.pristine("Function") && matches!(&s.heap[&addr], HeapObj::Closure { known: true, ident: None, .. }) {
+                                let b = s.alloc(HeapObj::Builtin { kind: react::BIND_FN.into(), data: vec![Abs::Ref(addr)].into(), ext: None });
+                                return self.push(s, Abs::Ref(b));
+                            }
+                            let kind = if is_fn && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") {
+                                Some(format!("Function.prototype.{k}"))
+                            } else if MODELED_OBJECT_PROTO_METHODS.contains(&k.as_str())
+                                && !(is_fn && k == "toString")
+                                && self.pristine("Object")
+                            {
+                                Some(format!("Object.prototype.{k}"))
+                            } else {
+                                None
+                            };
+                            match kind {
+                                Some(kind) => {
+                                    let b = s.alloc(HeapObj::Builtin { kind, data: vec![].into(), ext: None });
+                                    return self.push(s, Abs::Ref(b));
+                                }
+                                None => true,
+                            }
+                        }
+                        // A getter runs with the original receiver as
+                        // `this`; a missing getter reads `undefined`.
+                        Found::Accessor { get, .. } => {
+                            if get == Abs::Undef {
+                                return self.push(s, Abs::Undef);
+                            }
+                            s.top_mut().ostack.push(get);
+                            return self.do_call(s, 0, pc, out, Abs::Ref(addr), RetMode::Value, Abs::Undef);
+                        }
+                        _ => false,
+                    }
+                }
+            };
+            if needs_escape {
+                let mut escaped = std::collections::HashSet::new();
+                let base_r = self.escape(s, addr, &mut escaped, out);
+                let v = Abs::Dyn(RExpr::Get(Box::new(base_r), k.clone()));
+                return self.push(s, v);
+            }
+        }
+        let v = self.get_prop(s, &o, k);
+        self.push(s, v)
+    }
+
     fn regexp_of(&self, s: &State, re: usize) -> Option<std::rc::Rc<crate::jsregex::Re>> {
         let HeapObj::Builtin { data, .. } = &s.heap[&re] else { return None };
         let (Abs::Str(src), Abs::Str(flags)) = (&data[0], &data[1]) else { return None };
@@ -22429,7 +22579,8 @@ impl Js {
         if !s.handlers.is_empty() {
             if self.probing.get() {
                 if env_flag!("TRY_DEBUG") && !self.try_taint.get() {
-                    eprintln!("[TRY] taint pc={} what={_what}", s.top().pc);
+                    let frames: Vec<&str> = s.frames.iter().map(|f| self.names[f.func].as_str()).collect();
+                    eprintln!("[TRY] taint pc={} what={_what} in {} instr={:?}", s.top().pc, frames.join(" > "), self.code.get(s.top().pc));
                 }
                 self.try_taint.set(true);
                 return;
