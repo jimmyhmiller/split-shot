@@ -20049,6 +20049,7 @@ impl Js {
         let pvar = self.escape_var(p);
         seen.insert(p, pvar);
         if pending == Some(p) {
+
             self.proto_taken.set(true);
         }
         shells.push(Op::Eval { dst: pvar, expr: RExpr::OwnMember { obj: Box::new(RExpr::Var(dst)), key: "prototype".into(), kind: 0 } });
@@ -20399,10 +20400,16 @@ impl Js {
                 // A function's own prototype reached before the function:
                 // the function first, which takes the prototype from itself.
                 if let Some(c) = self.proto_owner(addr, heap).filter(|c| !seen.contains_key(c)) {
-                    self.pending_proto.set(Some(addr));
+                    // (These nest: making the function can reach another
+                    // function's prototype first. Each takes its own flag,
+                    // and puts back the one around it, which a function
+                    // made earlier may have set already for its prototype.)
+                    let outer = (self.pending_proto.replace(Some(addr)), self.proto_taken.replace(false));
                     let _ = self.mat_value(&Abs::Ref(c), heap, shells, fills, seen);
-                    self.pending_proto.set(None);
-                    if self.proto_taken.replace(false) {
+                    let taken = self.proto_taken.get();
+                    self.pending_proto.set(outer.0);
+                    self.proto_taken.set(outer.1);
+                    if taken {
                         return;
                     }
                 }
@@ -20552,6 +20559,7 @@ impl Js {
                         let pvar = self.escape_var(p);
                         seen.insert(p, pvar);
                         if self.pending_proto.get() == Some(p) {
+
                             self.proto_taken.set(true);
                         }
                         shells.push(Op::Eval { dst: pvar, expr: RExpr::Get(Box::new(RExpr::Var(dst)), "prototype".into()) });
@@ -20575,6 +20583,7 @@ impl Js {
                     {
                         let pvar = self.escape_var(p);
                         if self.pending_proto.get() == Some(p) {
+
                             self.proto_taken.set(true);
                         }
                         shells.push(Op::Eval { dst: pvar, expr: RExpr::OwnMember { obj: Box::new(RExpr::Var(dst)), key: "prototype".into(), kind: 0 } });
