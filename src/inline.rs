@@ -942,12 +942,20 @@ fn drop_dead_in(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>, uses: &Hash
     changed
 }
 
-/// Replace every `BoundMethod { func, recv }` by `func`: in a finished
-/// residual it is only ever a value (a call through it was emitted as
-/// `func.call(recv, ...)` by the specializer), and as a value it is `func`, so
-/// its `recv` is not a read.
+/// Replace every `BoundMethod { func, recv }` that is a value by `func`: as a
+/// value it is `func`, so its `recv` is not a read. (One called stays, a
+/// call of `func` with `recv` as `this`: see `js::bound_call`.)
 pub fn strip_bound_methods(prog: &mut Program<Op, Cond>) {
     fn strip(e: &mut RExpr) {
+        // (A call of one keeps it: see `js::bound_call`.)
+        if let RExpr::Call(c, xs) = e {
+            if let RExpr::BoundMethod { func, recv } = &mut **c {
+                strip(func);
+                strip(recv);
+                xs.iter_mut().for_each(strip);
+                return;
+            }
+        }
         if let RExpr::BoundMethod { func, .. } = e {
             *e = std::mem::replace(&mut **func, RExpr::Undef);
             strip(e);

@@ -16205,13 +16205,14 @@ impl Js {
         // `f.call(a, b)`). Both `func` and `recv` are already frozen temps/atoms,
         // so neither needs escaping.
         if let Abs::Dyn(RExpr::BoundMethod { func, recv }) = &callee {
-            let callee_fn = RExpr::Get(Box::new((**func).clone()), "call".to_string());
-            let recv = (**recv).clone();
+            // (Kept as a call of the `BoundMethod`: written `recv.m(args)`
+            // when cleanup has put the method read back in place, see
+            // `codegen`.)
+            let callee_fn = RExpr::BoundMethod { func: func.clone(), recv: recv.clone() };
             self.forbid_residual_in_try(s, "an unmodeled call");
             self.freeze_before_opaque_call(s, pc, out);
             let mut escaped = std::collections::HashSet::new();
-            let mut call_args = Vec::with_capacity(args.len() + 1);
-            call_args.push(recv);
+            let mut call_args = Vec::with_capacity(args.len());
             for a in &args {
                 call_args.push(self.operand_rexpr(s, a, &mut escaped, out));
             }
@@ -16915,10 +16916,11 @@ impl Js {
                 // call `recv.m(args)` itself; any other callee with a receiver
                 // is called through `.call(recv, args)`.
                 let expr = match this_r {
+                    // (As a call of a `BoundMethod`, written `recv.m(args)`
+                    // once cleanup puts a snapshot of the read back: see
+                    // `bound_call`.)
                     Some(t) if !matches!(&callee_r, RExpr::Get(b, _) | RExpr::Index(b, _) if **b == t) => {
-                        let mut a = vec![t];
-                        a.extend(arg_rs);
-                        RExpr::Call(Box::new(RExpr::Get(Box::new(callee_r), "call".to_string())), a)
+                        RExpr::Call(Box::new(RExpr::BoundMethod { func: Box::new(callee_r), recv: Box::new(t) }), arg_rs)
                     }
                     // A call without a receiver whose callee is a member read
                     // (a function held in a cell, `var f = o.m; f()`) is a
@@ -16953,12 +16955,6 @@ impl Js {
             }
         };
 
-        // A function that contains a `try` is never inlined: it becomes a
-        // residual function and is called at runtime, so a `return` in its body
-        // returns from *it*, not from whatever inlined it. (Inlining it and
-        // residualizing the inner `try` would turn its `return` into a return
-        // from the caller, exiting the caller early.)
-        //
         // A recursive function called with every argument dynamic can't be
         // unfolded (its depth depends on runtime data), so it is residualized the
         // same way: one residual function specialized with dynamic parameters,
@@ -23705,6 +23701,23 @@ pub fn member_suffix(key: &str) -> String {
 /// property as the number it spells.
 pub fn canonical_index(key: &str) -> bool {
     !key.is_empty() && key.len() <= 9 && key.bytes().all(|b| b.is_ascii_digit()) && (key == "0" || !key.starts_with('0'))
+}
+
+/// A call of a method snapshotted with its receiver (`RExpr::BoundMethod`
+/// as a callee): `func.call(recv, args)`, which calls `func` with `recv` as
+/// `this`. When `func` is the read of the method from `recv` itself (cleanup
+/// put a single-use snapshot back), a variable or `this`, read again in the
+/// same place, the method call `recv.m(args)` does the same. The callee and
+/// arguments to render: `None` for the method call itself.
+pub fn bound_call(func: &RExpr, recv: &RExpr, args: &[RExpr]) -> Option<(RExpr, Vec<RExpr>)> {
+    let plain = matches!(recv, RExpr::Var(_) | RExpr::This)
+        && matches!(func, RExpr::Get(o, _) | RExpr::Index(o, _) if **o == *recv);
+    if plain {
+        return None;
+    }
+    let mut a = vec![recv.clone()];
+    a.extend(args.iter().cloned());
+    Some((RExpr::Get(Box::new(func.clone()), "call".to_string()), a))
 }
 
 /// Render `callee(args)`, parenthesizing the callee only when needed.

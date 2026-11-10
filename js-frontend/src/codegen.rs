@@ -1462,6 +1462,24 @@ fn ends_with_return(b: &partial::residual::Block<Op, Cond>) -> bool {
 
 /// An array literal of `elems`, a `Hole` an elision (`[11,, 333]`; a
 /// trailing one takes an extra comma, which keeps the length).
+/// `e` where nothing names a function it makes: an argument, an element.
+/// There a function inlined from `var __rfN = (0, function () {...})` (the
+/// `(0, ...)` keeps a binding from naming it) is written without it.
+fn js_unnamed(e: &RExpr) -> String {
+    if let RExpr::FnRef { rfid, caps } = e {
+        if caps.is_empty() {
+            if let Some(text) = INLINE_VALUE.with(|m| m.borrow().get(rfid).map(|v| v.0.clone())) {
+                if let Some(inner) = text.strip_prefix("(0, ").and_then(|t| t.strip_suffix(')')) {
+                    if inner.starts_with("function") || inner.starts_with("async function") || inner.starts_with("class") {
+                        return inner.to_string();
+                    }
+                }
+            }
+        }
+    }
+    js(e, P_ASSIGN)
+}
+
 fn array_literal(elems: &[RExpr]) -> String {
     let mut s = String::from("[");
     for (i, e) in elems.iter().enumerate() {
@@ -1478,7 +1496,7 @@ fn array_literal(elems: &[RExpr]) -> String {
                 if i > 0 {
                     s.push(' ');
                 }
-                s.push_str(&js_assign(e));
+                s.push_str(&js_unnamed(e));
             }
         }
     }
@@ -1568,7 +1586,8 @@ pub(crate) fn op_to_js(op: &Op, ind: &str) -> String {
             format!("{}{} {op}= {};", base_js(obj), member_suffix(key), js_assign(rhs))
         }
         Op::SetProp { obj, key, val } => {
-            format!("{}{} = {};", base_js(obj), member_suffix(key), js_assign(val))
+            // (An assignment to a member names no function.)
+            format!("{}{} = {};", base_js(obj), member_suffix(key), js_unnamed(val))
         }
         Op::DeleteProp { obj, key } => format!("delete {}{};", base_js(obj), member_suffix(key)),
         Op::DeleteIndex { arr, index } => {
@@ -1739,8 +1758,15 @@ fn js(e: &RExpr, min: u8) -> String {
             None => format!("__mk{rfid}()"),
         },
         RExpr::Get(o, k) => render_get(o, js(o, 0), k),
+        RExpr::Call(callee, args) if matches!(&**callee, RExpr::BoundMethod { .. }) => {
+            let RExpr::BoundMethod { func, recv } = &**callee else { unreachable!() };
+            match partial::js::bound_call(func, recv, args) {
+                Some((c, a)) => js(&RExpr::Call(Box::new(c), a), min),
+                None => js(&RExpr::Call(func.clone(), args.clone()), min),
+            }
+        }
         RExpr::Call(callee, args) => {
-            let a: Vec<String> = args.iter().map(|x| js(x, P_ASSIGN)).collect();
+            let a: Vec<String> = args.iter().map(js_unnamed).collect();
             // A call of the global `eval` is an indirect eval (global scope):
             // written `eval(...)` it would be a direct one, in this scope.
             if matches!(&**callee, RExpr::Global(g) if g == "eval") {
@@ -1749,7 +1775,7 @@ fn js(e: &RExpr, min: u8) -> String {
             render_call(callee, js(callee, 0), &a)
         }
         RExpr::New(callee, args) => {
-            let a: Vec<String> = args.iter().map(|x| js(x, P_ASSIGN)).collect();
+            let a: Vec<String> = args.iter().map(js_unnamed).collect();
             render_new(callee, js(callee, 0), &a)
         }
         // (A function expression without parentheses only as an assignment
@@ -1764,10 +1790,8 @@ fn js(e: &RExpr, min: u8) -> String {
             render_fnref(*rfid, &cs)
         }
         // Outside call position a bound method decays to its function value (JS
-        // detaches `this` once a method is read into a value). `do_call` is the
-        // only place that reattaches the receiver, and it emits a plain
-        // `RExpr::Call`/`Get` — a `BoundMethod` never reaches codegen as a
-        // callee.
+        // detaches `this` once a method is read into a value); a call of one
+        // is rendered above (`bound_call`).
         RExpr::BoundMethod { func, .. } => js(func, min),
         RExpr::Yield(x) => format!("(yield {})", js(x, P_ASSIGN)),
         RExpr::Await(x) => format!("(await {})", js(x, P_UNARY)),
