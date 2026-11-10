@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "TypeScript, for tools/modules.js: the oracle for TypeScript cases is TypeScript's own transpile, run by Node.",
+  "dependencies": { "typescript": "5.8.3" }
+}

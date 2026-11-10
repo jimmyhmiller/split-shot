@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Futamura Playground</title>
+  <meta name="description" content="An online partial evaluator for JavaScript, running in your browser. Specialize interpreters into compiled code, and derive a compiler from an interpreter." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23c2410c'/><text x='16' y='23' font-size='19' text-anchor='middle' fill='white' font-family='Georgia,serif' font-style='italic'>&#955;</text></svg>" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">λ</span>
+      <div>
+        <h1>Futamura Playground</h1>
+        <p class="tag">A partial evaluator for JavaScript, written in Rust and running in your browser as wasm. It takes a program and the part of its input that is already known, and produces a specialized program that only needs the rest.</p>
+      </div>
+    </div>
+  </header>
+
+  <nav class="projections" aria-label="Sections">
+    <a href="#p1" data-tab="p1">
+      <span class="proj-kicker"><span class="proj-num">1</span>First projection</span>
+      <span class="proj-formula"><i>mix</i>(<span class="s">interpreter</span>, <span class="s">program</span>) = <span class="r">compiled program</span></span>
+      <span class="proj-desc">Specialize an interpreter to a fixed program and the interpreter disappears.</span>
+    </a>
+    <a href="#p2" data-tab="p2">
+      <span class="proj-kicker"><span class="proj-num">2</span>Second projection</span>
+      <span class="proj-formula"><i>mix</i>(<span class="s">mix</span>, <span class="s">interpreter</span>) = <span class="r">compiler</span></span>
+      <span class="proj-desc">Specialize the partial evaluator itself to an interpreter, and out comes a compiler.</span>
+    </a>
+    <a href="#p3" data-tab="p3">
+      <span class="proj-kicker"><span class="proj-num">3</span>Third projection</span>
+      <span class="proj-formula"><i>mix</i>(<span class="s">mix</span>, <span class="s">mix</span>) = <span class="r">cogen</span></span>
+      <span class="proj-desc">Specialize the partial evaluator to itself, and out comes a compiler generator.</span>
+    </a>
+    <a href="#about" data-tab="about" class="proj-about">
+      <span class="proj-kicker"><span class="proj-num">?</span>How it works</span>
+      <span class="proj-desc">The three projections, the engine, and its limits.</span>
+    </a>
+  </nav>
+
+  <main>
+    <!-- ───────────── First projection ───────────── -->
+    <section id="tab-p1" class="tab" hidden>
+      <div class="intro">
+        <p>The partial evaluator runs <code>main(x)</code> with <code>x</code> unknown. Anything that doesn't depend on <code>x</code> is computed now. Anything that does is emitted as residual code. Specialize an interpreter on a fixed program and the interpreter disappears.</p>
+      </div>
+
+      <div class="examples" id="p1-examples" role="radiogroup" aria-label="Examples"></div>
+      <p class="blurb" id="p1-blurb"></p>
+
+      <div class="split">
+        <div class="pane">
+          <div class="pane-head">
+            <span class="pane-title">Source <span class="muted">· edit freely</span></span>
+          </div>
+          <div class="editor" id="p1-src"></div>
+        </div>
+        <div class="pane">
+          <div class="pane-head">
+            <span class="pane-title">Residual <span class="muted">· main(x) specialized</span></span>
+            <div class="seg" role="radiogroup" aria-label="Residual view">
+              <button data-view="js" class="on">JS</button>
+              <button data-view="ir">IR</button>
+            </div>
+          </div>
+          <div class="editor" id="p1-res"></div>
+          <div class="status" id="p1-status"></div>
+        </div>
+      </div>
+
+      <div class="runbar">
+        <label class="field">
+          <span>x =</span>
+          <input id="p1-x" spellcheck="false" autocomplete="off" />
+        </label>
+        <button class="btn" id="p1-run">Run both</button>
+        <div class="results" id="p1-results"></div>
+      </div>
+    </section>
+
+    <!-- ───────────── Second projection ───────────── -->
+    <section id="tab-p2" class="tab" hidden>
+      <div class="intro">
+        <p>Here the thing being specialized is itself a partial evaluator: <code>jsmix</code>, written in the same JavaScript subset. The Rust evaluator specializes <code>jsmix</code> to the interpreter below, leaving the source program dynamic. What comes out reads a source program and emits compiled code for it: a compiler. Nobody wrote its code generator. <code>jsmix</code>'s only rule is that an operator with a dynamic operand is emitted as that same operator, so the <code>+</code>, <code>*</code> and <code>-</code> in the output come straight from the interpreter.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-head"><span class="num">1</span><h2>The interpreter</h2></div>
+          <p class="hint">A bytecode interpreter in plain JS: <code>interp(prog, input)</code> folds <code>step</code> over the program. Try adding an opcode, for example <code>: instr[0] === "square" ? acc * acc</code>, then derive again.</p>
+          <div class="editor tall" id="p2-int"></div>
+          <details class="viewer">
+            <summary><code>jsmix.js</code>: the partial evaluator being specialized (read-only)</summary>
+            <div class="editor tall" id="p2-jsmix"></div>
+          </details>
+          <div class="actions">
+            <button class="btn primary" id="p2-derive">Derive the compiler</button>
+            <span class="status inline" id="p2-derive-status"></span>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="step-head"><span class="num">2</span><h2>The derived compiler</h2></div>
+          <p class="hint">The output of <code>mix(jsmix, interpreter)</code>. It loops over the source program, dispatches on each opcode, and builds target code as strings.</p>
+          <div class="editor tall" id="p2-compiler"></div>
+        </div>
+
+        <div class="step">
+          <div class="step-head"><span class="num">3</span><h2>Use it</h2></div>
+          <p class="hint">Compile a source program with the derived compiler and run the target code. The result is checked against the interpreter, and the compiled code against running <code>jsmix</code> directly (the first projection, done by hand).</p>
+          <div class="chips" id="p2-progs"></div>
+          <div class="runbar flush">
+            <label class="field grow">
+              <span>program</span>
+              <input id="p2-prog" spellcheck="false" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>x =</span>
+              <input id="p2-x" class="short" spellcheck="false" autocomplete="off" value="5" />
+            </label>
+            <button class="btn" id="p2-run">Compile &amp; run</button>
+          </div>
+          <div class="out" id="p2-out"></div>
+          <div class="actions">
+            <button class="btn" id="p2-verify">Verify on 500 random programs</button>
+            <span class="status inline" id="p2-verify-status"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────── Third projection ───────────── -->
+    <section id="tab-p3" class="tab" hidden>
+      <div class="intro">
+        <p>This tab uses <code>jsmix2</code>, a second partial evaluator written in a small pure subset of JavaScript (functions, <code>var</code>, <code>if</code>, recursion, arrays) and able to process its own source. Applied to itself it does all three projections. The cogen it generates takes an interpreter and returns a compiler, and that compiler takes a program and returns compiled code. Every step below is checked against running <code>jsmix2</code> directly.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <div class="step-head"><span class="num">1</span><h2>Generate the cogen</h2></div>
+          <p class="hint"><code>cogen = mix(mix, mix)</code>: <code>jsmix2</code> specialized to itself, with the interpreter it will be given left unknown. The outer <code>mix</code> can be <code>jsmix2</code> itself, or the Rust evaluator from the other tabs (running here as wasm), specializing <code>jsmix2</code> to its own source.</p>
+          <details class="viewer">
+            <summary><code>jsmix2.js</code>: the partial evaluator (read-only)</summary>
+            <div class="editor tall" id="p3-jsmix2"></div>
+          </details>
+          <div class="actions">
+            <button class="btn primary" id="p3-cogen-btn">Generate with jsmix2</button>
+            <button class="btn" id="p3-cogen-rust-btn">Generate with the Rust evaluator</button>
+            <span class="status inline" id="p3-cogen-status"></span>
+          </div>
+          <div class="editor tall hidden-until" id="p3-cogen"></div>
+        </div>
+
+        <div class="step">
+          <div class="step-head"><span class="num">2</span><h2>Give it an interpreter</h2></div>
+          <p class="hint"><code>compiler = cogen(interpreter)</code>. The interpreter is written in the same subset. Its first function is the entry point: the first parameter is the program (known at compile time), the rest are runtime inputs.</p>
+          <div class="chips" id="p3-ints"></div>
+          <div class="editor tall" id="p3-int"></div>
+          <div class="actions">
+            <button class="btn" id="p3-compiler-btn">Make the compiler</button>
+            <span class="status inline" id="p3-compiler-status"></span>
+          </div>
+          <div class="editor tall hidden-until" id="p3-compiler"></div>
+        </div>
+
+        <div class="step">
+          <div class="step-head"><span class="num">3</span><h2>Compile a program</h2></div>
+          <p class="hint"><code>target = compiler(program)</code>, then run it. Checked against the interpreter, and against <code>mix(interpreter, program)</code>.</p>
+          <div class="chips" id="p3-progs"></div>
+          <div class="runbar flush">
+            <label class="field grow">
+              <span>program</span>
+              <input id="p3-prog" spellcheck="false" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>x =</span>
+              <input id="p3-x" class="short" spellcheck="false" autocomplete="off" value="5" />
+            </label>
+            <button class="btn" id="p3-run">Compile &amp; run</button>
+          </div>
+          <div class="out" id="p3-out"></div>
+          <div class="editor hidden-until" id="p3-target"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────── About ───────────── -->
+    <section id="tab-about" class="tab prose" hidden>
+      <h2>The Futamura projections</h2>
+      <p>A partial evaluator, <em>mix</em>, takes a program and the part of its input that is already known, and produces a specialized program that only needs the rest. In 1971 Yoshihiko Futamura noticed three consequences:</p>
+      <ol>
+        <li><strong>First projection.</strong> <code>mix(interpreter, source) = target</code>. Specializing an interpreter to a source program compiles that program.</li>
+        <li><strong>Second projection.</strong> <code>mix(mix, interpreter) = compiler</code>. Specializing the partial evaluator to an interpreter produces a compiler.</li>
+        <li><strong>Third projection.</strong> <code>mix(mix, mix) = compiler generator</code>. Specializing the partial evaluator to itself produces a program that turns interpreters into compilers.</li>
+      </ol>
+
+      <h2>This partial evaluator</h2>
+      <p>The engine is a generic <em>online</em> partial evaluator written in Rust. It symbolically executes the program, keeping values static when it can, and emits residual code for the rest. Each residual block is memoized on its abstract state, which is how loops whose iteration count depends on the dynamic input tie back into residual loops. A <em>whistle</em> (a growth check) decides when to give up on unrolling and generalize instead. Language-specific behavior sits behind a small client trait. The JavaScript client parses real JS with SWC and models the heap, closures, exceptions and JS's coercion rules.</p>
+      <p>Everything on this page runs in your browser. The Rust engine is compiled to WebAssembly and runs in a Web Worker. Specializations that run away are cut off by the engine's weight budget or by a timeout.</p>
+
+      <h2>jsmix2, the self-applicable one</h2>
+      <p>The third projection needs a partial evaluator that can specialize itself, so it has to be written in the language it accepts. <code>jsmix2</code> is about 500 lines of a small pure JavaScript subset. Two design choices make self-application produce real compilers rather than interpreters in disguise. Values carry explicit binding-time tags, and arrays can be partially static (a known length with each element tagged separately), so when <code>jsmix2</code> specializes itself, the inner copy's tags stay known even though its data doesn't. Calls under a dynamic condition become residual functions memoized on the static parts of their arguments, so loops in the subject program become recursive functions in the output.</p>
+
+      <h2>Limits</h2>
+      <ul>
+        <li>The entry point is <code>main(x)</code> with one dynamic argument.</li>
+        <li>It handles a subset of JavaScript. Unsupported constructs are reported as errors.</li>
+        <li>Recursion whose depth depends on dynamic data is out of scope for the JS client, and so is folding some static arithmetic, such as <code>%</code> and <code>/</code>.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

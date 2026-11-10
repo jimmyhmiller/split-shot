@@ -1,0 +1,13 @@
+// inputs: [{"prototype": null, "x": -3, "replace": false}, {"prototype": null, "x": -3, "replace": true}, {"prototype": null, "x": 0, "replace": false}, {"prototype": null, "x": 0, "replace": true}, {"prototype": null, "x": 4, "replace": false}, {"prototype": null, "x": 4, "replace": true}, {"prototype": 0, "x": -3, "replace": false}, {"prototype": 0, "x": -3, "replace": true}, {"prototype": 0, "x": 0, "replace": false}, {"prototype": 0, "x": 0, "replace": true}, {"prototype": 0, "x": 4, "replace": false}, {"prototype": 0, "x": 4, "replace": true}, {"prototype": "text", "x": -3, "replace": false}, {"prototype": "text", "x": -3, "replace": true}, {"prototype": "text", "x": 0, "replace": false}, {"prototype": "text", "x": 0, "replace": true}, {"prototype": "text", "x": 4, "replace": false}, {"prototype": "text", "x": 4, "replace": true}, {"prototype": false, "x": -3, "replace": false}, {"prototype": false, "x": -3, "replace": true}, {"prototype": false, "x": 0, "replace": false}, {"prototype": false, "x": 0, "replace": true}, {"prototype": false, "x": 4, "replace": false}, {"prototype": false, "x": 4, "replace": true}, {"prototype": {}, "x": -3, "replace": false}, {"prototype": {}, "x": -3, "replace": true}, {"prototype": {}, "x": 0, "replace": false}, {"prototype": {}, "x": 0, "replace": true}, {"prototype": {}, "x": 4, "replace": false}, {"prototype": {}, "x": 4, "replace": true}, {"prototype": [], "x": -3, "replace": false}, {"prototype": [], "x": -3, "replace": true}, {"prototype": [], "x": 0, "replace": false}, {"prototype": [], "x": 0, "replace": true}, {"prototype": [], "x": 4, "replace": false}, {"prototype": [], "x": 4, "replace": true}, {"prototype": {"kind": "custom"}, "x": -3, "replace": false}, {"prototype": {"kind": "custom"}, "x": -3, "replace": true}, {"prototype": {"kind": "custom"}, "x": 0, "replace": false}, {"prototype": {"kind": "custom"}, "x": 0, "replace": true}, {"prototype": {"kind": "custom"}, "x": 4, "replace": false}, {"prototype": {"kind": "custom"}, "x": 4, "replace": true}]
+// From the residual-language branch's C corpus (corpus-c/cases/native-runtime-constructor-prototypes.js),
+// where master's specializer got it wrong or did not finish.
+// Dynamic prototype values normalize correctly even after the Object binding is replaced.
+function Plain(x) { this.x = x; }
+function main(input) {
+  var intrinsicPrototype = Object.prototype;
+  Plain.prototype = input.prototype;
+  if (input.replace) Object = {create: function () { return {bad: true}; }};
+  var instance = new Plain(input.x);
+  return [instance.x, Reflect.getPrototypeOf(instance) === Plain.prototype,
+    Reflect.getPrototypeOf(instance) === intrinsicPrototype, 'bad' in instance];
+}

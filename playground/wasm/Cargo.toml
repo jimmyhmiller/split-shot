@@ -1,0 +1,12 @@
+[package]
+name = "partial-wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+js-frontend = { path = "../../js-frontend" }
+partial = { path = "../.." }
+wasm-bindgen = "0.2"

@@ -1,0 +1,14 @@
+const fs = require("fs"), path = require("path");
+const { parseProgram, read, mix, JSMIX2_SRC, prelude } = require("./harness.js");
+const out = fs.readFileSync(path.join(__dirname, "out", "p3rust-k1.txt"), "utf8");
+const resid = out.split("\n").filter((l) => !l.startsWith("---")).join("\n");
+const cogen = Function(prelude + "\n" + resid + "\nreturn main;")();
+const MIX = parseProgram(JSMIX2_SRC);
+const INT = parseProgram(read(process.argv[2] || "int.js"));
+const entry = process.argv[3] || "interp";
+const a = mix(MIX, "mix", [INT, entry]), b = cogen([INT, entry]);
+let i = 0; while (i < a.length && a[i] === b[i]) i++;
+console.log("lengths", a.length, b.length, "first diff at", i);
+const lineA = a.slice(0, i).split("\n").length;
+console.log("--- direct, around diff (line " + lineA + ")\n" + a.split("\n").slice(lineA - 3, lineA + 2).join("\n").slice(0, 900));
+console.log("--- rust cogen\n" + b.split("\n").slice(lineA - 3, lineA + 2).join("\n").slice(0, 900));

@@ -1,0 +1,1 @@
+{ "entry": "main.mjs", "inputs": [0], "link_error": "does not provide an export named 'nope'" }

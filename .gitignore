@@ -1,2 +1,16 @@
+# Build outputs and dependencies
+target/
+node_modules/
+dist/
+.worktrees
+
+# Editor / OS / local agent state
 .DS_Store
 .claude/settings.local.json
+
+# Programs of modules (tools/modules.js): fixture packages are part of the
+# cases; what a run writes next to them is not.
+!corpus-modules/**/node_modules/
+!corpus-modules/**/node_modules/**
+corpus-modules/**/.residual.js
+corpus-modules/**/.linked.js

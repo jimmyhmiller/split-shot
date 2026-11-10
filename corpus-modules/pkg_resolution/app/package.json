@@ -1,0 +1,3 @@
+{ "name": "my-app", "type": "module",
+  "exports": { ".": "./main.mjs", "./util": "./util.mjs" },
+  "imports": { "#internal": { "custom": "./internal-custom.mjs", "default": "./internal.mjs" }, "#feat/*": "./features/*.mjs", "#ospath": "path" } }

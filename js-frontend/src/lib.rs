@@ -1,0 +1,2614 @@
+//! Parse real JavaScript with SWC and lower the supported subset to the
+//! `partial::js` AST so it can be partially evaluated by the generic engine.
+
+use swc_common::sync::Lrc;
+use swc_common::{FileName, SourceMap};
+use swc_ecma_ast::{EsVersion, Module};
+use swc_ecma_parser::lexer::Lexer;
+use swc_ecma_parser::{Parser, StringInput, Syntax};
+
+use partial::js::{Cond, DeepVal, Js, Op};
+use partial::residual::Program;
+
+mod codegen;
+pub mod link;
+mod lower;
+mod node_resolve;
+mod scope;
+mod source_mode;
+mod structured;
+pub mod ts;
+pub use lower::{compile, compile_with_entry, LowerOpts};
+
+/// Parse + lower + specialize `src`, then emit the residual as JavaScript text.
+pub fn to_js(src: &str) -> Result<String, String> {
+    to_js_with_entry(src, "main")
+}
+
+/// `to_js` with the entry function named `entry`.
+pub fn to_js_with_entry(src: &str, entry: &str) -> Result<String, String> {
+    to_js_opts(src, entry, false)
+}
+
+/// `to_js_with_entry`, with each function's variables and labels given short
+/// names when `short_names` (see `codegen::program_to_js`).
+pub fn to_js_opts(src: &str, entry: &str, short_names: bool) -> Result<String, String> {
+    to_js_env(src, entry, short_names, false, false)
+}
+
+/// `to_js_opts`, for an environment that may define Prepack's intrinsics
+/// (`__abstract`, `__optimize`, ...) with their runtime meaning, and where
+/// (`closed_script`) no other script reads this one's top-level lexical
+/// bindings (see `lower::compile_full_opts`).
+pub fn to_js_env(src: &str, entry: &str, short_names: bool, prepack_intrinsics: bool, closed_script: bool) -> Result<String, String> {
+    to_js_with(src, entry, short_names, prepack_intrinsics, &LowerOpts { closed_script, ..LowerOpts::default() })
+}
+
+/// `to_js_env`, with all the lowering options (TypeScript input among them).
+pub fn to_js_with(src: &str, entry: &str, short_names: bool, prepack_intrinsics: bool, opts: &LowerOpts) -> Result<String, String> {
+    // (`PE_TIMINGS`: each phase's time, on stderr.)
+    let timings = std::env::var_os("PE_TIMINGS").is_some();
+    let t = std::time::Instant::now();
+    let phase = |name: &str, since: std::time::Instant| {
+        if timings {
+            eprintln!("[time] {name}: {:.3} ms", since.elapsed().as_secs_f64() * 1e3);
+        }
+        std::time::Instant::now()
+    };
+    let (funcs, sources) = lower::compile_full_opts(src, entry, opts)?;
+    let t = phase("lower", t);
+    let mut vm = Js::new(&funcs);
+    if prepack_intrinsics {
+        vm.set_prepack_intrinsics();
+    }
+    if opts.react {
+        vm.set_react();
+    }
+    let t = phase("engine setup", t);
+    let mut prog = vm.specialize_program();
+    let t = phase("specialize", t);
+    if std::env::var_os("SPEC_STEPS").is_some() {
+        eprintln!(
+            "spec_steps={} spec_blocks={} spec_weight={}",
+            vm.spec_steps_used(),
+            vm.spec_blocks_used(),
+            vm.spec_weight_used()
+        );
+    }
+    partial::residual::simplify(&mut prog);
+    vm.coalesce(&mut prog);
+    let t = phase("cleanup", t);
+    let js = codegen::program_to_js(&vm, &prog, vm.input_var(), short_names, &sources);
+    phase("codegen", t);
+    Ok(js)
+}
+
+/// Parse + lower + specialize a JS source file. Returns the built `Js` client
+/// and the simplified residual program.
+pub fn specialize(src: &str) -> Result<(Js, Program<Op, Cond>), String> {
+    let funcs = compile(src)?;
+    let vm = Js::new(&funcs);
+    let mut prog = vm.specialize_program();
+    partial::residual::simplify(&mut prog);
+    vm.coalesce(&mut prog);
+    Ok((vm, prog))
+}
+
+/// Like [`specialize`], but with an explicit specialization weight budget
+/// (`None` keeps the default / `SPEC_WEIGHT_BUDGET` env var). For embedders
+/// without an environment, e.g. the wasm playground.
+pub fn specialize_with_budget(
+    src: &str,
+    budget: Option<u64>,
+) -> Result<(Js, Program<Op, Cond>), String> {
+    let funcs = compile(src)?;
+    let mut vm = Js::new(&funcs);
+    if let Some(b) = budget {
+        vm.set_spec_budget(b);
+    }
+    let mut prog = vm.specialize_program();
+    partial::residual::simplify(&mut prog);
+    vm.coalesce(&mut prog);
+    Ok((vm, prog))
+}
+
+/// Emit an already-specialized (and simplified) residual as JavaScript text.
+pub fn residual_to_js(vm: &Js, prog: &Program<Op, Cond>) -> String {
+    codegen::program_to_js(vm, prog, vm.input_var(), false, &[])
+}
+
+/// Run the residual program produced from `src` on a single dynamic input.
+pub fn run_residual(src: &str, input: i64) -> Result<DeepVal, String> {
+    let (vm, prog) = specialize(src)?;
+    Ok(vm.run_residual(&prog, input))
+}
+
+/// Run the (subset) reference interpreter on `src` for a single input.
+pub fn run_reference(src: &str, input: i64) -> Result<DeepVal, String> {
+    let funcs = compile(src)?;
+    let vm = Js::new(&funcs);
+    Ok(vm.run_reference(input))
+}
+
+thread_local! {
+    /// The comments of the source last parsed, by position: a function
+    /// emitted from its source keeps the ones inside it (see `source_mode`).
+    pub(crate) static COMMENTS: std::cell::RefCell<Option<swc_common::comments::SingleThreadedComments>> = const { std::cell::RefCell::new(None) };
+    /// The source of the program last parsed: a function's source text (what
+    /// `Function.prototype.toString` gives of it) is its span's.
+    pub(crate) static SOURCE_MAP: std::cell::RefCell<Option<Lrc<SourceMap>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Parse a TypeScript source string into an SWC module with its types
+/// erased (see `ts`), or a human-readable error.
+pub fn parse_ts(src: &str) -> Result<Module, String> {
+    let cm: Lrc<SourceMap> = Default::default();
+    let fm = cm.new_source_file(Lrc::new(FileName::Custom("input.ts".into())), src.to_string());
+    let comments = swc_common::comments::SingleThreadedComments::default();
+    let lexer = Lexer::new(Syntax::Typescript(Default::default()), EsVersion::EsNext, StringInput::from(&*fm), Some(&comments));
+    COMMENTS.with(|c| *c.borrow_mut() = Some(comments.clone()));
+    let mut parser = Parser::new_from(lexer);
+    let mut m = parser.parse_module().map_err(|e| format!("parse error: {:?}", e.kind()))?;
+    ts::erase(&mut m)?;
+    Ok(m)
+}
+
+/// Parse a JS source string into an SWC module, or a human-readable error.
+pub fn parse(src: &str) -> Result<Module, String> {
+    parse_impl(src, false)
+}
+
+/// `parse` for the program being specialized: its comments are kept (see
+/// `COMMENTS`).
+pub fn parse_program(src: &str) -> Result<Module, String> {
+    parse_impl(src, true)
+}
+
+fn parse_impl(src: &str, record: bool) -> Result<Module, String> {
+    let cm: Lrc<SourceMap> = Default::default();
+    let fm = cm.new_source_file(Lrc::new(FileName::Custom("input.js".into())), src.to_string());
+    let comments = swc_common::comments::SingleThreadedComments::default();
+    let lexer = Lexer::new(
+        Syntax::Es(Default::default()),
+        EsVersion::EsNext,
+        StringInput::from(&*fm),
+        if record { Some(&comments) } else { None },
+    );
+    if record {
+        COMMENTS.with(|c| *c.borrow_mut() = Some(comments.clone()));
+        SOURCE_MAP.with(|m| *m.borrow_mut() = Some(cm.clone()));
+    }
+    let mut parser = Parser::new_from(lexer);
+    parser
+        .parse_module()
+        .map_err(|e| format!("parse error: {:?}", e.kind()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use partial::js::DeepVal;
+
+    fn check(src: &str, inputs: &[i64]) -> Program<Op, Cond> {
+        let (vm, prog) = specialize(src).expect("specialize");
+        for &i in inputs {
+            assert_eq!(
+                vm.run_reference(i),
+                vm.run_residual(&prog, i),
+                "residual diverged from reference at input={i}\nsrc:\n{src}"
+            );
+        }
+        prog
+    }
+
+    #[test]
+    fn parses_a_function() {
+        let m = parse("function main(input) { return input + 1; }").unwrap();
+        assert_eq!(m.body.len(), 1);
+    }
+
+    #[test]
+    fn arithmetic_folds() {
+        let prog = check("function main(x) { return (x + 3) * 2; }", &[0, 5, -4]);
+        assert_eq!(prog.blocks.len(), 1);
+    }
+
+    #[test]
+    fn for_loop_over_static_array_unrolls() {
+        let src = "
+            function main(x) {
+                let xs = [x, x + 1, 7];
+                let s = 0;
+                for (let i = 0; i < xs.length; i = i + 1) {
+                    s = s + xs[i];
+                }
+                return s;
+            }";
+        // sum = x + (x+1) + 7 = 2x + 8
+        let prog = check(src, &[0, 3, 10]);
+        assert_eq!(run_residual(src, 3).unwrap(), DeepVal::num(2 * 3 + 8));
+        assert_eq!(prog.blocks.len(), 1, "static loop should fully unroll");
+    }
+
+    #[test]
+    fn switch_dispatch_folds() {
+        let src = "
+            function op(kind, a, b) {
+                switch (kind) {
+                    case 0: return a + b;
+                    case 1: return a - b;
+                    case 2: return a * b;
+                    default: return 0;
+                }
+            }
+            function main(x) { return op(2, x, 3) + op(0, x, 1); }";
+        // x*3 + (x+1)
+        let prog = check(src, &[0, 4, 9]);
+        assert_eq!(prog.blocks.len(), 1, "static switch kinds should fold away");
+    }
+
+    #[test]
+    fn static_depth_recursion_folds_to_constant() {
+        // A recursive function called with a static counter is fully unrolled.
+        let src = "
+            function fact(n) {
+                if (n <= 0) { return 1; }
+                return n * fact(n - 1);
+            }
+            function main(input) { return fact(4) + input; }";
+        let prog = check(src, &[0, 5, -3]);
+        assert_eq!(prog.blocks.len(), 1, "static-depth recursion should fully unroll");
+        assert_eq!(run_residual(src, 5).unwrap(), DeepVal::num(29)); // 24 + 5
+    }
+
+    #[test]
+    fn recursion_mutating_shared_array_threads_through_frames() {
+        // The recursion analog of the self-modifying-array effect-ordering class:
+        // every frame mutates the SAME array, and a later read must observe those
+        // mutations in order. The counter is static (so it unrolls); the data is
+        // dynamic and escapes through the recursive frames.
+        let src = "
+            function fill(n, arr) {
+                if (n <= 0) { return 0; }
+                arr[n] = arr[n] ^ (n * 3);
+                fill(n - 1, arr);
+                return arr[n];
+            }
+            function main(input) {
+                var a = [input, input + 1, input + 2, input + 3, input + 4];
+                var last = fill(4, a);
+                return a[1] + a[2] + a[3] + last;
+            }";
+        let prog = check(src, &[0, 5, 10, -2]);
+        assert_eq!(prog.blocks.len(), 1, "static recursion over a shared array should unroll");
+    }
+
+    #[test]
+    fn tail_recursion_with_dynamic_accumulator_unrolls() {
+        let src = "
+            function sum(n, acc) {
+                if (n <= 0) { return acc; }
+                return sum(n - 1, acc + n);
+            }
+            function main(input) { return sum(5, input); }";
+        let prog = check(src, &[0, 1, 100, -7]);
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(15)); // 5+4+3+2+1
+        assert_eq!(prog.blocks.len(), 1);
+    }
+
+    #[test]
+    fn tree_recursion_static_depth_unrolls() {
+        let src = "
+            function fib(n) {
+                if (n <= 1) { return n; }
+                return fib(n - 1) + fib(n - 2);
+            }
+            function main(input) { return fib(7) + input; }";
+        let prog = check(src, &[0, 4]);
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(13)); // fib(7)
+        assert_eq!(prog.blocks.len(), 1);
+    }
+
+    #[test]
+    fn residual_function_body_kept_when_caller_is_in_a_try() {
+        // A function residualized while the caller is inside a `try` (here via
+        // `.call`) must still receive its real body. Regression: it came out
+        // empty, silently dropping the throwing `a3(true)` call, because the body
+        // specialization inherited the caller's probe / halt_at state.
+        let src = "
+            function f(p) { return a3(true); }
+            function main(input) { try { return f.call(null, 0); } catch (e) {} return 0; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("a3(true)"), "residual fn body dropped its call:\n{js}");
+    }
+
+    #[test]
+    fn try_containing_recursive_function_residualizes() {
+        // A `try`-containing recursive function is residualized (not inlined) into
+        // a real recursive residual function. The Rust reference interpreter can't
+        // run a residual self-call, so this checks the path produces a recursive
+        // residual at all (correctness is validated against Node by the fuzzer).
+        let src = "
+            function sum(n, acc) {
+                try {
+                    if (n <= 0) { return acc; }
+                    return sum(n - 1, acc + n);
+                } catch (e) { return -1; }
+            }
+            function main(input) { return sum(5, input); }";
+        let js = to_js(src).expect("to_js should succeed for residualized recursion");
+        assert!(js.contains("__rf"), "expected a residual recursive function, got:\n{js}");
+    }
+
+    #[test]
+    fn short_circuit_and_does_not_apply_skipped_side_effect() {
+        // `input && (++input)`: when `input` is falsy the `&&` short-circuits, so
+        // `++input` must NOT run. (Regression: the PE used to apply the increment
+        // unconditionally, returning 1 instead of 0 at input=0.)
+        let src = "function main(input) { var x = input && (++input); return input; }";
+        check(src, &[0, 1, 2, -1, 3, 7]);
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(0)); // skipped
+        assert_eq!(run_residual(src, 1).unwrap(), DeepVal::num(2)); // taken
+    }
+
+    #[test]
+    fn short_circuit_or_does_not_apply_skipped_side_effect() {
+        // `input || (++input)`: when `input` is truthy the `||` short-circuits.
+        let src = "function main(input) { var x = input || (++input); return input; }";
+        check(src, &[0, 1, 2, -1, 3, 7]);
+        assert_eq!(run_residual(src, 1).unwrap(), DeepVal::num(1)); // skipped
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(1)); // taken
+    }
+
+    #[test]
+    fn ternary_only_runs_the_taken_branch_side_effect() {
+        let src = "function main(input) { var x = input ? (++input) : (input - 1); return input; }";
+        check(src, &[0, 1, 2, -1, 3, 7]);
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(0)); // else: no ++
+        assert_eq!(run_residual(src, 5).unwrap(), DeepVal::num(6)); // then: ++
+    }
+
+    #[test]
+    fn short_circuit_keeps_compact_form_when_operands_are_pure() {
+        // The common case (pure operands) must stay a single compact pass-through
+        // expression, not branch — this is what real inputs rely on for size.
+        let src = "function main(input) { return (input && (input + 1)); }";
+        let prog = specialize(src).unwrap().1;
+        assert_eq!(prog.blocks.len(), 1, "pure `&&` should not introduce a branch");
+    }
+
+    #[test]
+    fn short_circuit_call_in_rhs_is_only_invoked_when_taken() {
+        // A side-effecting call in the short-circuited position must not run when
+        // the operator short-circuits past it.
+        let src = "
+            function main(input) {
+                var n = 0;
+                var bump = function () { n = n + 1; return 1; };
+                var y = input && bump();
+                return n;
+            }";
+        check(src, &[0, 1, 2, -1]);
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(0)); // bump skipped
+        assert_eq!(run_residual(src, 1).unwrap(), DeepVal::num(1)); // bump called
+    }
+
+    #[test]
+    fn postfix_update_coerces_result_to_number() {
+        // `x--`/`x++` yield `ToNumber(old)`, not the raw old value: `false--` is 0
+        // (Node-verified). The PE folds the coercion, so the residual is `0`.
+        // (Regression: the PE returned the boolean `false` instead of 0. Not
+        // `check`-able: the reference interpreter can't coerce `false - 0`.)
+        let src = "function main(input) { var x = false; return (x--); }";
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(0));
+    }
+
+    #[test]
+    fn postfix_update_on_number_is_unchanged() {
+        // The coercion must be a no-op for an already-numeric place: 5;x++ -> 11.
+        let src = "function main(input) { var x = 5; var y = x++; return y + x; }";
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(11));
+    }
+
+    #[test]
+    fn statement_position_increment_coerces_to_number() {
+        // `s++;` in statement position is `s = ToNumber(s) + 1`, not `s = s + 1`
+        // (which would concatenate): `"3"++` is 4, not "31". (Regression: the
+        // statement-position lowering dropped the coercion.)
+        let src = "function main(input) { var s = \"3\"; s++; return s; }";
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(4));
+    }
+
+    #[test]
+    fn discarded_may_throw_expression_is_not_dropped() {
+        // `undefined.length;` as a statement throws (TypeError); discarding its
+        // value must not drop the access. (Regression: the PE eliminated the
+        // statement, so the residual returned 0 without throwing. Node-verified;
+        // the reference interpreter can't evaluate the access, so we assert the
+        // residual still performs it.)
+        let src = "function main(input) { undefined.length; return 0; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains(".length"), "discarded may-throw access was dropped:\n{js}");
+    }
+
+    #[test]
+    fn discarded_pure_expression_is_still_dropped() {
+        // A discarded expression that cannot throw stays eliminated.
+        let src = "function main(input) { (input + 1); (2 >= 3); return 0; }";
+        let prog = specialize(src).unwrap().1;
+        assert_eq!(prog.blocks.len(), 1);
+        assert_eq!(run_residual(src, 5).unwrap(), DeepVal::num(0));
+    }
+
+    #[test]
+    fn math_integer_methods_fold() {
+        // The deterministic integer-result Math methods fold over static args.
+        let src = "function main(input) {
+            return Math.floor(5) + Math.abs(-7) + Math.max(3, 9, 2) + Math.min(1, 4) + Math.sign(-2);
+        }";
+        // 5 + 7 + 9 + 1 + (-1) = 21. (Not `check`-able: the reference interpreter
+        // can't resolve the `Math` global; the residual folds to a constant.)
+        let prog = specialize(src).unwrap().1;
+        assert_eq!(run_residual(src, 0).unwrap(), DeepVal::num(21));
+        assert_eq!(prog.blocks.len(), 1, "static Math should fully fold");
+    }
+
+    #[test]
+    fn math_dynamic_float_and_random_pass_through() {
+        // A dynamic arg, an implementation-approximated method (`sin`), and
+        // the non-deterministic `random` must all residualize. `sqrt` is
+        // correctly rounded by IEEE, so it folds.
+        assert!(to_js("function main(input) { return Math.floor(input); }")
+            .unwrap()
+            .contains("Math.floor"));
+        assert!(to_js("function main(input) { return Math.sin(1); }")
+            .unwrap()
+            .contains("Math.sin"));
+        assert_folds_to("function main(input) { return Math.sqrt(2); }", "return 1.4142135623730951;");
+        assert!(to_js("function main(input) { return Math.random(); }")
+            .unwrap()
+            .contains("Math.random"));
+    }
+
+    #[test]
+    fn higher_order_with_lifted_arrow() {
+        let src = "
+            function map(xs, f) {
+                let out = [];
+                for (let i = 0; i < xs.length; i = i + 1) {
+                    out.push(f(xs[i]));
+                }
+                return out;
+            }
+            function main(x) { return map([x, x + 1, 7], (v) => v * 2); }";
+        let prog = check(src, &[0, 3, 9]);
+        assert_eq!(
+            run_residual(src, 3).unwrap(),
+            DeepVal::Array(vec![DeepVal::num(6), DeepVal::num(8), DeepVal::num(14)])
+        );
+        let _ = prog;
+    }
+
+    /// The Futamura projection on REAL JavaScript: an expression interpreter,
+    /// written as ordinary JS and dispatching with `switch`, specialized against
+    /// a static AST with a dynamic environment. The interpreter and AST vanish.
+    #[test]
+    fn futamura_expression_interpreter() {
+        let src = r#"
+            function evalNode(node, env) {
+                switch (node.op) {
+                    case "lit": return node.val;
+                    case "var": return env[node.name];
+                    case "add": return evalNode(node.l, env) + evalNode(node.r, env);
+                    case "mul": return evalNode(node.l, env) * evalNode(node.r, env);
+                    default: return 0;
+                }
+            }
+            function main(x) {
+                // AST for (x + 3) * (x + x)
+                let ast = {
+                    op: "mul",
+                    l: { op: "add", l: { op: "var", name: "x" }, r: { op: "lit", val: 3 } },
+                    r: { op: "add", l: { op: "var", name: "x" }, r: { op: "var", name: "x" } }
+                };
+                let env = { x: x };
+                return evalNode(ast, env);
+            }"#;
+        let prog = check(src, &[-3, 0, 1, 7, 42]);
+        assert_eq!(
+            prog.blocks.len(),
+            1,
+            "interpreter + AST did not fully specialize away"
+        );
+        // residual computes (x + 3) * (x + x)
+        // (in f64: x = -3 gives 0 * -6 = -0, as in JS)
+        for x in [-3i64, 0, 1, 7, 42] {
+            let xf = x as f64;
+            assert_eq!(
+                run_residual(src, x).unwrap(),
+                DeepVal::Num(partial::jsnum::JsNum((xf + 3.0) * (xf + xf)))
+            );
+        }
+    }
+
+    /// A Brainfuck interpreter written in real JS, specialized against a static
+    /// BF program (with the dynamic input fed into cell 0 via `,`).
+    // A Brainfuck interpreter in real JS, fed a pre-parsed BF AST (so the JS
+    // stays in-subset: no string indexing). The program
+    // ",++++++.>+++++++++++++[->+++++<]>." reads input, +6, prints; then computes
+    // 65 with a static loop and prints it.
+    const BRAINFUCK_SRC: &str = r#"
+            function exec(node, tape, ptr, out, input, inptr) {
+                switch (node.op) {
+                    case "add": { tape[ptr] = tape[ptr] + node.n; break; }
+                    case "move": { ptr = ptr + node.n; break; }
+                    case "out": { out.push(tape[ptr]); break; }
+                    case "in": { tape[ptr] = input[inptr]; inptr = inptr + 1; break; }
+                    case "loop": {
+                        while (tape[ptr] !== 0) {
+                            let r = exec(node.seq, tape, ptr, out, input, inptr);
+                            ptr = r[0]; inptr = r[1];
+                        }
+                        break;
+                    }
+                    case "seq": {
+                        let i = 0;
+                        while (i < node.body.length) {
+                            let r = exec(node.body[i], tape, ptr, out, input, inptr);
+                            ptr = r[0]; inptr = r[1];
+                            i = i + 1;
+                        }
+                        break;
+                    }
+                }
+                return [ptr, inptr];
+            }
+            function main(x) {
+                let tape = [0, 0, 0, 0, 0, 0, 0, 0];
+                let out = [];
+                let input = [x];
+                let program = {
+                    op: "seq",
+                    body: [
+                        { op: "in" },
+                        { op: "add", n: 6 },
+                        { op: "out" },
+                        { op: "move", n: 1 },
+                        { op: "add", n: 13 },
+                        { op: "loop", seq: { op: "seq", body: [
+                            { op: "add", n: -1 },
+                            { op: "move", n: 1 },
+                            { op: "add", n: 5 },
+                            { op: "move", n: -1 }
+                        ]}},
+                        { op: "move", n: 1 },
+                        { op: "out" }
+                    ]
+                };
+                let r = exec(program, tape, 0, out, input, 0);
+                return out;
+            }"#;
+
+    #[test]
+    fn futamura_brainfuck() {
+        let src = BRAINFUCK_SRC;
+        let prog = check(src, &[0, 1, 5, 65, 200]);
+        assert_eq!(prog.blocks.len(), 1, "BF interpreter did not specialize away");
+        for x in [0i64, 1, 5, 65, 200] {
+            assert_eq!(
+                run_residual(src, x).unwrap(),
+                DeepVal::Array(vec![DeepVal::num(x + 6), DeepVal::num(65)])
+            );
+        }
+    }
+
+    // ---- JS code generation ----
+
+    /// The emitted JS must at least be syntactically valid (re-parseable).
+    fn assert_valid_js(js: &str) {
+        parse(js).unwrap_or_else(|e| panic!("emitted invalid JS: {e}\n--- js ---\n{js}"));
+    }
+
+    /// Serialize a DeepVal the way `JSON.stringify` would, for node comparison.
+    fn dv_json(v: &DeepVal) -> String {
+        match v {
+            DeepVal::Num(n) => if n.f().is_finite() { n.to_js_string() } else { "null".to_string() },
+            DeepVal::Bool(b) => b.to_string(),
+            DeepVal::Str(s) => format!("{s:?}"),
+            DeepVal::Undef => "null".to_string(), // JSON.stringify(undefined inside) -> null
+            DeepVal::Null => "null".to_string(),
+            DeepVal::Array(xs) => {
+                let parts: Vec<String> = xs.iter().map(dv_json).collect();
+                format!("[{}]", parts.join(","))
+            }
+            DeepVal::Object(fs) => {
+                let parts: Vec<String> =
+                    fs.iter().map(|(k, v)| format!("{k:?}:{}", dv_json(v))).collect();
+                format!("{{{}}}", parts.join(","))
+            }
+            DeepVal::Closure(_) => "\"<closure>\"".to_string(),
+        }
+    }
+
+    /// Run emitted JS under node (if present) and compare to the reference for
+    /// each input. Returns false if node is unavailable (test then only checks
+    /// syntactic validity).
+    fn run_under_node(js: &str, vm: &Js, inputs: &[i64]) -> bool {
+        use std::process::Command;
+        if Command::new("node").arg("--version").output().is_err() {
+            return false;
+        }
+        for &inp in inputs {
+            let harness = format!("{js}\nprocess.stdout.write(JSON.stringify(main({inp})));\n");
+            let out = Command::new("node")
+                .arg("-e")
+                .arg(&harness)
+                .output()
+                .expect("spawn node");
+            assert!(
+                out.status.success(),
+                "node failed on input {inp}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let got = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let want = dv_json(&vm.run_reference(inp));
+            assert_eq!(got, want, "node output diverged from reference at input={inp}\njs:\n{js}");
+        }
+        true
+    }
+
+    #[test]
+    fn emits_clean_straight_line_js() {
+        let js = to_js("function main(x) { return (x + 3) * 2; }").unwrap();
+        assert!(js.contains("return (v0 + 3) * 2;"), "got:\n{js}");
+        assert!(!js.contains("switch"), "straight-line should not use a trampoline:\n{js}");
+        assert_valid_js(&js);
+    }
+
+    #[test]
+    fn emits_and_runs_loop_js() {
+        let src = "
+            function main(n) {
+                let s = 0;
+                for (let i = 0; i < n; i = i + 1) { s = s + i; }
+                return s;
+            }";
+        let js = to_js(src).unwrap();
+        assert_valid_js(&js);
+        let funcs = compile(src).unwrap();
+        let vm = Js::new(&funcs);
+        let ran = run_under_node(&js, &vm, &[0, 1, 5, 20]);
+        assert!(ran, "node should be available in this environment");
+    }
+
+    /// Soundness guard for the duplication fix (`Js::specialize_program`): the
+    /// fix repairs a partial-evaluator identity bug where ONE abstract heap
+    /// object was reconstructed at several control-flow merge points, becoming
+    /// several distinct runtime objects (a write to one invisible to a read of
+    /// another — this broke `simple.js`'s byte array at the 4th `Date.now`
+    /// effect). The repair escapes such objects at their CREATION site (the
+    /// program point that provably dominates every use), building them once as a
+    /// runtime variable that no merge point reconstructs.
+    ///
+    /// A true minimal repro of the cross-merge-point duplication is impractical
+    /// (any small dynamic program escapes the object to a single var first), so
+    /// this test instead verifies the property the fix relies on: escaping an
+    /// object at creation is OBSERVATIONALLY TRANSPARENT. `force_escape_all`
+    /// escapes EVERY object at creation; across varied programs (nested arrays,
+    /// mutated objects, arrays of objects with shared identity, a trampoline-style
+    /// dynamic dispatch) the residual must stay equivalent to the reference. A
+    /// non-dominating construction — the failure of the rejected flat-memo fix —
+    /// would read `undefined` or throw, which node-equivalence catches.
+    #[test]
+    fn escape_at_creation_is_transparent() {
+        let progs = [
+            // nested array mutated through static indices, carried across a loop
+            "function main(n){var a=[[1,2],[3,4]];var s=0;for(var i=0;i<n;i=i+1){\
+             a[0][0]=a[0][0]+1;s=s+a[1][1];}return s+a[0][0];}",
+            // object whose fields are mutated and read across a loop
+            "function main(n){var o={x:1,y:2};var s=0;for(var i=0;i<n;i=i+1){\
+             o.x=o.x+o.y;s=s+o.x;}return s;}",
+            // array of objects with identity shared across iterations
+            "function main(n){var xs=[{v:0},{v:0}];for(var i=0;i<n;i=i+1){\
+             xs[0].v=xs[0].v+1;xs[1].v=xs[1].v+xs[0].v;}return xs[0].v+xs[1].v;}",
+            // trampoline-style dynamic dispatch carrying a nested array (the
+            // closest small mimic of simple.js's structure)
+            "function main(n){var a=[[10,20,30]];var pc=n&3;var acc=0;var g=0;\
+             while(g<10){if(pc===0){a[0][0]=a[0][0]+1;pc=1;}\
+             else if(pc===1){acc=acc+a[0][1];pc=2;}\
+             else if(pc===2){a[0][2]=a[0][2]+acc;pc=3;}else{pc=0;}g=g+1;}\
+             return acc+a[0][0]+a[0][2];}",
+        ];
+        let mut ran = false;
+        for src in progs {
+            let funcs = compile(src).unwrap();
+            let vm = Js::new(&funcs);
+            vm.set_force_escape_all(true);
+            let mut prog = vm.specialize_program();
+            partial::residual::simplify(&mut prog);
+            let js = codegen::program_to_js(&vm, &prog, vm.input_var(), false, &[]);
+            assert_valid_js(&js);
+            ran |= run_under_node(&js, &vm, &[0, 1, 2, 3, 5, 8, 13]);
+        }
+        assert!(ran, "node should be available in this environment");
+    }
+
+    #[test]
+    fn emits_and_runs_futamura_interpreter_js() {
+        let src = r#"
+            function evalNode(node, env) {
+                switch (node.op) {
+                    case "lit": return node.val;
+                    case "var": return env[node.name];
+                    case "add": return evalNode(node.l, env) + evalNode(node.r, env);
+                    case "mul": return evalNode(node.l, env) * evalNode(node.r, env);
+                    default: return 0;
+                }
+            }
+            function main(x) {
+                let ast = { op: "mul",
+                    l: { op: "add", l: { op: "var", name: "x" }, r: { op: "lit", val: 3 } },
+                    r: { op: "add", l: { op: "var", name: "x" }, r: { op: "var", name: "x" } } };
+                return evalNode(ast, { x: x });
+            }"#;
+        let js = to_js(src).unwrap();
+        assert!(js.contains("return (v0 + 3) * (v0 + v0);"), "got:\n{js}");
+        assert_valid_js(&js);
+        let vm = Js::new(&compile(src).unwrap());
+        run_under_node(&js, &vm, &[-3, 0, 7, 42]);
+    }
+
+    #[test]
+    fn emits_and_runs_brainfuck_js() {
+        let src = BRAINFUCK_SRC;
+        let js = to_js(src).unwrap();
+        assert_valid_js(&js);
+        let vm = Js::new(&compile(src).unwrap());
+        run_under_node(&js, &vm, &[0, 1, 5, 65, 200]);
+    }
+
+    #[test]
+    fn clear_errors_for_unsupported() {
+        let err = |src: &str| specialize(src).err().expect("expected an error");
+        // no main and no top-level code
+        assert!(compile("function f(){}").err().unwrap().contains("main"));
+        // still unsupported statements / control flow:
+        assert_node_equiv("function main(x){ a: for (;;) { for (;;) { break a; } } return x; }", &[0, 5]);
+        // A generator that escapes to runtime code is rebuilt from its
+        // residual generator function; consumed statically it folds.
+        assert_node_equiv("function* g(){ yield 1; } function main(x){ return [...g()].concat([x]); }", &[0, 5]);
+        assert_node_equiv("function* g(){ yield 1; yield 2; } function main(x){ return [...g(), x]; }", &[0, 5]);
+        // (`for..of` and `do..while` are supported now.)
+        assert_node_equiv("function main(x){ for (const y of [x, 2]) { return y; } }", &[0, 5]);
+        assert_node_equiv("function main(x){ do { x = x + 1; } while (x < 3); return x; }", &[0, 5]);
+    }
+
+    /// Closures that capture outer variables now work (capture by value): a
+    /// top-level `adder` returns a closure capturing `n`.
+    #[test]
+    fn capturing_closure_works() {
+        let src = "
+            function adder(n) { return function (y) { return y + n; }; }
+            function main(x) {
+                var add5 = adder(5);
+                return add5(x);   // x + 5
+            }";
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "closure should fully inline:\n{}", to_js(src).unwrap());
+        assert_node_equiv(src, &[0, 3, -2]);
+    }
+
+    // ---- pass-through (opaque) calls — Increment 2, validated by Node ----
+
+    /// A call to an unmodeled global function passes through; its operands still
+    /// specialize.
+    #[test]
+    fn passthrough_global_call() {
+        let src = r#"function main(x) { return encodeURIComponent("a b") + x; }"#;
+        let js = to_js(src).unwrap();
+        assert!(js.contains(r#"encodeURIComponent("a b")"#), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3, 100]);
+    }
+
+    /// Residual expressions print with only the parentheses precedence needs:
+    /// non-associative right operands, `**` operands, `??` beside `||`/`&&`,
+    /// unary minus on a negative operand, ternaries inside operators.
+    #[test]
+    fn minimal_parentheses_keep_meaning() {
+        let src = r#"function main(x) {
+            var s = "s" + (x + 1);
+            var t = x - (x - 3);
+            var p = (-x) ** 2;
+            var q = 2 ** (x ** 0);
+            var n = (x ?? 1) || 2;
+            var m = x || (x ?? 3);
+            var u = -(-x);
+            var c = (x > 1 ? 10 : 20) + 1;
+            var d = (x, x) > 1;
+            var e = !(x < 2) === true;
+            var f = typeof (x + 1);
+            var g = (x + "a").length;
+            var h = [x + 1, (x > 2) ? x : -x];
+            return [s, t, p, q, n, m, u, c, d, e, f, g, h.join("/")].join(",");
+        }"#;
+        let js = to_js(src).unwrap();
+        assert!(js.contains("\"s\" + (v0 + 1)"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 1, 2, 3, -4]);
+    }
+
+    /// `parseInt`/`parseFloat`/`isNaN` and the `Number.*` predicates fold on
+    /// static arguments.
+    #[test]
+    fn number_parsing_folds() {
+        let src = r#"function main(x) { return [parseInt("  42px"), parseInt("-0"), parseInt("0x1f"), parseInt("z", 36), parseInt("12", 1), parseFloat("3.5e2x"), parseFloat(".5"), isNaN("a"), isFinite("1e3"), Number.isNaN("x"), Number.isInteger(5), Number.isSafeInteger(2 ** 53), Number.parseInt("7"), 1 / parseInt("-0"), x]; }"#;
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("parse") && !js.contains("isNaN") && !js.contains("isFinite"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 3]);
+    }
+
+    /// A method call on a runtime global (`Math.floor`) passes through, with the
+    /// argument (which itself uses the unmodeled `/`) specialized.
+    #[test]
+    fn passthrough_method_call() {
+        let src = "function main(x) { return Math.floor(x / 2); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("Math.floor("), "got:\n{js}");
+        assert_node_equiv(src, &[0, 1, 7, 8, 99, -5]);
+    }
+
+    /// A method call on a dynamic primitive (the input) passes through.
+    #[test]
+    fn passthrough_method_on_dynamic() {
+        let src = "function main(x) { return x.toString(); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("v0.toString()"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 42, -7]);
+    }
+
+    /// An effectful call is evaluated *once* into a temp and the temp is reused;
+    /// it is never duplicated even when the result is used multiple times.
+    #[test]
+    fn opaque_call_is_single_eval() {
+        let src = "function main(x) { let y = Math.abs(x); return y + y; }";
+        let js = to_js(src).unwrap();
+        assert_eq!(js.matches("Math.abs(").count(), 1, "call should be evaluated once:\n{js}");
+        assert_node_equiv(src, &[-5, 0, 9]);
+    }
+
+    /// The payoff for Increment 2: an interpreter whose dispatch and AST vanish,
+    /// leaving an unmodeled builtin *call* applied to a specialized operand.
+    #[test]
+    fn passthrough_call_inside_interpreter() {
+        let src = r#"
+            function evalNode(node, env) {
+                switch (node.op) {
+                    case "lit": return node.val;
+                    case "var": return env[node.name];
+                    case "add": return evalNode(node.l, env) + evalNode(node.r, env);
+                    case "sqrt": return Math.sqrt(evalNode(node.l, env));
+                    default: return 0;
+                }
+            }
+            function main(x) {
+                // sqrt(x + x)
+                let ast = { op: "sqrt", l: { op: "add",
+                    l: { op: "var", name: "x" }, r: { op: "var", name: "x" } } };
+                return evalNode(ast, { x: x });
+            }"#;
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "interpreter did not specialize away");
+        let js = to_js(src).unwrap();
+        assert!(js.contains("Math.sqrt("), "the builtin call should pass through:\n{js}");
+        assert_node_equiv(src, &[0, 2, 8, 50]);
+    }
+
+    /// A method call evaluates its callee — including the `recv.method` member
+    /// access, which throws if `recv` is null/undefined — BEFORE its arguments.
+    /// When an argument is impure, the residual emits its side effects eagerly, so
+    /// without a receiver coercibility guard (`Instr::ChkCoercible`) the residual
+    /// would run the argument first: the receiver-throw moves after the argument's
+    /// mutation, changing observable behavior. Here the original throws at
+    /// `a.push`/`a.foo` before `b++` runs (so `b` stays `undefined` and the catch's
+    /// `b.x = 1` throws); a residual that ran `b++` first would leave `b = NaN`,
+    /// making `b.x = 1` a silent no-op and swallowing the throw. (Regression for the
+    /// fuzzer's seed-20968 throw-mismatch.)
+    #[test]
+    fn method_callee_throws_before_impure_arg() {
+        // push receiver, statically-undefined
+        assert_node_equiv_outcome(
+            "function main(input) { var a; var b; try { a.push(b++); } \
+             catch (e) { b.x = 1; } return 0; }",
+            &[0, 1],
+        );
+        // general method callee, statically-undefined receiver
+        assert_node_equiv_outcome(
+            "function main(input) { var a; var b; var r = 0; try { r = a.foo(b++); } \
+             catch (e) { b.x = 1; } return r; }",
+            &[0, 1],
+        );
+        // dynamic receiver that is null/undefined at runtime, carried through the
+        // residualized try as a runtime variable (the form the fuzzer hit)
+        assert_node_equiv_outcome(
+            "function main(input) { var a; if (input > 100) { a = [1]; } var b = input; \
+             try { a.push(b++); } catch (e) { b.y = 1; } return b; }",
+            &[0, 5],
+        );
+        // a provably-coercible receiver (Math) with an impure arg must NOT be
+        // guarded away or mis-thrown — it just folds the call through
+        assert_node_equiv_outcome(
+            "function main(input) { var b = input; return Math.max(b++, b++); }",
+            &[0, 3, 7],
+        );
+    }
+
+    /// A `break`/`continue` inside a `try` body jumps out of the loop/switch
+    /// WITHOUT running the body's `PopHandler`, so the handler must be popped
+    /// explicitly at the non-local exit — otherwise it leaks past the loop and a
+    /// later residual operation trips the "operation inside an active try/catch"
+    /// guard (the fuzzer's seed-1042/20252/21217/21500 probe-bug panics). These
+    /// programs must specialize cleanly and stay equivalent to the original.
+    #[test]
+    fn break_continue_out_of_try_pops_handler() {
+        // continue out of a try, then a residual op after the loop (the seed-1042
+        // shape): must not panic, must stay equivalent.
+        assert_node_equiv_outcome(
+            "function main(input) { for (var i = 0; i < 1; i = i + 1) { \
+             try { continue; } catch (e) {} } return input[[null]]; }",
+            &[0, 3],
+        );
+        // break out of a try inside a while, with a residual op after
+        assert_node_equiv_outcome(
+            "function main(input) { var n = input; while (n > 0) { \
+             try { break; } catch (e) {} n = n - 1; } return input.x; }",
+            &[0, 2],
+        );
+        // break out of a try nested in a switch nested in a loop (multiple open
+        // handlers to pop)
+        assert_node_equiv_outcome(
+            "function main(input) { var s = 0; for (var i = 0; i < 3; i = i + 1) { \
+             switch (i) { case 0: try { try { break; } catch (a) {} } catch (b) {} \
+             default: s = s + 1; } } return s; }",
+            &[0, 1],
+        );
+        // continue past a try, then a residual op after the loop must still be
+        // reached with no active handler
+        assert_node_equiv_outcome(
+            "function main(input) { for (var i = 0; i < 2; i = i + 1) { \
+             try { continue; } catch (e) {} } return input.length; }",
+            &[0, 4],
+        );
+    }
+
+    /// A prefix `--x`/`++x` whose place is loop-carried: its result is the new
+    /// value read back from the place, a live expression aliasing that place. When
+    /// the place is later reassigned (the loop-carried materialization of the very
+    /// slot just updated), an un-snapshotted result re-reads the new value and
+    /// re-applies the `± 1`, diverging. Here `(--input)` in the loop condition is
+    /// used while `input` is the loop-carried slot; the residual must single-
+    /// evaluate it. (Regression for the fuzzer's seed-60510 value divergence:
+    /// orig returned 2, the residual returned 1 from a double-decrement.)
+    #[test]
+    fn prefix_update_of_loop_carried_place_is_single_evaluated() {
+        assert_node_equiv(
+            "function main(input) { \
+               for (var a = 0; a < 4; a = a + 1) { \
+                 if (((--input) ?? (input || a))) { \
+                   input.b = (\"k\" * \"x\"); \
+                   if (a) { return a; } \
+                 } \
+               } \
+               return 0; \
+             }",
+            &[0, 1, 2, 3, 4, 5, 8],
+        );
+        // a simpler form: prefix decrement reused in the same expression while the
+        // place is loop-carried
+        assert_node_equiv(
+            "function main(input) { var s = 0; \
+               while (input > 0) { s = s + (--input) + input; } return s; }",
+            &[0, 1, 3, 6],
+        );
+    }
+
+    // ---- object escape (Increment 3) — validated by Node ----
+
+    /// A tracked object passed to an unmodeled call escapes: it is materialized
+    /// into a residual object and handed to the call.
+    #[test]
+    fn object_escapes_into_call() {
+        let src = "function main(x) { let o = { a: x, b: 2 }; return JSON.stringify(o); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("{a: v0, b: 2}"), "object should materialize:\n{js}");
+        assert!(js.contains("JSON.stringify("), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3]);
+    }
+
+    /// A tracked array escapes into a call the same way.
+    #[test]
+    fn array_escapes_into_call() {
+        let src = "function main(x) { let xs = [x, x + 1]; return JSON.stringify(xs); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("[v0, v0 + 1]"), "array should materialize:\n{js}");
+        assert_node_equiv(src, &[0, 7, -2]);
+    }
+
+    /// After an object escapes, reads of its fields residualize (the callee may
+    /// have mutated it), so they read the runtime object.
+    #[test]
+    fn read_after_escape() {
+        let src = "function main(x) { let o = { a: x }; let s = Object.getOwnPropertyDescriptors(o); return o.a + 1; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains(".a + 1;"), "read should be opaque:\n{js}");
+        assert_node_equiv(src, &[0, 9, -4]);
+    }
+
+    /// After an object escapes, writes to its fields residualize too.
+    #[test]
+    fn write_after_escape() {
+        let src = "function main(x) {
+            let o = { a: x };
+            let s = Object.getOwnPropertyDescriptors(o);
+            o.a = 99;
+            return o.a;
+        }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains(".a = 99;"), "write should residualize:\n{js}");
+        assert_node_equiv(src, &[1, 5]);
+    }
+
+    /// Alias invalidation: two locals refer to the same object; passing one to a
+    /// call invalidates the *other* alias too, so reading through it residualizes
+    /// (and yields the same runtime object).
+    #[test]
+    fn alias_invalidated_on_escape() {
+        let src = "function main(x) {
+            let o = { a: x };
+            let p = o;
+            let s = JSON.stringify(o);
+            return p.a;
+        }";
+        assert_node_equiv(src, &[0, 8, -1]);
+    }
+
+    /// A closure passed to unmodeled code now escapes as a residual function
+    /// (no longer an error).
+    #[test]
+    fn closure_into_call_residualizes() {
+        let js = to_js("function main(x) { let f = () => x; return frob(f); }").unwrap();
+        assert!(js.contains("function __rf") || js.contains("function __mk"), "should emit a residual function:\n{js}");
+        assert!(js.contains("frob("), "the call should pass through:\n{js}");
+    }
+
+    /// Run `{js}; <expr>` under node and return stdout (None if no node).
+    fn node_eval_expr(js: &str, expr: &str) -> Option<String> {
+        use std::process::Command;
+        if Command::new("node").arg("--version").output().is_err() {
+            return None;
+        }
+        let harness = format!("{js}\nprocess.stdout.write(String({expr}));");
+        let out = Command::new("node").arg("-e").arg(&harness).output().expect("spawn node");
+        assert!(out.status.success(), "node failed on `{expr}`: {}", String::from_utf8_lossy(&out.stderr));
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// TypeScript: an enum is the object TypeScript makes (numeric members
+    /// map back to their names), a parameter property assigns `this.x`
+    /// (after `super()` in a derived class), and annotations erase. (Node
+    /// cannot run these unstripped, so the expected values are spelled out.)
+    #[test]
+    fn typescript_enums_and_parameter_properties() {
+        let src = r#"
+            enum Dir { Up, Down = 4, Left, Name = "n" }
+            const enum Bits { A = 1, B = -2 }
+            class Base { constructor(public tag: string) {} }
+            class Pt extends Base {
+                constructor(private x: number, readonly y: number = 2) { super("pt"); }
+                sum(this: Pt): number { return this.x + this.y; }
+            }
+            function main(n: number) {
+                const p = new Pt(n);
+                return [Dir.Up, Dir[4], Dir.Left, Dir.Name, Dir[5], Bits.B, p.sum(), p.tag, Object.keys(Dir).join("")].join(",");
+            }"#;
+        let opts = LowerOpts { typescript: true, trust_types: true, ..LowerOpts::default() };
+        let js = to_js_with(src, "main", true, false, &opts).unwrap();
+        assert_valid_js(&js);
+        if let Some(got) = node_eval_expr(&js, "main(3)") {
+            assert_eq!(got, "0,Down,5,n,Left,-2,5,pt,045UpDownLeftName", "residual:\n{js}");
+        }
+    }
+
+    /// A closure that ESCAPES (is returned) becomes a residual function, bound
+    /// with its captured value; calling it later yields the right result.
+    #[test]
+    fn escaping_closure_becomes_residual_function() {
+        let src = "
+            function adder(n) { return function (y) { return y + n; }; }
+            function main(x) { return adder(x); }   // closure escapes (returned)
+        ";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("function __rf0(") || js.contains("function __mk0("), "expected a residual function:\n{js}");
+        assert!(js.contains("__mk0(v0)"), "captures should be bound by the factory:\n{js}");
+        for (x, arg) in [(5, 3), (0, 10), (-2, 7)] {
+            match (
+                node_eval_expr(src, &format!("main({x})({arg})")),
+                node_eval_expr(&js, &format!("main({x})({arg})")),
+            ) {
+                (Some(o), Some(s)) => assert_eq!(o, s, "diverged at main({x})({arg})\n{js}"),
+                _ => return,
+            }
+        }
+    }
+
+    /// Capture-by-reference: a closure that MUTATES a captured variable shares
+    /// the binding. Here it folds — `inc` mutates the boxed cell, `main` sees 2.
+    #[test]
+    fn capture_by_reference_mutation_visible() {
+        let src = "function main(x) {
+            var c = 0;
+            var inc = function () { c = c + 1; };
+            inc(); inc();
+            return c;   // 2 (by-reference); would be 0 if captured by value
+        }";
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "should fold:\n{}", to_js(src).unwrap());
+        assert_node_equiv(src, &[0, 9, -4]); // always 2
+    }
+
+    /// A counter closure that escapes: the shared cell is captured by reference,
+    /// so repeated calls keep incrementing the same state.
+    #[test]
+    fn capture_by_reference_escaping_counter() {
+        let src = "
+            function makeCounter(start) {
+                var n = start;
+                return function () { n = n + 1; return n; };
+            }
+            function main(x) { return makeCounter(x); }
+        ";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("function __rf") || js.contains("function __mk"), "counter should be a residual fn:\n{js}");
+        // call the returned closure several times; the captured cell is shared.
+        for x in [0, 5, -2] {
+            match (
+                node_eval_expr(src, &format!("(function(){{ var c = main({x}); return [c(), c(), c()]; }})()")),
+                node_eval_expr(&js, &format!("(function(){{ var c = main({x}); return [c(), c(), c()]; }})()")),
+            ) {
+                (Some(o), Some(s)) => assert_eq!(o, s, "counter diverged at x={x}\n{js}"),
+                _ => return,
+            }
+        }
+    }
+
+    /// Nested `function` declarations that share mutable outer state via
+    /// capture-by-reference, plus one calling another (the simple.js shape).
+    #[test]
+    fn nested_fn_decls_share_state() {
+        let src = "function main(x) {
+            var total = 0;
+            function add(n) { total = total + n; }
+            function addTwice(n) { add(n); add(n); }
+            addTwice(x);
+            add(1);
+            return total;   // x + x + 1
+        }";
+        assert_node_equiv(src, &[0, 4, -3, 10]);
+    }
+
+    /// A modeled built-in: `new TextDecoder().decode(new Uint8Array(staticBytes))`
+    /// folds to a string literal (Node validates against the real built-in).
+    #[test]
+    fn builtin_text_decoder_folds() {
+        let src = "function main(input) {
+            var bytes = [72, 105, 33];  // \"Hi!\"
+            return new TextDecoder().decode(new Uint8Array(bytes));
+        }";
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "should fold to one block:\n{}", to_js(src).unwrap());
+        let js = to_js(src).unwrap();
+        assert!(js.contains("\"Hi!\""), "decode should fold to a string literal:\n{js}");
+        assert_node_equiv(src, &[0]);
+    }
+
+    /// `String.fromCharCode(...)` over static numbers folds to a string literal.
+    #[test]
+    fn builtin_string_from_char_code_folds() {
+        let src = "function main(input) { return String.fromCharCode(65, 66, 67); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("\"ABC\""), "should fold to \"ABC\":\n{js}");
+        assert_node_equiv(src, &[0]);
+    }
+
+    /// A Uint8Array built from static bytes supports element and length reads,
+    /// folding a hand loop over it.
+    #[test]
+    fn builtin_uint8array_indexing_folds() {
+        let src = "function main(input) {
+            var a = new Uint8Array([10, 20, 30]);
+            return a[0] + a[1] + a[2] + a.length;   // 63
+        }";
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "should fold:\n{}", to_js(src).unwrap());
+        assert_node_equiv(src, &[0]);
+    }
+
+    /// Postfix/prefix increment used for its *value* (not just as a statement),
+    /// including reading an array through a moving index (`arr[i++]`), the
+    /// simple.js byte-reader shape.
+    #[test]
+    fn update_as_expression() {
+        // postfix yields old, prefix yields new; both mutate.
+        let post = "function main(x) { var i = x; var a = i++; return a * 100 + i; }";
+        assert_node_equiv(post, &[0, 5, -3]);
+        let pre = "function main(x) { var i = x; var a = ++i; return a * 100 + i; }";
+        assert_node_equiv(pre, &[0, 5, -3]);
+        // read through a moving index into a static array (folds completely).
+        let reader = "function main(x) {
+            var data = [10, 20, 30, 40];
+            var p = 0;
+            var sum = data[p++] + data[p++] + data[p++];
+            return sum + x;   // 60 + x
+        }";
+        let (_, prog) = specialize(reader).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "should fold:\n{}", to_js(reader).unwrap());
+        assert_node_equiv(reader, &[0, 7, -1]);
+    }
+
+    /// A nested function declaration that *forward-references* a sibling declared
+    /// later (`a` calls `b` before `b`'s textual definition). Function-declaration
+    /// hoisting + the capture-by-reference cell make the forward reference resolve;
+    /// it folds to `(x * 2) + 1`.
+    #[test]
+    fn nested_fn_decls_forward_reference() {
+        let src = "function main(x) {
+            function a(n) { return b(n) + 1; }
+            function b(n) { return n * 2; }
+            return a(x);
+        }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("v0 * 2 + 1"), "should fold to (x*2)+1:\n{js}");
+        assert_node_equiv(src, &[0, 1, 2, 7, -3]);
+    }
+
+    /// A closure stored in an object that escapes also becomes a residual fn.
+    #[test]
+    fn closure_in_escaped_object() {
+        let src = "function main(x) { return { get: function () { return x * 2; } }; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("function __rf0(") || js.contains("function __mk0("), "expected a residual function:\n{js}");
+        for x in [5, 0, -3] {
+            match (
+                node_eval_expr(src, &format!("main({x}).get()")),
+                node_eval_expr(&js, &format!("main({x}).get()")),
+            ) {
+                (Some(o), Some(s)) => assert_eq!(o, s, "diverged at main({x}).get()\n{js}"),
+                _ => return,
+            }
+        }
+    }
+
+    // ---- pass-through (opaque) operators, validated by Node ----
+
+    /// Run a JS source (defining `main`) under node for one input; `None` if no
+    /// node is installed.
+    fn node_value(js_defining_main: &str, input: i64) -> Option<String> {
+        use std::process::Command;
+        if Command::new("node").arg("--version").output().is_err() {
+            return None;
+        }
+        let harness =
+            format!("{js_defining_main}\nprocess.stdout.write(JSON.stringify(main({input})));");
+        let out = Command::new("node").arg("-e").arg(&harness).output().expect("spawn node");
+        assert!(out.status.success(), "node failed: {}", String::from_utf8_lossy(&out.stderr));
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// The Node oracle for non-integer inputs: run `checks` (statements that
+    /// push JSON strings onto `out`, calling `main`) against both the original
+    /// and the residual, and require identical output.
+    fn assert_node_equiv_with(src: &str, checks: &str) {
+        use std::process::Command;
+        let js = to_js(src).unwrap();
+        assert_valid_js(&js);
+        if Command::new("node").arg("--version").output().is_err() {
+            return;
+        }
+        let run = |code: &str| {
+            let harness = format!("{code}\nconst out = [];\n{checks}\nprocess.stdout.write(out.join('|'));");
+            let o = Command::new("node").arg("-e").arg(&harness).output().expect("spawn node");
+            assert!(o.status.success(), "node failed: {}", String::from_utf8_lossy(&o.stderr));
+            String::from_utf8_lossy(&o.stdout).to_string()
+        };
+        let (orig, spec) = (run(src), run(&js));
+        assert_eq!(orig, spec, "residual diverged from the original\n--- residual ---\n{js}");
+    }
+
+    /// Like `node_value`, but captures a thrown exception as `"THROW:<Name>"`
+    /// instead of failing. Lets a test assert that a *throwing* program throws
+    /// identically in the original and the residual (the harness can't write a
+    /// thrown value, and `undefined`/`NaN` aren't JSON-distinguishable).
+    fn node_outcome(js_defining_main: &str, input: i64) -> Option<String> {
+        use std::process::Command;
+        if Command::new("node").arg("--version").output().is_err() {
+            return None;
+        }
+        let harness = format!(
+            "{js_defining_main}\n\
+             try {{ process.stdout.write('VAL:' + JSON.stringify(main({input}))); }}\n\
+             catch (e) {{ process.stdout.write('THROW:' + (e && e.constructor && e.constructor.name)); }}"
+        );
+        let out = Command::new("node").arg("-e").arg(&harness).output().expect("spawn node");
+        assert!(out.status.success(), "node failed: {}", String::from_utf8_lossy(&out.stderr));
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// Assert the residual matches the original *including* whether and how it
+    /// throws, for each input. Use for programs whose distinguishing behavior is
+    /// an exception (dead-store / dead-element may-throw).
+    fn assert_node_equiv_outcome(src: &str, inputs: &[i64]) {
+        let js = to_js(src).unwrap();
+        assert_valid_js(&js);
+        for &i in inputs {
+            match (node_outcome(src, i), node_outcome(&js, i)) {
+                (Some(orig), Some(spec)) => assert_eq!(
+                    orig, spec,
+                    "specialized outcome diverged from the original at input={i}\n\
+                     original: {orig}\n--- residual ---\n{js}"
+                ),
+                _ => return,
+            }
+        }
+    }
+
+    /// The Node oracle for pass-through programs: the emitted (specialized) JS
+    /// must agree with the *original* source for every input, both run in Node.
+    fn assert_node_equiv(src: &str, inputs: &[i64]) {
+        let js = to_js(src).unwrap();
+        assert_valid_js(&js);
+        for &i in inputs {
+            match (node_value(src, i), node_value(&js, i)) {
+                (Some(orig), Some(spec)) => assert_eq!(
+                    orig, spec,
+                    "specialized output diverged from the original at input={i}\n\
+                     original: {orig}\n--- residual ---\n{js}"
+                ),
+                _ => return, // node unavailable: assert_valid_js already ran
+            }
+        }
+    }
+
+    #[test]
+    fn passthrough_mod_then_fold() {
+        let src = "function main(x) { return (x % 10) + 1; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("v0 % 10 + 1"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 7, 10, 13, 99, -4]);
+    }
+
+    #[test]
+    fn passthrough_bitwise_and_ternary() {
+        let src = "function main(x) { return (x & 1) === 0 ? 100 : 200; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains('?') && js.contains('&'), "got:\n{js}");
+        assert_node_equiv(src, &[0, 1, 2, 3, 8, 15]);
+    }
+
+    #[test]
+    fn passthrough_logical_and() {
+        let src = "function main(x) { return (x > 0) && (x < 10); }";
+        assert_node_equiv(src, &[-5, 0, 5, 9, 10, 100]);
+    }
+
+    /// The payoff: an interpreter using an unmodeled operator (`/`). The dispatch
+    /// and AST still fully specialize away; only the `/` passes through.
+    #[test]
+    fn passthrough_inside_interpreter() {
+        let src = r#"
+            function evalNode(node, env) {
+                switch (node.op) {
+                    case "lit": return node.val;
+                    case "var": return env[node.name];
+                    case "add": return evalNode(node.l, env) + evalNode(node.r, env);
+                    case "div": return evalNode(node.l, env) / evalNode(node.r, env);
+                    default: return 0;
+                }
+            }
+            function main(x) {
+                let ast = { op: "div",
+                    l: { op: "add", l: { op: "var", name: "x" }, r: { op: "lit", val: 100 } },
+                    r: { op: "lit", val: 4 } };
+                return evalNode(ast, { x: x });
+            }"#;
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "interpreter did not specialize away");
+        let js = to_js(src).unwrap();
+        assert!(js.contains("/ 4"), "the `/` should pass through into the residual:\n{js}");
+        assert_node_equiv(src, &[0, 8, 13, -20]);
+    }
+
+    /// A heap object reaching an unmodeled operator escapes too (here string
+    /// concatenation coerces the object via its runtime value).
+    #[test]
+    fn object_escapes_into_operator() {
+        let src = r#"function main(x) { let o = { a: x }; return "" + JSON.stringify(o); }"#;
+        assert_node_equiv(src, &[0, 3, -5]);
+    }
+
+    // ---- try / catch / throw — modeled as control flow, validated by Node ----
+
+    /// A static `throw` caught locally is flattened into straight-line code: the
+    /// exception becomes control flow and disappears.
+    #[test]
+    fn static_throw_caught_folds() {
+        let src = "function main(x) { try { throw 7; } catch (e) { return e + x; } }";
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "exception control flow should flatten:\n{}", "");
+        let js = to_js(src).unwrap();
+        assert!(js.contains("return 7 + v0"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3]);
+    }
+
+    /// A conditional `throw` keeps the dynamic branch but still becomes ordinary
+    /// control flow (no runtime try/catch in the residual).
+    #[test]
+    fn conditional_throw() {
+        let src = "function main(x) {
+            let r = 0;
+            try { if (x > 0) { throw 1; } r = 2; } catch (e) { r = e + 10; }
+            return r;
+        }";
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("try"), "exceptions should be compiled away:\n{js}");
+        assert_node_equiv(src, &[-2, 0, 1, 5]);
+    }
+
+    /// A `throw` inside an inlined callee unwinds to the caller's `catch`.
+    #[test]
+    fn throw_unwinds_inlined_frame() {
+        let src = "
+            function fail(n) { throw n + 1; }
+            function main(x) {
+                try { fail(x); return 0; } catch (e) { return e + 100; }
+            }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("return v0 + 1 + 100"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 7, -9]);
+    }
+
+    /// `catch` with no binding works.
+    #[test]
+    fn catch_without_binding() {
+        let src = "function main(x) { try { throw 0; } catch { return x + 1; } }";
+        assert_node_equiv(src, &[0, 4, -2]);
+    }
+
+    /// An uncaught `throw` residualizes a real `throw`.
+    #[test]
+    fn uncaught_throw_residualizes() {
+        let src = "function main(x) { throw x + 1; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("throw v0 + 1;"), "got:\n{js}");
+    }
+
+    /// A `try` whose body has a may-throw residual op (an unmodeled call that
+    /// could throw) can't fold its exceptions into control flow, so it
+    /// residualizes a real `try`/`catch`. `missing` is an undefined global, so
+    /// `missing(x)` throws a ReferenceError the catch must handle at runtime.
+    #[test]
+    fn residual_try_passthrough_call() {
+        let src = "function main(x) { try { return missing(x); } catch (e) { return 0; } }";
+        let js = to_js(src).unwrap();
+        assert!(
+            js.contains("try {") && js.contains("} catch ("),
+            "should emit a residual try/catch:\n{js}"
+        );
+        assert_node_equiv(src, &[0, 5, -3, 42]);
+    }
+
+    /// A `try` whose body's only residual op is a PROVABLY-TOTAL builtin
+    /// (`Math.floor`, `Date.now`, …) cannot throw, so the `try`/`catch` is dead and
+    /// is correctly erased — `try { return Math.floor(x) } catch { return 0 }` ≡
+    /// `return Math.floor(x)`. This is the foundation for unrolling the simple.js
+    /// VM, whose work is wrapped in defensive try/catch around a `Date.now` read.
+    #[test]
+    fn total_builtin_in_try_folds_away() {
+        let src = "function main(x) { try { return Math.floor(x / 2); } catch (e) { return 0; } }";
+        let js = to_js(src).unwrap();
+        assert!(
+            !js.contains("try {") && js.contains("Math.floor("),
+            "a total-builtin try should erase to a plain expression:\n{js}"
+        );
+        assert_node_equiv(src, &[0, 5, -3, 42, 7]);
+    }
+
+    /// A variable mutated only via `++` inside a *computed member* (`arr[i++]`)
+    /// in a closure must still be captured by reference (boxed). Missing the
+    /// computed-property write would capture `i` by value and drop the
+    /// increment. Here it residualizes (the `try` forces it), so the bug would
+    /// surface in the residual; `main` returns `10*100 + 20 = 1020`.
+    #[test]
+    fn boxed_increment_in_computed_index() {
+        let src = "function main(x) {
+            var arr = [10, 20, 30];
+            var i = 0;
+            var read = function () { return arr[i++]; };
+            var a = 0, b = 0;
+            try { a = read(); b = read(); notDefined(); } catch (e) {}
+            return a * 100 + b + (x - x);
+        }";
+        assert_node_equiv(src, &[0, 7]);
+    }
+
+    /// A residual `try` whose body modifies a variable *before* a may-throw op:
+    /// the modification must commit in source order, so the value is observable
+    /// after the (caught) throw. `main(x)` returns `x + 1`.
+    #[test]
+    fn residual_try_body_mutation_ordered() {
+        let src = "function main(x) {
+            var n = x;
+            try { n = n + 1; notDefined(); } catch (e) {}
+            return n;
+        }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("try {") && js.contains("} catch ("), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3, 41]);
+    }
+
+    /// A residual `try` where the catch actually fires at runtime: calling an
+    /// undefined global throws, and the catch handles it.
+    #[test]
+    fn residual_try_catch_runs() {
+        let src = "function main(x) { try { return notDefined(x); } catch (e) { return x - 1; } }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("try {") && js.contains("} catch ("), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3]);
+    }
+
+    // ---- `var` (function-scoped, hoisted) ----
+
+    /// A `var` declared in a `for`-init is function-scoped, so it survives the
+    /// loop (here a static loop that unrolls; `i` is 3 afterwards).
+    #[test]
+    fn var_survives_loop() {
+        let src = "function main(x) {
+            var total = x;
+            for (var i = 0; i < 3; i = i + 1) { total = total + i; }
+            return total + i;   // i === 3 after the loop
+        }";
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "static loop should unroll:\n{}", to_js(src).unwrap());
+        assert_node_equiv(src, &[0, 5, -4]); // total = x+3, plus i(=3) => x+6
+    }
+
+    /// Redeclaring a `var` refers to the same binding.
+    #[test]
+    fn var_redeclaration() {
+        let src = "function main(x) { var a = x; var a = a + 1; return a; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("return v0 + 1"), "redeclared var should reuse the slot:\n{js}");
+        assert_node_equiv(src, &[0, 9, -2]);
+    }
+
+    /// `new` passes through as a residual constructor call (single-eval), with
+    /// args specialized; property reads on the result residualize.
+    #[test]
+    fn new_passes_through() {
+        let src = "function main(x) {
+            var d = new Date(x * 1000);   // unmodeled constructor, arg specialized
+            return d.getTime();           // method call on the result passes through
+        }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("new Date(v0 * 1000)"), "got:\n{js}");
+        // (Node would run it, but Date is time-dependent; just check structure +
+        // that the residual is well-formed JS.)
+        assert!(parse(&js).is_ok(), "emitted invalid JS:\n{js}");
+    }
+
+    /// `new Array(n)` is n holes, modeled: filled, it folds to a literal; a
+    /// partly filled one keeps its holes.
+    #[test]
+    fn new_array_is_modeled_with_holes() {
+        let src = "function main(x) {
+            var a = new Array(3);
+            a[0] = x; a[1] = x + 1; a[2] = x + 2;
+            var b = new Array(4);
+            b[1] = x;
+            return [a.join(), b.length, 0 in b, 1 in b, Object.keys(b).join()].join(';');
+        }";
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("new Array"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5, -1]);
+    }
+
+    /// `var` works across a genuinely dynamic loop too.
+    #[test]
+    fn var_in_dynamic_loop() {
+        let src = "function main(n) {
+            var sum = 0;
+            for (var i = 0; i < n; i = i + 1) { sum = sum + i; }
+            return sum;
+        }";
+        assert_node_equiv(src, &[0, 1, 5, 20]);
+    }
+
+    /// `var` hoisting: a variable is usable (as `undefined`) before its
+    /// declaration line, and assignments before it refer to the same binding.
+    #[test]
+    fn var_hoisting_use_before_decl() {
+        // `a` read before `var a` -> undefined; then assigned; nested block `var b`
+        // is visible after the block (function-scoped).
+        let src = "function main(x) {
+            var first = a;       // hoisted: undefined
+            a = x + 1;
+            { var b = a + 1; }   // b is function-scoped
+            var a;               // bare redeclare: no-op
+            return [first, a, b];
+        }";
+        let js = to_js(src).unwrap();
+        // `a` and `b` resolve to slots, not runtime globals:
+        assert!(!js.contains(" a") && !js.contains("(b)"), "vars should not leak as globals:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3]); // [undefined->null, x+1, x+2]
+    }
+
+    // ---- more pure operator pass-throughs ----
+
+    #[test]
+    fn passthrough_in_and_instanceof() {
+        // A DYNAMIC key still passes `in` through (the membership can't be decided
+        // statically), as does `instanceof` (not modeled).
+        let src = r#"function main(x) {
+            var o = { a: 1, b: 2 };
+            var key = x > 0 ? "a" : "c";
+            return (key in o) ? 1 : 0;
+        }"#;
+        let js = to_js(src).unwrap();
+        assert!(js.contains(" in "), "`in` with a dynamic key should pass through:\n{js}");
+        assert_node_equiv(src, &[0, 7, -1]);
+    }
+
+    /// `key in obj` with a STATIC key and static object folds to a boolean — the
+    /// membership decision an interpreter's memo lookup needs to decide control
+    /// flow at specialization time (`if (k in memo) ...`). Own fields and
+    /// inherited `Object.prototype` members both count.
+    #[test]
+    fn static_in_folds() {
+        let src = r#"function main(x) {
+            var o = {};
+            o["k"] = x;
+            return ("k" in o ? 1 : 0) + ("missing" in o ? 10 : 0)
+                 + ("toString" in o ? 100 : 0);
+        }"#;
+        let js = to_js(src).unwrap();
+        assert!(!js.contains(" in "), "a static `in` should fold away:\n{js}");
+        assert_node_equiv(src, &[0, 7]);
+    }
+
+    /// `pop`/`shift` on a STATIC array are modeled (mutate the abstract array,
+    /// return the removed element), so a worklist-driven loop stays static instead
+    /// of escaping the array.
+    #[test]
+    fn array_pop_shift_modeled() {
+        let src = r#"function main(n) {
+            var a = [10, 20, 30];
+            var x = a.pop();
+            var y = a.shift();
+            a.push(n);
+            var z = a.pop();
+            var e = [].pop();
+            return x + y + z + (e === undefined ? 1000 : 0) + a.length;
+        }"#;
+        let js = to_js(src).unwrap();
+        assert!(!js.contains(".pop(") && !js.contains(".shift("),
+            "static pop/shift should fold:\n{js}");
+        assert_node_equiv(src, &[0, 7, 42]);
+    }
+
+    /// THE self-application milestone: a worklist-driven memoizing graph traversal
+    /// over a STATIC graph fully folds — the memo ties the cycle at spec time and
+    /// the whole loop reduces to the static result (`return 3 + input`). This is
+    /// the core termination mechanism of the engine (`memo`/`seen` loop-tie)
+    /// surviving the JS subset, the smallest proof Futamura projection 2 is viable.
+    #[test]
+    fn memo_driven_traversal_loop_ties() {
+        let src = r#"function main(input) {
+            var succ = [1, 2, 0];
+            var memo = {};
+            var work = [0];
+            var count = 0;
+            while (work.length > 0) {
+                var node = work.pop();
+                var key = "n" + node;
+                if (key in memo) {
+                } else {
+                    memo[key] = 1;
+                    count = count + 1;
+                    work.push(succ[node]);
+                }
+            }
+            return count + input;
+        }"#;
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("while") && !js.contains("switch") && js.contains("return 3 + v0"),
+            "the memo traversal should fully fold to `return 3 + v0`:\n{js}");
+        assert_node_equiv(src, &[0, 5, 100]);
+    }
+
+    /// THE dispatch-folding capability ("the trick" for PE-of-interpreters): a flat
+    /// `while(pc>=0) { dispatch on blocks[pc]; ... }` interpreter with a
+    /// DATA-DEPENDENT loop must fold the opcode dispatch away. The program counter
+    /// is a static dispatch index, so at the `jnz` branch it stays SPLIT
+    /// (polyvariant) instead of merging to a dynamic variable; the data loop
+    /// residualizes (the growth whistle stabilizes the accumulator), and the
+    /// interpreter compiles to a clean residual loop with no `blocks` array and no
+    /// opcode comparisons. (Foundation for self-application: an interpreter written
+    /// in the subset can now compile away.)
+    #[test]
+    fn flat_dispatch_loop_folds_the_trick() {
+        // `sum` starts at a STATIC 0 and grows 0,2,4,… as a static Num in a
+        // dynamic-count loop — the accumulator case that must be told apart from an
+        // induction variable (the loop-guard `pc`) and generalized.
+        let src = r#"
+            function run(blocks, x) {
+                var acc = x; var sum = 0; var pc = 0;
+                while (pc >= 0) {
+                    if (pc >= blocks.length) { pc = -1; }
+                    else {
+                        var b = blocks[pc]; var op = b[0];
+                        if (op === "dec") { acc = acc - 1; pc = pc + 1; }
+                        else if (op === "addsum") { sum = sum + 2; pc = pc + 1; }
+                        else if (op === "jnz") { if (acc !== 0) { pc = b[1]; } else { pc = pc + 1; } }
+                        else { pc = -1; }
+                    }
+                }
+                return sum;
+            }
+            function main(input) {
+                var blocks = [["addsum", 0], ["dec", 0], ["jnz", 0], ["halt", 0]];
+                return run(blocks, input);
+            }"#;
+        let js = to_js(src).unwrap();
+        assert!(
+            !js.contains("\"dec\"") && !js.contains("\"addsum\"") && !js.contains("\"jnz\""),
+            "the opcode dispatch should fold away (no opcode comparisons):\n{js}"
+        );
+        assert_node_equiv(src, &[1, 3, 5, 8]);
+    }
+
+    #[test]
+    fn test_at_top_dispatch_loop_folds() {
+        // A VM whose data-dependent branch sits at the LOOP HEAD (`jz` at pc 0),
+        // with an unconditional back-jump (`jmp`) at the bottom — the natural shape
+        // of a `while (cond) { body }`. The two `jz` arms carry DIFFERENT static VM
+        // pcs (4 = halt, 1 = body); they merge at a branch JOIN that is not a loop
+        // head, so the growth whistle must NOT generalize the dispatch `pc` there
+        // (that would merge it to a runtime variable and escape the static block
+        // table). The opcode dispatch must fold to a clean residual loop. This is
+        // what a partial-evaluator-in-the-subset's own `while` loops need.
+        let src = r#"
+            function run(blocks, input) {
+                var x = input; var acc = 0; var pc = 0;
+                while (pc >= 0) {
+                    var b = blocks[pc]; var op = b[0];
+                    if (op === "jz") { if (x === 0) { pc = b[1]; } else { pc = pc + 1; } }
+                    else if (op === "dec") { x = x - 1; pc = pc + 1; }
+                    else if (op === "addacc") { acc = acc + b[1]; pc = pc + 1; }
+                    else if (op === "jmp") { pc = b[1]; }
+                    else { pc = -1; }
+                }
+                return acc;
+            }
+            function main(input) {
+                var blocks = [["jz", 4], ["dec", 0], ["addacc", 1], ["jmp", 0], ["halt", 0]];
+                return run(blocks, input);
+            }"#;
+        let js = to_js(src).unwrap();
+        assert!(
+            !js.contains("\"jz\"") && !js.contains("\"dec\"")
+                && !js.contains("\"addacc\"") && !js.contains("\"jmp\""),
+            "test-at-top opcode dispatch should fold away (no opcode comparisons, no escaped block table):\n{js}"
+        );
+        assert_node_equiv(src, &[0, 1, 3, 5, 8]);
+    }
+
+    #[test]
+    fn vm_loop_generalizes_once_at_its_head() {
+        // A bytecode VM whose loop count is dynamic. Three things used to bloat
+        // the residual (9 blocks): (1) the VM's `ins`/`op` temporaries, dead at the
+        // loop head but stale from the last iteration, kept the head states apart,
+        // so generalization happened after the `jz` branch, separately in each arm;
+        // (2) the first iteration was peeled; (3) every update went through a
+        // copy-through temporary. Now: dead locals are cleared, the first visit's
+        // block is generalized upward, and updates assign directly when no later
+        // update reads the old value.
+        let src = r#"
+            function run(code, input) {
+                let n = input; let acc = 0; let pc = 0;
+                while (pc < code.length) {
+                    const ins = code[pc];
+                    const op = ins[0];
+                    if (op === "jz") { if (n === 0) { pc = ins[1]; } else { pc = pc + 1; } }
+                    else if (op === "add") { acc = acc + n; pc = pc + 1; }
+                    else if (op === "dec") { n = n - 1; pc = pc + 1; }
+                    else if (op === "jmp") { pc = ins[1]; }
+                    else if (op === "ret") { return acc; }
+                    else { pc = code.length; }
+                }
+                return acc;
+            }
+            function main(n) {
+                return run([["jz", 4], ["add"], ["dec"], ["jmp", 0], ["ret"]], n);
+            }"#;
+        let js = to_js(src).unwrap();
+        assert_eq!(js.matches("== 0").count(), 1, "one loop test, no peeled copy:\n{js}");
+        assert!(js.contains("while (") && !js.contains("switch"), "a structured loop, not a trampoline:\n{js}");
+        assert!(!js.contains("(0 + "), "the first iteration should not be peeled:\n{js}");
+        let (_, prog) = specialize(src).unwrap();
+        assert!(prog.blocks.len() <= 4, "expected at most 4 blocks, got {}:\n{js}", prog.blocks.len());
+        assert_node_equiv(src, &[0, 1, 2, 5, 10]);
+    }
+
+    #[test]
+    fn register_array_vm_generalizes_heap_fields() {
+        // A VM whose registers live in an array updated in place, with a dynamic
+        // loop count. The array's primitive fields change every iteration, which
+        // used to block the growth whistle (it required identical heaps), so the
+        // loop unrolled until the budget. Each changed field now generalizes to
+        // its own stable variable, and the residual is a plain loop.
+        let src = r#"
+            function run(code, n) {
+                const r = [n, 0, 0];
+                let pc = 0;
+                while (pc >= 0) {
+                    const ins = code[pc];
+                    const op = ins[0];
+                    if (op === "add") { r[ins[1]] = r[ins[2]] + r[ins[3]]; pc = pc + 1; }
+                    else if (op === "addi") { r[ins[1]] = r[ins[2]] + ins[3]; pc = pc + 1; }
+                    else if (op === "jz") { if (r[ins[1]] === 0) { pc = ins[2]; } else { pc = pc + 1; } }
+                    else if (op === "jmp") { pc = ins[1]; }
+                    else { pc = -1; }
+                }
+                return r[1];
+            }
+            function main(n) {
+                return run([["jz", 0, 4], ["add", 1, 1, 0], ["addi", 0, 0, -1], ["jmp", 0], ["halt"]], n);
+            }"#;
+        let js = to_js(src).unwrap();
+        assert!(js.contains("while (") && !js.contains("\"add\""), "dispatch should fold to a loop:\n{js}");
+        let (_, prog) = specialize(src).unwrap();
+        assert!(prog.blocks.len() <= 4, "expected at most 4 blocks, got {}:\n{js}", prog.blocks.len());
+        assert_node_equiv(src, &[0, 1, 2, 5, 10]);
+    }
+
+    #[test]
+    fn dynamic_depth_recursion_becomes_a_residual_function() {
+        // Recursion whose depth depends on the dynamic input used to be refused
+        // with a panic. It now residualizes as a recursive residual function,
+        // while a call with a static argument still unfolds to a constant.
+        let src = "function fib(n) { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }
+                   function main(x) { return fib(x) + fib(10); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("function __rf0(") && js.contains("+ 55"), "expected a residual fib plus fib(10) = 55:\n{js}");
+        assert_node_equiv(src, &[0, 1, 2, 7, 12]);
+    }
+
+    #[test]
+    fn static_arithmetic_folds_with_ieee_semantics() {
+        assert_folds_to("function main(input) { return 13 % 2; }", "return 1;");
+        assert_folds_to("function main(input) { return 12 / 4; }", "return 3;");
+        // IEEE semantics: fractions, -0, NaN and Infinity all fold exactly.
+        assert_folds_to("function main(input) { return 13 / 2; }", "return 6.5;");
+        assert_folds_to("function main(input) { return -4 % 2; }", "return -0;");
+        assert_folds_to("function main(input) { return 0 / -5; }", "return -0;");
+        assert_folds_to("function main(input) { return 1 % 0; }", "return NaN;");
+        assert_folds_to("function main(input) { return -1 / 0; }", "return -Infinity;");
+        assert_folds_to("function main(input) { return 2 ** 10; }", "return 1024;");
+        assert_folds_to("function main(input) { return 0.1 + 0.2; }", "return 0.30000000000000004;");
+    }
+
+    /// A slot's residual variable is named by (function, slot). Reassigning it
+    /// (a committed store, or a loop/join merge) used to clobber every other live
+    /// value still reading the old one: another local (`y = x`), another
+    /// activation of the same function (inlined recursion), a kept result of a
+    /// sibling call. Each must keep the old value.
+    #[test]
+    fn reassigning_a_slot_variable_keeps_old_readers() {
+        for src in [
+            "function main(o) { var x = o[0]; var y = x; x = o[1]; return y; }",
+            "function g(o, i) { var t = o[i]; return t; }
+             function main(o) { var a = g(o, 0); var b = g(o, 1); return [a, b]; }",
+            "function f(o, n) { var x = o[n]; if (n > 0) { f(o, n - 1); } return x; }
+             function main(o) { return f(o, 2); }",
+            "function main(o) { var x = o[0]; var y = x; var i = 0;
+               while (i < o.length) { x = x + 1; i = i + 1; } return [x, y]; }",
+            "function main(o) { var x = o[0]; var y = x;
+               if (o[1] > 15) { x = 100; } else { x = 200; } return [x, y]; }",
+            // The branch condition reads `env`, which holds the first call's
+            // result (named by the same slot variable the second call's `e2`
+            // reuses); it must still read the first call's array.
+            "function ext(env, v) { var e2 = []; var i = 0;
+               while (i < 2) { if (env[i] === 0) { e2.push(v); } else { e2.push(env[i]); } i = i + 1; }
+               return e2; }
+             function main(o) { return ext(ext([o[0], 0], 5), 7); }",
+        ] {
+            let checks = "for (const o of [[10, 20, 30], [10, 5], [7]]) out.push(JSON.stringify(main(o)));";
+            assert_node_equiv_with(src, checks);
+        }
+    }
+
+    /// A call result is held in a residual temp named by the call's pc. When
+    /// the same call site runs twice on one path (an unrolled loop, or a
+    /// function inlined twice), the second result must not overwrite a first
+    /// result that is still in use.
+    #[test]
+    fn repeated_call_site_keeps_earlier_results() {
+        let printf = "function format(fmt, args) {
+              let out = '', lit = '', k = 0, i = 0;
+              while (i < fmt.length) {
+                const c = fmt[i];
+                if (c === '%' && fmt[i + 1] === 'd') { out = out + lit + Math.floor(args[k]); lit = ''; k = k + 1; i = i + 2; }
+                else { lit = lit + c; i = i + 1; }
+              }
+              return out + lit;
+            }
+            function main(x) { return format('x = %d, x squared = %d', [x, x * x]); }";
+        assert_node_equiv(printf, &[3, 7, -2]);
+        let lookups = "function S(v) { return ['S', v]; }
+            function D(c) { return ['D', c]; }
+            function staticArgs(sv) { if (sv.length === 0) { return []; } return [S(sv[0])].concat(staticArgs(sv.slice(1))); }
+            function bindAll(ns, vs, env) { if (ns.length === 0) { return env; } return bindAll(ns.slice(1), vs.slice(1), [[ns[0], vs[0]]].concat(env)); }
+            function lookup(env, name) { if (env.length === 0) { return D(name); } if (env[0][0] === name) { return env[0][1]; } return lookup(env.slice(1), name); }
+            function main(o) {
+              var env = bindAll(['prog', 'entry', 'svals'], staticArgs([o[0], o[1]]).concat([D('svals')]), []);
+              return [lookup(env, 'entry'), lookup(env, 'prog'), lookup(env, 'svals')];
+            }";
+        assert_node_equiv_with(lookups, "for (const o of [[[1], 'f'], ['P', 'g']]) out.push(JSON.stringify(main(o)));");
+    }
+
+    #[test]
+    fn if_without_else_inside_loop_terminates() {
+        // An `if` with no `else` whose then-arm assigns a slot (`d`) differently
+        // from the fall-through, INSIDE a dynamic loop. The else path enters the
+        // join pc directly (it does not jump to it), so its merge marker
+        // (`pending_join`) must be consumed at block entry — else it persists in
+        // the state every iteration and the loop never memo-ties (it unrolls until
+        // the budget). This is the core pattern a partial-evaluator-in-the-subset
+        // relies on (a conditional inside its dispatch loop).
+        let src = "function main(n) {
+            var sum = 0; var i = 0;
+            while (i < n) {
+                var d = 1;
+                if ((i % 3) === 0) { d = 2; }
+                sum = sum + d;
+                i = i + 1;
+            }
+            return sum;
+        }";
+        assert_node_equiv(src, &[0, 1, 4, 7, 10]);
+    }
+
+    #[test]
+    fn partially_static_clause_table_in_loop_folds() {
+        // The keystone for the 2nd Futamura projection: a STATIC table searched by
+        // a DYNAMIC key, inside a dynamic loop (the way a generic partial evaluator
+        // looks up an interpreter's per-opcode semantics). The generic table scan
+        // must fold to an opcode-specific dispatch chain (no residual `clauses`
+        // iteration) and the whole thing must terminate.
+        let src = r#"function main(n) {
+            var clauses = [[0, "x"], [1, "y"], [2, "z"]];
+            var total = 0; var i = 0;
+            while (i < n) {
+                var op = i % 3;
+                var kind = "?";
+                var c = 0;
+                while (c < clauses.length) {
+                    if (clauses[c][0] === op) { kind = clauses[c][1]; }
+                    c = c + 1;
+                }
+                if (kind === "x") { total = total + 1; }
+                else if (kind === "y") { total = total + 2; }
+                else { total = total + 4; }
+                i = i + 1;
+            }
+            return total;
+        }"#;
+        assert_node_equiv(src, &[0, 1, 3, 5, 9]);
+    }
+
+    #[test]
+    fn passthrough_void() {
+        // `void e` is always undefined; wrap it so node can serialize the result.
+        let src = "function main(x) { return typeof void (x + 1); }"; // "undefined"
+        let js = to_js(src).unwrap();
+        assert!(js.contains("void"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5]);
+    }
+
+    // ---- continue ----
+
+    /// `continue` in a `for` must run the update (else it would skip `i+1` and
+    /// loop forever / miscount). Sum of even i in [0, n).
+    #[test]
+    fn continue_in_for_runs_update() {
+        let src = "function main(n) {
+            var sum = 0;
+            for (var i = 0; i < n; i = i + 1) {
+                if ((i % 2) !== 0) { continue; }
+                sum = sum + i;
+            }
+            return sum;
+        }";
+        assert_node_equiv(src, &[0, 1, 5, 8, 11]);
+    }
+
+    /// `continue` in a `while` re-tests the condition.
+    #[test]
+    fn continue_in_while() {
+        let src = "function main(n) {
+            var i = 0;
+            var sum = 0;
+            while (i < n) {
+                i = i + 1;
+                if ((i % 3) === 0) { continue; }
+                sum = sum + i;
+            }
+            return sum;
+        }";
+        assert_node_equiv(src, &[0, 3, 6, 10]);
+    }
+
+    /// `continue` inside a `switch` inside a loop targets the loop, not the switch.
+    #[test]
+    fn continue_through_switch() {
+        let src = "function main(n) {
+            var sum = 0;
+            for (var i = 0; i < n; i = i + 1) {
+                switch (i % 3) {
+                    case 0: continue;          // skip multiples of 3
+                    default: sum = sum + i;
+                }
+            }
+            return sum;
+        }";
+        assert_node_equiv(src, &[0, 3, 7, 10]);
+    }
+
+    #[test]
+    fn continue_outside_loop_is_an_error() {
+        let err = specialize("function main(x) { continue; }").err().unwrap();
+        assert!(err.contains("continue"), "got: {err}");
+    }
+
+    // ---- delete ----
+
+    /// `delete` on a tracked object folds: the field is gone at specialization
+    /// time, so a later read is `undefined` and nothing residualizes.
+    #[test]
+    fn delete_on_tracked_object_folds() {
+        let src = r#"function main(x) {
+            var o = { a: x, b: 2 };
+            delete o.a;
+            return [o.a, o.b];   // [undefined, 2]
+        }"#;
+        let (_, prog) = specialize(src).unwrap();
+        assert_eq!(prog.blocks.len(), 1, "delete should fold:\n{}", to_js(src).unwrap());
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("delete"), "delete on a tracked object should not residualize:\n{js}");
+        assert_node_equiv(src, &[0, 7, -3]);
+    }
+
+    /// `delete` on an escaped object residualizes a real `delete`.
+    #[test]
+    fn delete_on_escaped_object_residualizes() {
+        let src = r#"function main(x) {
+            var o = { a: x, b: 2 };
+            var s = Object.keys(Object.getOwnPropertyDescriptors(o)).length;   // o escapes
+            delete o.a;
+            return [s, JSON.stringify(o)];
+        }"#;
+        let js = to_js(src).unwrap();
+        assert!(js.contains("delete v"), "delete on an escaped object should residualize:\n{js}");
+        assert_node_equiv(src, &[0, 5]);
+    }
+
+    /// `delete arr[i]` leaves a hole (reads as `undefined`).
+    #[test]
+    fn delete_index_on_tracked_array() {
+        let src = "function main(x) {
+            var a = [x, x + 1, x + 2];
+            delete a[1];
+            return [a[0], a[1], a[2]];   // [x, undefined, x+2]
+        }";
+        assert_node_equiv(src, &[0, 4, -1]);
+    }
+
+    /// `delete` for its value: whether the property is gone.
+    #[test]
+    fn delete_as_value() {
+        let src = "function main(x) { var o = {a:x}; var r = delete o.a; return [r, 'a' in o, delete o.zz]; }";
+        assert_node_equiv(src, &[0, 4]);
+        assert_folds_to(src, "[true, false, true]");
+    }
+
+    // ---- module body / IIFE (no explicit main) ----
+
+    /// A program with top-level `var`s and a non-capturing IIFE, plus helper
+    /// functions, specializes as a synthetic `main`.
+    #[test]
+    fn module_with_iife_and_helpers() {
+        let src = "
+            function dbl(n) { return n * 2; }
+            var base = 10;
+            var result = (function () { return dbl(base) + 1; })();
+            function main_unused() {}            // a plain helper, hoisted
+            // top-level expression statement:
+            var out = result + 5;
+        ";
+        // No explicit main -> synthesized from the top-level statements.
+        let funcs = compile(src).unwrap();
+        // there is a `main`
+        assert!(funcs.iter().any(|f| f.name == "main"));
+    }
+
+    // ---- coercion / wrong-type totality (found by the differential fuzzer) ----
+    //
+    // The partial evaluator must never crash on well-defined JS: any operation it
+    // can't fold statically (a coerced mixed-type operator, a property/index on
+    // the "wrong" type, a heap object in a primitive context) must residualize
+    // and stay observationally equivalent. Each of these used to panic.
+
+    /// Mixed-type arithmetic and comparison coerce per JS and residualize.
+    #[test]
+    fn coercion_mixed_type_arith_is_total() {
+        assert_node_equiv("function main(x) { return (x - \"y\"); }", &[0, 5, -3]); // NaN
+        assert_node_equiv("function main(x) { return (x + null); }", &[0, 5, -3]); // x
+        assert_node_equiv("function main(x) { return (undefined + x); }", &[0, 7]); // NaN
+        assert_node_equiv("function main(x) { return (x > null); }", &[-2, 0, 5]); // x > 0
+        assert_node_equiv("function main(x) { return (\"a\" < \"b\") === true; }", &[0]);
+        assert_node_equiv("function main(x) { return (true + x); }", &[0, 4]); // 1 + x
+    }
+
+    /// A heap object reaching a primitive operator coerces (ToPrimitive) and
+    /// escapes into the residual rather than crashing.
+    #[test]
+    fn coercion_heap_ref_in_primitive_context_is_total() {
+        assert_node_equiv("function main(x) { var o = { a: x }; return (o & 1); }", &[0, 3]); // 0
+        assert_node_equiv("function main(x) { var o = { a: x }; return (o + 1); }", &[0, 3]); // "[object Object]1"
+        // an object used as an index coerces to a string key (wrap the
+        // `undefined` result in an array so the node harness can serialize it)
+        assert_node_equiv("function main(x) { var o = { a: x }; return [o[{}]]; }", &[0, 5]); // [null]
+        assert_node_equiv("function main(x) { return [x[{ c: null }]]; }", &[0, 5]); // [null]
+    }
+
+    /// Property / index reads on the "wrong" type residualize.
+    #[test]
+    fn coercion_wrong_type_member_access_is_total() {
+        assert_node_equiv("function main(x) { return (5).toString(); }", &[0]); // "5"
+        assert_node_equiv("function main(x) { return \"ab\"[0]; }", &[0]); // "a"
+        assert_node_equiv("function main(x) { var a = [1, 2, 3]; return [a[\"x\"]]; }", &[0]); // [null]
+        assert_node_equiv("function main(x) { var o = { a: x }; return [o[5]]; }", &[0, 9]); // [null]
+    }
+
+    /// A negative array index is a named property, not an element: the write
+    /// escapes the array instead of overflowing the element vector.
+    #[test]
+    fn coercion_negative_array_index_is_total() {
+        let src = "function main(x) {
+            var a = [x, x + 1];
+            a[-1] = 9;
+            return [a.length, a[-1], a[0]];   // [2, 9, x]
+        }";
+        assert_node_equiv(src, &[0, 5, -3]);
+    }
+
+    /// A method inherited from `Object.prototype` (`toString`, `hasOwnProperty`,
+    /// ...) read off a static object resolves to the real function: the object
+    /// escapes and the call residualizes, rather than folding the read to
+    /// `undefined` and then failing to call it.
+    #[test]
+    fn coercion_object_prototype_method_resolves() {
+        assert_node_equiv("function main(x) { var o = { a: x }; return o.toString(); }", &[0, 5]);
+        assert_node_equiv("function main(x) { return ({ b: x }).toString(); }", &[0, 5]);
+        assert_node_equiv(
+            "function main(x) { var o = { a: x }; return o.hasOwnProperty(\"a\"); }",
+            &[0, 7],
+        );
+        // an own field shadows the prototype member and still folds
+        assert_node_equiv(
+            "function main(x) { var o = { toString: 0, a: x }; return [o.toString]; }",
+            &[0, 3],
+        );
+    }
+
+    /// Calling a non-callable value (`undefined()`, `(5)()`, `({})()`) throws a
+    /// `TypeError` at runtime; the residual must throw identically (here caught
+    /// and turned into a sentinel) rather than crashing the partial evaluator.
+    #[test]
+    fn coercion_call_of_non_callable_is_total() {
+        let miss = "function main(x) {
+            var o = { a: x };
+            var r;
+            try { r = o.b(); } catch (e) { r = \"caught\"; }
+            return r;
+        }";
+        assert_node_equiv(miss, &[0, 5]); // o.b is undefined -> undefined() throws -> "caught"
+        let num = "function main(x) {
+            var r;
+            try { r = (5)(x); } catch (e) { r = \"caught\"; }
+            return r;
+        }";
+        assert_node_equiv(num, &[0, 9]);
+    }
+
+    /// A dynamic index into a static object escapes it and residualizes.
+    #[test]
+    fn coercion_dynamic_index_escapes_container() {
+        let src = "function main(x) {
+            var o = { a: 1 };
+            o[x] = 7;
+            return [o.a, o[x]];
+        }";
+        assert_node_equiv(src, &[0, 2, 5]);
+    }
+
+    // ---- JSFuck decoding (partial evaluation of `[]()!+` coercion soup) ----
+    //
+    // JSFuck encodes programs using only six characters via JS coercion:
+    // `+[]` is 0, `![]` is false, `[]+[]` is "", `!![]+[]` is "true", and longer
+    // values are built by indexing into those strings. The partial evaluator
+    // folds all of that to the decoded literal. Every case is also validated for
+    // observational equivalence against the original under Node.
+
+    /// A residual that fully decodes is a single `return <literal>;`.
+    fn assert_folds_to(src: &str, expected_literal: &str) {
+        let js = to_js(src).unwrap();
+        assert!(
+            js.contains(expected_literal),
+            "expected residual to fold to {expected_literal}, got:\n{js}"
+        );
+        assert_node_equiv(src, &[0]);
+    }
+
+    #[test]
+    fn jsfuck_primitive_constants_fold() {
+        assert_folds_to("function main(input) { return +[]; }", "return 0;");
+        assert_folds_to("function main(input) { return +!![]; }", "return 1;");
+        assert_folds_to("function main(input) { return ![]; }", "return false;");
+        assert_folds_to("function main(input) { return []+[]; }", "return \"\";");
+        assert_folds_to("function main(input) { return ![]+[]; }", "return \"false\";");
+        assert_folds_to("function main(input) { return !![]+[]; }", "return \"true\";");
+        assert_folds_to("function main(input) { return []+{}; }", "return \"[object Object]\";");
+        assert_folds_to("function main(input) { return [][+[]]+[]; }", "return \"undefined\";");
+    }
+
+    #[test]
+    fn jsfuck_char_indexing_folds() {
+        // (![]+[])[+!![]] === "false"[1] === "a"
+        assert_folds_to("function main(input) { return (![]+[])[+!![]]; }", "return \"a\";");
+        // (!![]+[])[+[]] === "true"[0] === "t"
+        assert_folds_to("function main(input) { return (!![]+[])[+[]]; }", "return \"t\";");
+        // ([]+{})[+!![]+!![]+!![]+!![]+!![]+!![]] === "[object Object]"[6] === " "? -> "t" idx?
+        assert_folds_to("function main(input) { return ([]+{})[+!![]]; }", "return \"o\";");
+    }
+
+    #[test]
+    fn jsfuck_numbers_and_words_fold() {
+        // digit composition: seven 1s
+        assert_folds_to(
+            "function main(input) { return +!![]+!![]+!![]+!![]+!![]+!![]+!![]; }",
+            "return 7;",
+        );
+        // multi-digit number as string concat: "1" + "0" === "10"
+        assert_folds_to("function main(input) { return (+!![]+[])+(+[]+[]); }", "return \"10\";");
+        // rebuild the word "true" character by character out of the "true" string
+        let true_word = "function main(input) { return (!![]+[])[+[]]\
+            +(!![]+[])[+!![]]\
+            +(!![]+[])[!![]+!![]]\
+            +(!![]+[])[!![]+!![]+!![]]; }";
+        assert_folds_to(true_word, "return \"true\";");
+    }
+
+    /// JSFuck leans on coerced *string* keys for member access; here a coerced
+    /// "a" indexes a static object and folds to the field value.
+    #[test]
+    fn jsfuck_coerced_object_key_folds() {
+        assert_folds_to(
+            "function main(input) { var o = { a: 7 }; return o[(![]+[])[+!![]]]; }",
+            "return 7;",
+        );
+    }
+
+    // ---- deterministic String.prototype method folding ----
+    //
+    // Static string methods fold to constants (helps deobfuscation and JSFuck
+    // string pipelines). Restricted to ASCII so the fold provably matches the JS
+    // runtime; non-ASCII / dynamic args residualize. All validated under Node.
+
+    #[test]
+    fn string_methods_fold() {
+        assert_folds_to("function main(input) { return \"abc\".charAt(1); }", "return \"b\";");
+        assert_folds_to("function main(input) { return \"abc\".charCodeAt(0); }", "return 97;");
+        assert_folds_to("function main(input) { return \"hello\".slice(1, 3); }", "return \"el\";");
+        assert_folds_to("function main(input) { return \"hello\".slice(-2); }", "return \"lo\";");
+        assert_folds_to("function main(input) { return \"FoO\".toUpperCase(); }", "return \"FOO\";");
+        assert_folds_to("function main(input) { return \"  hi  \".trim(); }", "return \"hi\";");
+        assert_folds_to("function main(input) { return \"ab\".repeat(3); }", "return \"ababab\";");
+        assert_folds_to("function main(input) { return \"hello\".indexOf(\"ll\"); }", "return 2;");
+        assert_folds_to("function main(input) { return \"hello\".includes(\"ell\"); }", "return true;");
+        assert_folds_to("function main(input) { return \"hi\".at(-1); }", "return \"i\";");
+    }
+
+    #[test]
+    fn string_split_folds_to_array() {
+        let src = "function main(input) { return \"a,b,c\".split(\",\")[1]; }";
+        assert_folds_to(src, "return \"b\";");
+        assert_node_equiv("function main(input) { return \"a,b,c\".split(\",\").length; }", &[0]);
+        // split("") -> characters
+        assert_node_equiv("function main(input) { return \"abc\".split(\"\").length; }", &[0]);
+    }
+
+    /// `arguments` is modeled: a variadic function reading `arguments.length`
+    /// and `arguments[i]` folds against the actual call arguments (it used to
+    /// lower to an undefined global, which silently dropped values).
+    #[test]
+    fn arguments_object_is_modeled() {
+        // variadic sum: arguments.length and arguments[i] over the real args
+        let sum = "
+            function sum() {
+                var s = 0;
+                for (var i = 0; i < arguments.length; i = i + 1) { s = s + arguments[i]; }
+                return s;
+            }
+            function main(input) { return sum(1, 2, 3, input); }";
+        let js = to_js(sum).unwrap();
+        assert!(js.contains("6 + v0") || js.contains("v0 + 6"), "variadic sum should fold to 6+x:\n{js}");
+        assert_node_equiv(sum, &[0, 5, -3]);
+        // declared param + extra arg via arguments (extra must not clobber the param)
+        let mixed = "
+            function f(a) { return a + arguments[1]; }
+            function main(input) { return f(input, 5); }";
+        assert_folds_to(mixed, "v0 + 5");
+        assert_node_equiv(mixed, &[0, 7, -2]);
+        // arguments.length is the count actually passed, not the arity
+        let count = "
+            function f(a, b) { return arguments.length; }
+            function main(input) { return f(1, 2, 3, 4); }";
+        assert_folds_to(count, "return 4;");
+    }
+
+    /// A *residualized capturing closure* that reads `arguments` must see only
+    /// the real call args, not the captures the residual binds as leading
+    /// parameters. (Naively reading native `arguments` counted the captures:
+    /// `7 + arguments.length` returned 11 instead of 10.) Its arguments object
+    /// arrives explicitly after the captures (a real arguments object: a copy
+    /// sliced off the native one would be an Array).
+    #[test]
+    fn arguments_in_residualized_capturing_closure() {
+        let src = "
+            function make() {
+                var cap = 7;
+                // (the `try` keeps it a residual function)
+                return function () { try { return cap + arguments.length; } catch (e) { return -1; } };
+            }
+            function main(input) {
+                var f = make();
+                return f.apply(null, [1, 2, input]);
+            }";
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("slice.call(arguments"), "the arguments object is not an array copy:\n{js}");
+        assert_node_equiv(src, &[0, 5, -3]); // always 7 + 3 = 10
+    }
+
+    /// A residualized closure (one containing `try`) that captures an object and
+    /// MUTATES it through the capture must invalidate the caller's view of that
+    /// object: a later read has to see the mutation, not a re-materialized
+    /// pre-call copy. (This was a real divergence: the closure set
+    /// `data[1][1] ^= 5`, but `main` re-emitted `data[1]` as the stale literal
+    /// `[40,50,60]` and read `50` instead of `55`. It is the self-modifying-array
+    /// pattern simple.js's bytecode loader uses.)
+    #[test]
+    fn residual_closure_mutating_capture_invalidates_caller() {
+        let src = "function main(input) {
+            var data = [[10, 20, 30], [40, 50, 60]];
+            var dec = function () { try { data[1][1] = data[1][1] ^ 5; } catch (e) {} };
+            dec();
+            return data[1][input];
+        }";
+        assert_node_equiv(src, &[0, 1, 2]); // [40, 55, 60]
+    }
+
+    /// A cyclic array reaching a coercion must not make the folder recurse
+    /// forever: it bails to residualization (the runtime's `Array.join` cycle
+    /// handling then yields the right answer). `a` references itself, so
+    /// `a + "X"` is `"" + "X"` === `"X"`.
+    #[test]
+    fn cyclic_array_coercion_is_total() {
+        let src = "function main(input) {
+            var a = [];
+            a[0] = a;
+            return a + \"X\";
+        }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("+ \"X\""), "cyclic coercion should residualize:\n{js}");
+        assert_node_equiv(src, &[0]);
+    }
+
+    /// A method call with a dynamic argument residualizes (single-eval) rather
+    /// than folding, and stays equivalent.
+    #[test]
+    fn string_method_dynamic_arg_residualizes() {
+        let src = "function main(input) { return \"abcde\".charAt(input); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains(".charAt("), "dynamic arg should residualize:\n{js}");
+        assert_node_equiv(src, &[0, 1, 4, 9]);
+    }
+
+    /// A negative number constant used as a computed-member base must be
+    /// parenthesized in the residual: `-1[i]` parses as `-(1[i])` (member access
+    /// binds tighter than unary minus), so the un-parenthesized form changes the
+    /// value (`(-1)[i]` is `undefined`; `-(1[i])` is `NaN`). Found by the fuzzer
+    /// (seed 1865) after the undeclared-var artifact was cleared.
+    #[test]
+    fn negative_num_index_base_is_parenthesized() {
+        // `String(...)` keeps the result JSON-stringifiable while still
+        // distinguishing the two parses: `String((-1)[i])` is "undefined",
+        // `String(-(1[i]))` is "NaN".
+        let src = "function main(input) { var x = 0 - 1; return String(x[input]); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("(-1)["), "negative index base must be parenthesized:\n{js}");
+        assert!(!js.contains("-1[v"), "must not emit a bare `-1[...]`:\n{js}");
+        assert_node_equiv(src, &[0, 1, 2]);
+    }
+
+    /// A method-call callee that the freeze pass snapshots during argument
+    /// evaluation must keep its receiver. Here the second argument
+    /// (`input.toString()`) is an opaque call, so evaluating it freezes the
+    /// pending `f.call` callee. Freezing it to a bare temp and calling it would
+    /// run `Function.prototype.call` with `this === undefined` → a TypeError the
+    /// original never throws. The fix emits `func.call(recv, args)` (uncurry
+    /// `this`). Found by the fuzzer (seeds 661/1374/1763/2737/5563).
+    #[test]
+    fn frozen_method_callee_keeps_receiver() {
+        // (A modeled `f.call(...)` now inlines `f`; a runtime callee keeps
+        // the uncurried call.)
+        let src = "function main(input) { return Math.max.call(null, input.toString(), 1); }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains(".call("), "expected an uncurried method call:\n{js}");
+        assert_node_equiv(src, &[5, 0, -3]);
+        let src = "function f(p) { return p + 1; }
+                   function main(input) { return f.call(null, input.toString()); }";
+        assert_node_equiv(src, &[5, 0, -3]); // "51", "01", "-31"
+    }
+
+    /// A dead store whose RHS can throw must still raise the exception (the read
+    /// happens at the assignment in the original). `a = a.b` with `a` undefined
+    /// throws; the store to `a` is dead (never read), but dropping it would lose
+    /// the throw. Found by the fuzzer (seeds 533/2037/...). Also covers a dead
+    /// store inside an inlined function (frame > 1) via `f`.
+    #[test]
+    fn dead_store_may_throw_is_preserved() {
+        let src = "function f(x) { var dead = x.b; return 0; }
+                   function main(input) {
+                     var a = input.b;   // input=0 -> (0).b = undefined (no throw)
+                     a = a.b;            // undefined.b -> throws; `a` then unread
+                     return 0;
+                   }";
+        // input=0: original throws TypeError at `a.b`; residual must too.
+        assert_node_equiv_outcome(src, &[0]);
+    }
+
+    /// A may-throw element of an array/object literal that is discarded or folds
+    /// must still raise the exception (JS evaluates literal elements eagerly).
+    /// `[void 0, a.b]` with `a` undefined throws when built, even though only the
+    /// array's `.length` is used. Found by the fuzzer (seeds 511/3807/...).
+    #[test]
+    fn dead_literal_element_may_throw_is_preserved() {
+        let src = "function main(input) {
+                     var a;                       // undefined
+                     var n = [0, a.b].length;     // building the array throws at a.b
+                     return n;
+                   }";
+        assert_node_equiv_outcome(src, &[0]);
+    }
+
+    /// A may-throw write to a *boxed* capture cell (a captured + mutated local is
+    /// stored as a `{value}` cell) must also preserve its exception, even when the
+    /// cell is dead (its capturing closure is unused). `a` is captured by the dead
+    /// closure (so it boxes) and `a = a.b` throws. Found by the fuzzer (seed 2791).
+    #[test]
+    fn dead_boxed_cell_write_may_throw_is_preserved() {
+        let src = "function main(input) {
+                     var a = input.b;             // (0).b = undefined
+                     a = a.b;                      // undefined.b -> throws
+                     var f = function () { return a; };  // captures a -> a is boxed
+                     return 0;                     // f and a dead
+                   }";
+        assert_node_equiv_outcome(src, &[0]);
+    }
+
+    /// A captured parameter reassigned by the OUTER scope after the closure is
+    /// created must be shared by reference: the closure sees the new value. By-value
+    /// capture would snapshot the original argument. Found by the fuzzer (seed 2368).
+    #[test]
+    fn captured_param_outer_reassign_is_shared() {
+        let src = "function main(input) {
+                     var f = function () { return input; };
+                     input = 99;
+                     return f();
+                   }";
+        assert_node_equiv(src, &[0, 5]); // both inputs -> 99
+    }
+
+    /// A captured parameter reassigned INSIDE the closure must be visible to the
+    /// outer scope after the call (shared cell). Found by the fuzzer (seed 3098).
+    #[test]
+    fn captured_param_closure_write_is_shared() {
+        let src = "function main(input) {
+                     var f = function () { input = 42; };
+                     f();
+                     return input;
+                   }";
+        assert_node_equiv(src, &[0, 7]); // both inputs -> 42
+    }
+
+    /// A may-throw CALL ARGUMENT must raise its exception even when the inlined
+    /// callee ignores the parameter and the call result is discarded. Arguments
+    /// are evaluated in JS regardless. Found by the fuzzer (seed 10125).
+    #[test]
+    fn dead_call_argument_may_throw_is_preserved() {
+        let src = "function ignore(x) { return 0; }
+                   function main(input) {
+                     var u;            // undefined
+                     ignore(u.b);      // u.b throws; param unused; result discarded
+                     return 1;
+                   }";
+        assert_node_equiv_outcome(src, &[0]);
+    }
+
+    /// In `a[i]` where the index `i` mutates the base `a` (`a[a--]`), the base must
+    /// be read BEFORE the index's side effect. With `a` a dynamic merge var the
+    /// base is `Var(a)` on the operand stack; reassigning `a` must not change it.
+    /// `undefined[NaN]` throws but `NaN[NaN]` does not. Found by the fuzzer (10899).
+    #[test]
+    fn index_base_read_before_mutating_index() {
+        let src = "function main(input) {
+                     var a;                         // undefined (dynamic merge)
+                     if (input > 100) { a = [1]; }
+                     try { var r = a[a--]; } catch (e) { return \"caught\"; }
+                     return \"no-throw\";
+                   }";
+        assert_node_equiv(src, &[0]); // base is undefined -> throws -> \"caught\"
+    }
+
+    /// An array captured by a (residualized) closure AND mutated directly must stay
+    /// ONE object: the loop-header materializer must not copy the captured array
+    /// separately from the directly-held one. Here `read` is loop-carried (so it
+    /// residualizes) and captures `a`, while the loop body mutates `a[input]`; the
+    /// read must see the mutations. (Distilled from the simple.js decode/decrypt
+    /// aliasing class.)
+    #[test]
+    fn closure_captured_array_aliases_direct_mutation() {
+        let src = "function main(input) {
+                     var a = [10, 20, 30, 40];
+                     var read = function () { return a[input]; };
+                     var n = input;
+                     var sum = 0;
+                     while (n > 0) { n = n - 1; a[input] = a[input] + 1; sum = sum + read(); }
+                     return sum;
+                   }";
+        assert_node_equiv(src, &[3, 1, 2]); // 126, 41, 83
+    }
+
+    /// The synthesized `main` runs top-level code; a module that computes a value
+    /// folds. (Uses a global so we can return something defined.)
+    #[test]
+    fn module_top_level_runs() {
+        let src = "
+            function add(a, b) { return a + b; }
+            var x = add(2, 3);
+            var y = (function () { return x * x; })();
+            globalThis.__r = y;   // observable top-level effect, passes through
+        ";
+        let js = to_js(src).unwrap();
+        // x and y fold to constants (5 and 25); the global write residualizes.
+        assert!(js.contains("globalThis.__r = 25") || js.contains("= 25;"), "got:\n{js}");
+    }
+}

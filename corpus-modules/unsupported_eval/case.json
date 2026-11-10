@@ -1,0 +1,1 @@
+{ "entry": "main.mjs", "inputs": [0], "link_error": "direct `eval(...)` in an ES module", "unsupported": true }
