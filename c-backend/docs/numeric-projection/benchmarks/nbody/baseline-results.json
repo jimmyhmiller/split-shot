@@ -1,0 +1,248 @@
+{
+  "inputs": [
+    0,
+    1,
+    2,
+    10,
+    100,
+    1000,
+    2500,
+    10000,
+    100000
+  ],
+  "source_sha256": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+  "source_original": "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/first-projection/benchmarks/nbody/input.js",
+  "baseline_backend": "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new",
+  "baseline_commit": "4ae8f8ca4f8341b5cb8426f5239f8867c1e2d936",
+  "versions": {
+    "node": "v26.5.0",
+    "clang": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+  },
+  "correctness": {
+    "original_js": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ],
+    "direct_c": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ]
+  },
+  "timings": {
+    "10000": {
+      "original_js": {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4",
+        "warmup_calls": 5,
+        "samples_seconds": [
+          0.010471736333333334,
+          0.010429513999999997,
+          0.010609069333333332,
+          0.010490805666666669,
+          0.010410166666666668,
+          0.009224833333333331,
+          0.009541041666666672
+        ],
+        "batch": 3,
+        "median_seconds": 0.010429513999999997
+      },
+      "direct_c": {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4",
+        "samples_seconds": [
+          0.011818,
+          0.011778,
+          0.01174,
+          0.011803,
+          0.01186,
+          0.011738,
+          0.011725
+        ],
+        "median_seconds": 0.011778,
+        "warmup_calls": 5,
+        "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+      }
+    },
+    "100000": {
+      "original_js": {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16",
+        "warmup_calls": 5,
+        "samples_seconds": [
+          0.10423533400000003,
+          0.10392233299999998,
+          0.09411458300000004,
+          0.094332583,
+          0.09408116699999994,
+          0.09453200000000003,
+          0.09349466599999993
+        ],
+        "batch": 1,
+        "median_seconds": 0.094332583
+      },
+      "direct_c": {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16",
+        "samples_seconds": [
+          0.118197,
+          0.117622,
+          0.117915,
+          0.117917,
+          0.11766,
+          0.118082,
+          0.117369
+        ],
+        "median_seconds": 0.117915,
+        "warmup_calls": 5,
+        "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+      }
+    }
+  },
+  "methodology": {
+    "samples": 7,
+    "warmup_calls": 5,
+    "timed_region": "execution only, excluding process startup and source compilation",
+    "numeric_c_allocations": "all numeric_main allocations and frees included",
+    "direct_c_context": "context creation/free excluded, guest execution allocations included",
+    "flags": [
+      "-O2",
+      "-ffp-contract=off"
+    ],
+    "timeout_seconds_per_process": 60,
+    "source_algorithm_edits": false
+  },
+  "read_only_input_hashes_before": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend": "29c60a887b0a2bf8d0659104c9559ac326e7e2d7513a417bd37b87fa85be528c",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/js-frontend/src/c_backend.rs": "db2980fc49fef53f4eb643e5913175dcd5d16e98de6e313b8567cfa7759a57f8",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/first-projection/benchmarks/nbody/input.js": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/driver.c": "52e4f4effb7a2b1296e0c3537fe39f13e0146b966940c0d4f976dd3b2e11e20f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c": "af39afcb97edeb6080fec6ca66e3a75d73dba8b4f058f617fee9ab7b5e88a718",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c": "d2e5ee19cd697b84cd36e462b86e11aaa3910505df1d017d9660463a5cbf15eb",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.h": "a7acb13ed0744d7dba5576880374d24109f34ddf4e42d9c07ae98df2b8fedb4b",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime_internal.h": "2dcd79cd4f568d0a1fe0e51fccfc5d104b04b74c53239f19fd2a287546208002",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/descriptor_guards.c": "e18e36f510b45353eb4a8fd33408a4ffb181ce95c1ceeed19293c5ee415b73c6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/record_layouts.c": "07a950c7628a89ca8fad8c6ebad7fdd80ea799f57c17a3ff8c92ed35be808858",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Apache2": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Boost": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/SOURCE.json": "325877bd34c58ffdb079e44f957c9961dea01cdbf896c3887f0f11a13f1dbedd",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16"
+  },
+  "read_only_input_hashes_after": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend": "29c60a887b0a2bf8d0659104c9559ac326e7e2d7513a417bd37b87fa85be528c",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/js-frontend/src/c_backend.rs": "db2980fc49fef53f4eb643e5913175dcd5d16e98de6e313b8567cfa7759a57f8",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/first-projection/benchmarks/nbody/input.js": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/driver.c": "52e4f4effb7a2b1296e0c3537fe39f13e0146b966940c0d4f976dd3b2e11e20f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c": "af39afcb97edeb6080fec6ca66e3a75d73dba8b4f058f617fee9ab7b5e88a718",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c": "d2e5ee19cd697b84cd36e462b86e11aaa3910505df1d017d9660463a5cbf15eb",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.h": "a7acb13ed0744d7dba5576880374d24109f34ddf4e42d9c07ae98df2b8fedb4b",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime_internal.h": "2dcd79cd4f568d0a1fe0e51fccfc5d104b04b74c53239f19fd2a287546208002",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/descriptor_guards.c": "e18e36f510b45353eb4a8fd33408a4ffb181ce95c1ceeed19293c5ee415b73c6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/record_layouts.c": "07a950c7628a89ca8fad8c6ebad7fdd80ea799f57c17a3ff8c92ed35be808858",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Apache2": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Boost": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/SOURCE.json": "325877bd34c58ffdb079e44f957c9961dea01cdbf896c3887f0f11a13f1dbedd",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16"
+  },
+  "read_only_inputs_unchanged": true,
+  "commands": [
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new rev-parse HEAD",
+    "node --version",
+    "clang --version",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend --c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js",
+    "clang -std=c11 -O2 -ffp-contract=off -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/direct-generated.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/direct-timed-driver.c -lm -o /var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js check '[0, 1, 2, 10, 100, 1000, 2500, 10000, 100000]'",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 0 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 1 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 2 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 10 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 100 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 1000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 2500 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 10000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 100000 0",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 10000",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 10000 7",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 100000",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-uoxcc55x/direct 100000 7"
+  ]
+}

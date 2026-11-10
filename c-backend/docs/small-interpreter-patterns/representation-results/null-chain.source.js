@@ -1,0 +1,1 @@
+function entry(x){function expr(p,e){var t=p[0];if(t==='lit')return p[1];if(t==='var')return lookup(e,p[1]);if(t==='mul')return expr(p[1],e)*expr(p[2],e);return expr(p[1],e)+expr(p[2],e);}function lookup(e,key){while(e!==null){if(e.name===key)return e.value;e=e.parent;}return undefined;}return expr(["add",["mul",["var","x"],["lit",2]],["lit",3]],{name:'x',value:x,parent:null});}

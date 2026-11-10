@@ -1,0 +1,1139 @@
+{
+  "inputs": [
+    0,
+    1,
+    2,
+    10,
+    100,
+    1000,
+    2500,
+    10000,
+    100000
+  ],
+  "source_sha256": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+  "source_original": "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/first-projection/benchmarks/nbody/input.js",
+  "baseline_backend": "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new",
+  "baseline_commit": "4ae8f8ca4f8341b5cb8426f5239f8867c1e2d936",
+  "versions": {
+    "node": "v26.5.0",
+    "clang": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+  },
+  "correctness": {
+    "original_js": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ],
+    "direct_c": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ],
+    "ordinary_numeric_interpreter": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ],
+    "numeric_projected_js": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ],
+    "numeric_c": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23"
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c"
+      },
+      {
+        "input": 2,
+        "bits": "bfc5a43dbe5b5a76"
+      },
+      {
+        "input": 10,
+        "bits": "bfc5a42f4d7344b0"
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa"
+      },
+      {
+        "input": 1000,
+        "bits": "bfc5a4a9a3521fa9"
+      },
+      {
+        "input": 2500,
+        "bits": "bfc5a343ca30cdfa"
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16"
+      }
+    ]
+  },
+  "timings": {
+    "10000": {
+      "original_js": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.010340722333333332,
+              0.010350694666666669,
+              0.010252694333333333,
+              0.01032893066666666,
+              0.010233513999999994,
+              0.009228402666666663,
+              0.009228
+            ],
+            "batch": 3,
+            "median_seconds": 0.010252694333333333
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.010208236333333332,
+              0.010192291666666662,
+              0.010216347333333332,
+              0.01018616666666667,
+              0.009954680666666662,
+              0.009312375000000003,
+              0.009167222333333343
+            ],
+            "batch": 3,
+            "median_seconds": 0.01018616666666667
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.010241791666666666,
+              0.010236180666666669,
+              0.010169097333333335,
+              0.01011929166666666,
+              0.009985652666666673,
+              0.009182611333333332,
+              0.009251875000000003
+            ],
+            "batch": 3,
+            "median_seconds": 0.01011929166666666
+          }
+        ],
+        "median_seconds": 0.01018616666666667,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      "direct_c": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "samples_seconds": [
+              0.012071,
+              0.012347,
+              0.011878,
+              0.011936,
+              0.012145,
+              0.012045,
+              0.011998
+            ],
+            "median_seconds": 0.012045,
+            "warmup_calls": 5,
+            "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "samples_seconds": [
+              0.011875,
+              0.011937,
+              0.011852,
+              0.011863,
+              0.011795,
+              0.011784,
+              0.011775
+            ],
+            "median_seconds": 0.011852,
+            "warmup_calls": 5,
+            "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "samples_seconds": [
+              0.011919,
+              0.011816,
+              0.012084,
+              0.012009,
+              0.012119,
+              0.012011,
+              0.011985
+            ],
+            "median_seconds": 0.012009,
+            "warmup_calls": 5,
+            "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+          }
+        ],
+        "median_seconds": 0.012009,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      "ordinary_numeric_interpreter": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.19854975000000014,
+              0.19655949999999983,
+              0.19331720900000005,
+              0.19487870900000007,
+              0.1942476670000001,
+              0.194991708,
+              0.1939954170000001
+            ],
+            "batch": 1,
+            "median_seconds": 0.19487870900000007
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.19729212499999993,
+              0.1973722500000001,
+              0.19735241599999995,
+              0.1966546249999999,
+              0.1965427090000003,
+              0.19655895800000006,
+              0.19700762499999974
+            ],
+            "batch": 1,
+            "median_seconds": 0.19700762499999974
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.19954712500000005,
+              0.19947462500000007,
+              0.1972047910000001,
+              0.1967444579999999,
+              0.19597458300000017,
+              0.196042375,
+              0.196813083
+            ],
+            "batch": 1,
+            "median_seconds": 0.196813083
+          }
+        ],
+        "median_seconds": 0.196813083,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      "numeric_projected_js": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.06025283300000001,
+              0.059955208000000086,
+              0.06032612499999993,
+              0.06022041600000012,
+              0.05985045800000012,
+              0.05989325000000008,
+              0.05995837499999993
+            ],
+            "batch": 1,
+            "median_seconds": 0.05995837499999993
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.059574833000000015,
+              0.05954812500000003,
+              0.05916508299999998,
+              0.05916108299999996,
+              0.059322541,
+              0.059302999999999884,
+              0.0588726250000002
+            ],
+            "batch": 1,
+            "median_seconds": 0.059302999999999884
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.05946850000000006,
+              0.059200290999999995,
+              0.05881770799999993,
+              0.059335000000000034,
+              0.05960200000000009,
+              0.059217167000000015,
+              0.05919650000000001
+            ],
+            "batch": 1,
+            "median_seconds": 0.059217167000000015
+          }
+        ],
+        "median_seconds": 0.059302999999999884,
+        "bits": "bfc5a254abdbc7d4"
+      },
+      "numeric_c": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "samples_seconds": [
+              0.001862,
+              0.001823,
+              0.001869,
+              0.001918,
+              0.001837,
+              0.001912,
+              0.001824
+            ],
+            "median_seconds": 0.001862,
+            "warmup_calls": 5,
+            "stderr": ""
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "samples_seconds": [
+              0.00185,
+              0.001817,
+              0.001884,
+              0.001865,
+              0.001862,
+              0.001885,
+              0.001856
+            ],
+            "median_seconds": 0.001862,
+            "warmup_calls": 5,
+            "stderr": ""
+          },
+          {
+            "input": 10000,
+            "bits": "bfc5a254abdbc7d4",
+            "samples_seconds": [
+              0.002001,
+              0.001887,
+              0.001803,
+              0.001797,
+              0.001809,
+              0.001837,
+              0.001873
+            ],
+            "median_seconds": 0.001837,
+            "warmup_calls": 5,
+            "stderr": ""
+          }
+        ],
+        "median_seconds": 0.001862,
+        "bits": "bfc5a254abdbc7d4"
+      }
+    },
+    "100000": {
+      "original_js": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.10321620899999999,
+              0.10376095800000007,
+              0.09262795800000004,
+              0.09212495799999999,
+              0.09363149999999996,
+              0.09369183299999997,
+              0.09323287500000003
+            ],
+            "batch": 1,
+            "median_seconds": 0.09363149999999996
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.10280087500000001,
+              0.10323550000000001,
+              0.09181341700000008,
+              0.09227887500000008,
+              0.09232379200000003,
+              0.09281812500000002,
+              0.093520625
+            ],
+            "batch": 1,
+            "median_seconds": 0.09281812500000002
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.10348862500000001,
+              0.103909292,
+              0.09316333300000008,
+              0.09293708299999992,
+              0.09379233399999998,
+              0.09436533399999997,
+              0.09354287499999998
+            ],
+            "batch": 1,
+            "median_seconds": 0.09379233399999998
+          }
+        ],
+        "median_seconds": 0.09363149999999996,
+        "bits": "bfc5a468a93fee16"
+      },
+      "direct_c": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "samples_seconds": [
+              0.118472,
+              0.118202,
+              0.11909,
+              0.118445,
+              0.119345,
+              0.118667,
+              0.118204
+            ],
+            "median_seconds": 0.118472,
+            "warmup_calls": 5,
+            "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "samples_seconds": [
+              0.11982,
+              0.118547,
+              0.117601,
+              0.119823,
+              0.11802,
+              0.117793,
+              0.117967
+            ],
+            "median_seconds": 0.11802,
+            "warmup_calls": 5,
+            "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "samples_seconds": [
+              0.117046,
+              0.117634,
+              0.117526,
+              0.117506,
+              0.117738,
+              0.117007,
+              0.117402
+            ],
+            "median_seconds": 0.117506,
+            "warmup_calls": 5,
+            "stderr": "{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n{\"peak_bytes\":46574,\"reserved_object_bytes\":213072,\"minor_collections\":0,\"major_collections\":0}\n"
+          }
+        ],
+        "median_seconds": 0.11802,
+        "bits": "bfc5a468a93fee16"
+      },
+      "ordinary_numeric_interpreter": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              1.9722026670000015,
+              1.9727318330000017,
+              1.9518125839999994,
+              1.9492005839999984,
+              1.9739834579999989,
+              1.9697568329999995,
+              1.9765457910000004
+            ],
+            "batch": 1,
+            "median_seconds": 1.9722026670000015
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              1.947296083000001,
+              1.9623244159999977,
+              1.9618104999999997,
+              1.9552181659999988,
+              1.9415930000000008,
+              1.9490576660000005,
+              1.9596282080000018
+            ],
+            "batch": 1,
+            "median_seconds": 1.9552181659999988
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              1.9525761249999996,
+              1.9452180409999982,
+              1.9537890829999998,
+              1.9677980830000015,
+              1.9744498749999984,
+              1.9544541250000003,
+              1.9428459159999985
+            ],
+            "batch": 1,
+            "median_seconds": 1.9537890829999998
+          }
+        ],
+        "median_seconds": 1.9552181659999988,
+        "bits": "bfc5a468a93fee16"
+      },
+      "numeric_projected_js": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.6280510420000001,
+              0.4439111670000002,
+              0.43462641600000007,
+              0.4348840419999997,
+              0.43465066600000135,
+              0.43274812499999826,
+              0.43293204200000035
+            ],
+            "batch": 1,
+            "median_seconds": 0.43465066600000135
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.6251402499999995,
+              0.44568579200000025,
+              0.4386174170000004,
+              0.4352141250000004,
+              0.4343867500000015,
+              0.4333330829999995,
+              0.43378558300000075
+            ],
+            "batch": 1,
+            "median_seconds": 0.4352141250000004
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "warmup_calls": 5,
+            "samples_seconds": [
+              0.6230072920000003,
+              0.44324633300000005,
+              0.4378914999999997,
+              0.436162292,
+              0.43309991699999956,
+              0.4308970419999987,
+              0.4300460839999996
+            ],
+            "batch": 1,
+            "median_seconds": 0.436162292
+          }
+        ],
+        "median_seconds": 0.4352141250000004,
+        "bits": "bfc5a468a93fee16"
+      },
+      "numeric_c": {
+        "independent_process_rounds": 3,
+        "rounds": [
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "samples_seconds": [
+              0.018577,
+              0.018491,
+              0.018294,
+              0.018627,
+              0.018529,
+              0.018249,
+              0.018368
+            ],
+            "median_seconds": 0.018491,
+            "warmup_calls": 5,
+            "stderr": ""
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "samples_seconds": [
+              0.018538,
+              0.018565,
+              0.01882,
+              0.018692,
+              0.018293,
+              0.018534,
+              0.01875
+            ],
+            "median_seconds": 0.018565,
+            "warmup_calls": 5,
+            "stderr": ""
+          },
+          {
+            "input": 100000,
+            "bits": "bfc5a468a93fee16",
+            "samples_seconds": [
+              0.018275,
+              0.018542,
+              0.018672,
+              0.018693,
+              0.01818,
+              0.01849,
+              0.018233
+            ],
+            "median_seconds": 0.01849,
+            "warmup_calls": 5,
+            "stderr": ""
+          }
+        ],
+        "median_seconds": 0.018491,
+        "bits": "bfc5a468a93fee16"
+      }
+    }
+  },
+  "methodology": {
+    "independent_timing_rounds": 3,
+    "samples_per_round": 7,
+    "warmup_calls_per_round": 5,
+    "timed_region": "execution only, excluding process startup and source compilation",
+    "numeric_c_allocations": "all numeric_main allocations and frees included",
+    "direct_c_context": "context creation/free excluded, guest execution allocations included",
+    "flags": [
+      "-O2",
+      "-ffp-contract=off"
+    ],
+    "timeout_seconds_per_process": 60,
+    "source_algorithm_edits": false
+  },
+  "projector_environment": {
+    "PE_CONTEXT_POINTS": "1",
+    "PE_NO_SHARED_CONTEXTS": "1",
+    "SPEC_WEIGHT_BUDGET": "150000000"
+  },
+  "structure": {
+    "residual_bytes": 99365,
+    "c_bytes": 162561,
+    "residual_sha256": "504e5ef35f5e3fa3e019504112a85bd70456114c28f791c8552b124d91c80aa6",
+    "c_sha256": "d00cda7c49b8c8eaf52e3066ee3839c2d8607c84c512d1cfbff674e0b65896ea",
+    "buffer_allocation_call_sites": 3,
+    "allocF64_call_sites": 3,
+    "no_tagged_runtime": true,
+    "no_interpreter_dispatch": true,
+    "C_function_definitions": [
+      "numeric_main"
+    ],
+    "calloc_implementation_sites": 1,
+    "buffer_free_call_sites": 3,
+    "no_hotpath_memory_helpers": true,
+    "no_runtime_pc_or_switch": true
+  },
+  "first_numeric_c_timing": {
+    "input": 100000,
+    "bits": "bfc5a468a93fee16",
+    "samples_seconds": [
+      0.018716,
+      0.018487,
+      0.018634,
+      0.018716,
+      0.018859,
+      0.018747,
+      0.018692
+    ],
+    "median_seconds": 0.018716,
+    "warmup_calls": 5,
+    "stderr": ""
+  },
+  "allocation_observations": [
+    {
+      "input": 0,
+      "bits": "bfc5a441459acc23",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 38
+    },
+    {
+      "input": 1,
+      "bits": "bfc5a43f830e208c",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 2,
+      "bits": "bfc5a43dbe5b5a76",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 10,
+      "bits": "bfc5a42f4d7344b0",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 100,
+      "bits": "bfc5a37493e5edaa",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 1000,
+      "bits": "bfc5a4a9a3521fa9",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 2500,
+      "bits": "bfc5a343ca30cdfa",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 10000,
+      "bits": "bfc5a254abdbc7d4",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    },
+    {
+      "input": 100000,
+      "bits": "bfc5a468a93fee16",
+      "allocations": 3,
+      "buffer_lengths": [
+        4096,
+        4096,
+        4
+      ],
+      "total_payload_bytes": 65568,
+      "heap_high_water": 42,
+      "stack_high_water": 47
+    }
+  ],
+  "all_bitwise_equal": true,
+  "sanitizers": {
+    "flags": [
+      "address",
+      "undefined"
+    ],
+    "checks": [
+      {
+        "input": 0,
+        "bits": "bfc5a441459acc23",
+        "samples_seconds": [
+          3.2e-05
+        ],
+        "median_seconds": 3.2e-05,
+        "warmup_calls": 0,
+        "stderr": ""
+      },
+      {
+        "input": 1,
+        "bits": "bfc5a43f830e208c",
+        "samples_seconds": [
+          2.4e-05
+        ],
+        "median_seconds": 2.4e-05,
+        "warmup_calls": 0,
+        "stderr": ""
+      },
+      {
+        "input": 100,
+        "bits": "bfc5a37493e5edaa",
+        "samples_seconds": [
+          0.000106
+        ],
+        "median_seconds": 0.000106,
+        "warmup_calls": 0,
+        "stderr": ""
+      },
+      {
+        "input": 10000,
+        "bits": "bfc5a254abdbc7d4",
+        "samples_seconds": [
+          0.00777
+        ],
+        "median_seconds": 0.00777,
+        "warmup_calls": 0,
+        "stderr": ""
+      },
+      {
+        "input": 100000,
+        "bits": "bfc5a468a93fee16",
+        "samples_seconds": [
+          0.076673
+        ],
+        "median_seconds": 0.076673,
+        "warmup_calls": 0,
+        "stderr": ""
+      }
+    ]
+  },
+  "read_only_input_hashes_before": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend": "29c60a887b0a2bf8d0659104c9559ac326e7e2d7513a417bd37b87fa85be528c",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/js-frontend/src/c_backend.rs": "db2980fc49fef53f4eb643e5913175dcd5d16e98de6e313b8567cfa7759a57f8",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/first-projection/benchmarks/nbody/input.js": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/driver.c": "52e4f4effb7a2b1296e0c3537fe39f13e0146b966940c0d4f976dd3b2e11e20f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c": "af39afcb97edeb6080fec6ca66e3a75d73dba8b4f058f617fee9ab7b5e88a718",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c": "d2e5ee19cd697b84cd36e462b86e11aaa3910505df1d017d9660463a5cbf15eb",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.h": "a7acb13ed0744d7dba5576880374d24109f34ddf4e42d9c07ae98df2b8fedb4b",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime_internal.h": "2dcd79cd4f568d0a1fe0e51fccfc5d104b04b74c53239f19fd2a287546208002",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/descriptor_guards.c": "e18e36f510b45353eb4a8fd33408a4ffb181ce95c1ceeed19293c5ee415b73c6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/record_layouts.c": "07a950c7628a89ca8fad8c6ebad7fdd80ea799f57c17a3ff8c92ed35be808858",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Apache2": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Boost": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/SOURCE.json": "325877bd34c58ffdb079e44f957c9961dea01cdbf896c3887f0f11a13f1dbedd",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16"
+  },
+  "read_only_input_hashes_after": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend": "29c60a887b0a2bf8d0659104c9559ac326e7e2d7513a417bd37b87fa85be528c",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/js-frontend/src/c_backend.rs": "db2980fc49fef53f4eb643e5913175dcd5d16e98de6e313b8567cfa7759a57f8",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/first-projection/benchmarks/nbody/input.js": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/driver.c": "52e4f4effb7a2b1296e0c3537fe39f13e0146b966940c0d4f976dd3b2e11e20f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c": "af39afcb97edeb6080fec6ca66e3a75d73dba8b4f058f617fee9ab7b5e88a718",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c": "d2e5ee19cd697b84cd36e462b86e11aaa3910505df1d017d9660463a5cbf15eb",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.h": "a7acb13ed0744d7dba5576880374d24109f34ddf4e42d9c07ae98df2b8fedb4b",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime_internal.h": "2dcd79cd4f568d0a1fe0e51fccfc5d104b04b74c53239f19fd2a287546208002",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/descriptor_guards.c": "e18e36f510b45353eb4a8fd33408a4ffb181ce95c1ceeed19293c5ee415b73c6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/record_layouts.c": "07a950c7628a89ca8fad8c6ebad7fdd80ea799f57c17a3ff8c92ed35be808858",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Apache2": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Boost": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/SOURCE.json": "325877bd34c58ffdb079e44f957c9961dea01cdbf896c3887f0f11a13f1dbedd",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16"
+  },
+  "read_only_inputs_unchanged": true,
+  "commands": [
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new rev-parse HEAD",
+    "node --version",
+    "clang --version",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend --c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js",
+    "clang -std=c11 -O2 -ffp-contract=off -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/direct-generated.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/direct-timed-driver.c -lm -o /var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js check '[0, 1, 2, 10, 100, 1000, 2500, 10000, 100000]'",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 0 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 1 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 2 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 10 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 100 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 1000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 2500 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 10000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 100000 0",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 10000",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 10000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 10000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 10000 7",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js time 100000",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 100000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 100000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/direct 100000 7",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/numeric-project --harness /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/numeric-project /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/input.js",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/numeric-to-c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js",
+    "clang -std=c11 -O2 -ffp-contract=off /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/generated.c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/numeric-driver.c -lm -o /var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js check '[0, 1, 2, 10, 100, 1000, 2500, 10000, 100000]'",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js check '[0, 1, 2, 10, 100, 1000, 2500, 10000, 100000]'",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 0 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 1 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 2 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 10 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 100 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 1000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 2500 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 10000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 100000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 100000 7",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/observe-memory.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js '[0, 1, 2, 10, 100, 1000, 2500, 10000, 100000]'",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js time 10000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js time 10000",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 10000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 10000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 10000 7",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/interpreter-harness.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js time 100000",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/residual.js time 100000",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 100000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 100000 7",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric 100000 7",
+    "clang -g -fsanitize=address,undefined -fno-sanitize-recover=all -std=c11 -O1 -ffp-contract=off /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/generated.c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/numeric-driver.c -lm -o /var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric-san",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric-san 0 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric-san 1 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric-san 100 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric-san 10000 0",
+    "/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/numeric-nbody-rhd5lo7a/numeric-san 100000 0"
+  ],
+  "numeric_pipeline_sha256": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/numeric-project": "2f4c2633f3e9c2168a8423d4b0a2140dff089a95d1f50acc4d9dd538e959b45f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/numeric-to-c": "9f574b4b5ce6ab0c444bd3808ab0394b0bda20339dc31db9de5dec1b9d97cbd9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/interpreter.js": "0d9ae3fdbef14695feae3b0c800f659190e50dac134c57712fc11050fcda46b3"
+  },
+  "standalone_smoke": {
+    "input": 100000,
+    "stdout": "-0.16907985939165887\n",
+    "flags": [
+      "-std=c11",
+      "-O2",
+      "-ffp-contract=off",
+      "-DNUMERIC_STANDALONE",
+      "-lm"
+    ],
+    "bits": "bfc5a468a93fee16",
+    "compile_warnings": "55 unused-value warnings from residual expression statements; compilation succeeded"
+  },
+  "post_regression_validation": {
+    "timestamp": "2026-11-09T17:37:41.096492+00:00",
+    "numeric_to_c_sha256": "915e377c055c5cf55cebf3fb1b7ae1f73274757c3959a57c154244c8c044fe6e",
+    "regenerated_c_sha256": "d00cda7c49b8c8eaf52e3066ee3839c2d8607c84c512d1cfbff674e0b65896ea",
+    "measured_c_unchanged": true,
+    "note": "Emitter true-loop analysis was improved for two additional generic fixtures after measurement. Regenerated N-body C is byte-for-byte identical to the measured and sanitized artifact."
+  }
+}

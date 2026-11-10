@@ -1,0 +1,45 @@
+{
+  "case": {
+    "name": "hermes-nbody",
+    "suite": "hermes",
+    "upstream": "nbody.js",
+    "adapter": "nbody.js",
+    "inputs": [
+      0,
+      1,
+      10,
+      1000
+    ]
+  },
+  "sourceWorktree": "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new",
+  "sourceCommit": "4ae8f8ca4f8341b5cb8426f5239f8867c1e2d936",
+  "preparation": "Exact tools/c-target.py prepare(case) output, imported and invoked unchanged. Original upstream IIFE and print driver replaced by main(input) and existing adapter, exactly as the C corpus.",
+  "files": {
+    "upstream.js": {
+      "source": "corpus-c/upstream/nbody.js",
+      "sha256": "18408ef1e5d7d5116e988cff3c08ed4d8eb0d3a9fd9b70f327e1a2676e530de7"
+    },
+    "adapter.js": {
+      "source": "corpus-c/adapters/nbody.js",
+      "sha256": "d4221822bb677c5d91aadcc076c456b8ac46966671e13a3c122ef4107e614f0d"
+    },
+    "LICENSE.md": {
+      "source": "corpus-c/upstream/nbody-LICENSE.md",
+      "sha256": "108f57d77dfd025c31819de9c25ad19ca855f484bde74b6004209aa2b2fc2853"
+    }
+  },
+  "combinedSha256": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+  "performanceInput": 10000,
+  "performanceInputSource": "tools/c-performance.py:83",
+  "upstream": {
+    "repository": "https://github.com/facebook/hermes",
+    "commit": "51ae2a08ce8cb06fcfa718cddab9c94ea9eee7f6",
+    "paths": [
+      "benchmarks/octane/richards.js",
+      "benchmarks/octane/splay.js",
+      "benchmarks/octane/raytrace.js",
+      "benchmarks/nbody/original/nbody.js",
+      "benchmarks/nbody/LICENSE.md"
+    ]
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "measured_at": "2026-11-09T19:00:07.028813+00:00",
+  "purpose": "Executed primitive audit for identity-guarded direct native guest calls",
+  "baseline_commit": null,
+  "baseline_source": "docs/object-projection/benchmarks/richards/frame-promotion.generated.c",
+  "baseline_source_command": null,
+  "candidate_source": "docs/object-projection/benchmarks/richards/known-callee.generated.c",
+  "original_candidate_source": "/tmp/richards-known.final.c",
+  "input": "1000",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "flags": [
+    "-std=c11",
+    "-O2",
+    "-ffp-contract=off",
+    "-DOBJECT_STANDALONE",
+    "-lm"
+  ],
+  "reproduce_command": "python3 docs/object-projection/benchmarks/richards/audit-frame-promotion.py",
+  "baseline": {
+    "source_sha256": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+    "counts": {
+      "oc_values_get": 76069,
+      "oc_values_set": 51455,
+      "oc_get": 201926,
+      "oc_set": 50799,
+      "oc_dispatch": 40490,
+      "oc_binary": 96571,
+      "oc_function_code": 40465,
+      "oc_function_env": 40490,
+      "oc_call_known": 0
+    },
+    "result": [
+      "array",
+      [
+        [
+          "number",
+          2322
+        ],
+        [
+          "number",
+          928
+        ]
+      ]
+    ]
+  },
+  "candidate": {
+    "source_sha256": "bc6f51ef8739f46241fde69d7fa98e95c14f2a9946f59378381a36defaf6dac1",
+    "counts": {
+      "oc_values_get": 76069,
+      "oc_values_set": 51455,
+      "oc_get": 201926,
+      "oc_set": 50799,
+      "oc_dispatch": 0,
+      "oc_binary": 96571,
+      "oc_function_code": 40465,
+      "oc_function_env": 40490,
+      "oc_call_known": 40490
+    },
+    "result": [
+      "array",
+      [
+        [
+          "number",
+          2322
+        ],
+        [
+          "number",
+          928
+        ]
+      ]
+    ]
+  },
+  "value_buffer_accesses": {
+    "baseline": 127524,
+    "candidate": 127524,
+    "reduction_fraction": 0.0
+  },
+  "counter_caveat": "Counters are from separately instrumented execution. No instrumented elapsed time is used as a performance result.",
+  "baseline_stage": "Generic capture-guided frame promotion",
+  "baseline_stage_commit": "4e85986fa991412e9b919e4940a68eddf6e75d6c",
+  "interpretation": "The same 40490 guest function invocations remain; actual function-code guards route all of them directly to generated native entries for this tested input. Dynamic fallback remains in the program and is exercised by semantic regressions.",
+  "preliminary_timing": {
+    "input": 1000,
+    "value": [
+      2322,
+      928
+    ],
+    "allocation_blocks_per_invocation": 377,
+    "object_allocations_per_invocation": 120,
+    "warmup_calls": 5,
+    "pilot_calls": 1,
+    "batch": 20,
+    "samples_seconds": [
+      0.00133609999903,
+      0.00115950000472,
+      0.00109945000149,
+      0.00108059999766,
+      0.00109470000025,
+      0.00110059999861,
+      0.00109800000209
+    ],
+    "consumed_checksum": 339013152524,
+    "median_seconds": 0.00109945000149,
+    "driver_source": "docs/object-projection/benchmarks/richards/object-timed-driver.c",
+    "driver_sha256": "690f3be9f290b738cb3a6a4988dff37140c1831f81f6fe29158d05369bae1d89",
+    "compile_command": "cat /tmp/richards-known.final.c docs/object-projection/benchmarks/richards/object-timed-driver.c > /tmp/richards-known.final.timed.c; clang -std=c11 -O2 -ffp-contract=off /tmp/richards-known.final.timed.c -lm -o /tmp/richards-known.final.timed",
+    "run_command": "/tmp/richards-known.final.timed 1000 7 5",
+    "included_costs": "Context creation, guest allocation, execution, output consumption and all context cleanup",
+    "caveat": "One preliminary seven-sample process, not the final multi-round benchmark; do not use alone for a final speed comparison."
+  }
+}

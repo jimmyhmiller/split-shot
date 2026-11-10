@@ -1,0 +1,4 @@
+
+thread 'main' (151445599) panicked at src/js.rs:8231:17:
+specialization budget exceeded (10000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

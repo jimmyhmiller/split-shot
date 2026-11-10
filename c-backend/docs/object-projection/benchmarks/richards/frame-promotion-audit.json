@@ -1,0 +1,104 @@
+{
+  "measured_at": "2026-11-09T18:55:45.623963+00:00",
+  "purpose": "Executed primitive audit for generic noncaptured lexical-frame promotion",
+  "baseline_commit": "fa283978ae28b979f17039fd049090dae0d8f0a1",
+  "baseline_source": null,
+  "baseline_source_command": [
+    "git",
+    "show",
+    "fa283978ae28b979f17039fd049090dae0d8f0a1:claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.generated.c"
+  ],
+  "candidate_source": "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/frame-promotion.generated.c",
+  "original_candidate_source": "/tmp/richards-flat.c",
+  "input": "1000",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "flags": [
+    "-std=c11",
+    "-O2",
+    "-ffp-contract=off",
+    "-DOBJECT_STANDALONE",
+    "-lm"
+  ],
+  "reproduce_command": "python3 docs/object-projection/benchmarks/richards/audit-frame-promotion.py",
+  "baseline": {
+    "source_sha256": "1efc6705ae992a702f58136282197e020ba190fe12ce21f8dce01678edb9a344",
+    "counts": {
+      "oc_values_get": 312134,
+      "oc_values_set": 164356,
+      "oc_get": 201926,
+      "oc_set": 50799,
+      "oc_dispatch": 40490,
+      "oc_binary": 96571,
+      "oc_function_code": 40465,
+      "oc_function_env": 40490,
+      "oc_call_known": 0
+    },
+    "result": [
+      "array",
+      [
+        [
+          "number",
+          2322
+        ],
+        [
+          "number",
+          928
+        ]
+      ]
+    ]
+  },
+  "candidate": {
+    "source_sha256": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+    "counts": {
+      "oc_values_get": 76069,
+      "oc_values_set": 51455,
+      "oc_get": 201926,
+      "oc_set": 50799,
+      "oc_dispatch": 40490,
+      "oc_binary": 96571,
+      "oc_function_code": 40465,
+      "oc_function_env": 40490,
+      "oc_call_known": 0
+    },
+    "result": [
+      "array",
+      [
+        [
+          "number",
+          2322
+        ],
+        [
+          "number",
+          928
+        ]
+      ]
+    ]
+  },
+  "value_buffer_accesses": {
+    "baseline": 476490,
+    "candidate": 127524,
+    "reduction_fraction": 0.7323679405653843
+  },
+  "counter_caveat": "Counters are from separately instrumented execution. No instrumented elapsed time is used as a performance result.",
+  "preliminary_timing": {
+    "candidate_source_sha256": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+    "driver_source": "docs/object-projection/benchmarks/richards/object-timed-driver.c",
+    "driver_sha256": "690f3be9f290b738cb3a6a4988dff37140c1831f81f6fe29158d05369bae1d89",
+    "compile_command": "cat /tmp/richards-flat.c docs/object-projection/benchmarks/richards/object-timed-driver.c > /tmp/richards-flat.timed.c; clang -std=c11 -O2 -ffp-contract=off /tmp/richards-flat.timed.c -lm -o /tmp/richards-flat.timed",
+    "run_command": "/tmp/richards-flat.timed 1000 7 5",
+    "samples_seconds": [
+      0.00135841666876,
+      0.00138312499621,
+      0.00138129166832,
+      0.00138604166568,
+      0.001371499995,
+      0.00138337499811,
+      0.00136025000635
+    ],
+    "median_seconds": 0.00138129166832,
+    "warmup_calls": 5,
+    "batch": 24,
+    "included_costs": "Host context creation, guest allocation, execution, output consumption and all context cleanup",
+    "caveat": "One preliminary seven-sample process, not the final multi-round benchmark; no cross-stage speed claim should use this alone."
+  }
+}

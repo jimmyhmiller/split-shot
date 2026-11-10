@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/ulfjack/ryu",
+  "commit": "4c0618b0e44f7ef027ebae05d2cc7812048f7c8f",
+  "files": [
+    "ryu/d2s.c",
+    "ryu/ryu.h",
+    "ryu/common.h",
+    "ryu/digit_table.h",
+    "ryu/d2s_intrinsics.h",
+    "ryu/d2s_full_table.h",
+    "ryu/d2s_small_table.h"
+  ],
+  "license": "Apache-2.0 OR BSL-1.0"
+}

@@ -1,0 +1,26 @@
+--- a/js-frontend/src/object_c_runtime.h
++++ b/js-frontend/src/object_c_runtime.h
+@@ -239,7 +239,14 @@
+     oc_fail(c, "numeric value required");
+   return v.as.number;
+ }
+-static oc_value oc_get(oc_ctx *c, oc_value v, double atom) {
++/* Preserve the complete generic lookup while exposing static property atoms
++ * to the C optimizer. No validation, presence or prototype check is removed. */
++#if defined(__GNUC__) || defined(__clang__)
++#define OC_PROPERTY_GET_INLINE static inline __attribute__((always_inline))
++#else
++#define OC_PROPERTY_GET_INLINE static inline
++#endif
++OC_PROPERTY_GET_INLINE oc_value oc_get(oc_ctx *c, oc_value v, double atom) {
+   size_t key = oc_size(c, atom);
+   for (size_t depth = 0; depth < 10000; depth++) {
+     oc_obj *o = oc_object(c, v);
+@@ -254,6 +261,7 @@
+   oc_fail(c, "prototype chain limit");
+   return oc_undef();
+ }
++#undef OC_PROPERTY_GET_INLINE
+ static oc_value oc_set(oc_ctx *c, oc_value v, double atom, oc_value x) {
+   oc_obj *o = oc_object(c, v);
+   size_t key = oc_size(c, atom);

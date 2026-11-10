@@ -1,0 +1,341 @@
+{
+  "timestamp": "2026-11-09T16:37:29.537Z",
+  "node": "v26.5.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M2 Max",
+  "input": 10000,
+  "inputs": [
+    0,
+    1,
+    2,
+    10,
+    100,
+    1000,
+    2500,
+    10000
+  ],
+  "samples": 7,
+  "warmup": 5,
+  "timing": "Separate 120-second-bounded Node process per mode; ordinary Node globals, no vm proxy costs; 5 warmups; 7 samples; adaptive batch targeting 30 ms, capped at 100 calls. Compilation excluded. Output checked every call. Correctness separately uses vm with 20-second timeouts.",
+  "modes": {
+    "native": {
+      "bytes": 4520,
+      "sha256": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+      "interpreterHelperOccurrences": 0,
+      "dispatchTagOccurrences": 0,
+      "mathSqrtOccurrences": 2,
+      "timing": {
+        "batch": 3,
+        "warmup": 5,
+        "samples": 7,
+        "msPerCall": [
+          10.470916666666668,
+          10.280694333333335,
+          10.264889000000002,
+          10.340986333333328,
+          10.463375000000005,
+          9.315805333333335,
+          9.275194333333332
+        ],
+        "medianMs": 10.280694333333335,
+        "minMs": 9.275194333333332,
+        "maxMs": 10.470916666666668
+      }
+    },
+    "interpreter": {
+      "bytes": 24226,
+      "sha256": "898b052e12ecca030d4b0ab02f1593f5adfccc3251311f11ff51081134bbb84e",
+      "interpreterHelperOccurrences": 62,
+      "dispatchTagOccurrences": 640,
+      "mathSqrtOccurrences": 2,
+      "correctnessInputs": [
+        0,
+        1,
+        2,
+        10,
+        100,
+        1000,
+        2500,
+        10000
+      ],
+      "timing": {
+        "batch": 1,
+        "warmup": 5,
+        "samples": 7,
+        "msPerCall": [
+          186.44716700000004,
+          186.66429100000005,
+          186.215416,
+          185.35395900000003,
+          184.12616700000012,
+          184.36887500000012,
+          183.76295800000025
+        ],
+        "medianMs": 185.35395900000003,
+        "minMs": 183.76295800000025,
+        "maxMs": 186.66429100000005
+      }
+    },
+    "projected": {
+      "bytes": 9583,
+      "sha256": "5ee8fe67a5ce5f0c1ecaa84e3258f84c616b6fd0df15bb1d93da99b08e713858",
+      "interpreterHelperOccurrences": 0,
+      "dispatchTagOccurrences": 0,
+      "mathSqrtOccurrences": 2,
+      "target": {
+        "functions": 1,
+        "calls": 0,
+        "expression_nodes": 1701
+      },
+      "compileMs": 5885.487583,
+      "correctnessInputs": [
+        0,
+        1,
+        2,
+        10,
+        100,
+        1000,
+        2500,
+        10000
+      ],
+      "timing": {
+        "batch": 3,
+        "warmup": 5,
+        "samples": 7,
+        "msPerCall": [
+          11.085874999999996,
+          8.805055333333334,
+          8.153749999999993,
+          8.159277666666668,
+          8.255930666666671,
+          8.150764,
+          8.302986333333328
+        ],
+        "medianMs": 8.255930666666671,
+        "minMs": 8.150764,
+        "maxMs": 11.085874999999996
+      }
+    },
+    "directPE": {
+      "bytes": 4823,
+      "sha256": "6d38c6e3243101cb952e7072b11b33ea258c6285612432a83fd9bff7b4eaeec3",
+      "interpreterHelperOccurrences": 0,
+      "dispatchTagOccurrences": 0,
+      "mathSqrtOccurrences": 2,
+      "compileMs": 29.841042000000016,
+      "correctnessInputs": [
+        0,
+        1,
+        2,
+        10,
+        100,
+        1000,
+        2500,
+        10000
+      ],
+      "timing": {
+        "batch": 3,
+        "warmup": 5,
+        "samples": 7,
+        "msPerCall": [
+          10.703764000000001,
+          10.512541666666664,
+          10.510902666666672,
+          10.505027666666669,
+          10.755874999999994,
+          10.534514000000001,
+          10.483291666666664
+        ],
+        "medianMs": 10.512541666666664,
+        "minMs": 10.483291666666664,
+        "maxMs": 10.755874999999994
+      }
+    }
+  },
+  "status": "passed",
+  "expected": [
+    -0.16907516382852447,
+    -0.16907495402506745,
+    -0.16907474322097799,
+    -0.16907302171469984,
+    -0.1690507623824094,
+    -0.169087605234606,
+    -0.16904494640912998,
+    -0.16901644126443094
+  ],
+  "projectionEnvironment": {
+    "PE_NO_SHARED_CONTEXTS": "1",
+    "SPEC_WEIGHT_BUDGET": "50000000"
+  },
+  "ratios": {
+    "interpreterOverProjected": 22.451007219375864,
+    "projectedOverNative": 0.803051856127876
+  },
+  "independentTimingRounds": [
+    {
+      "order": [
+        "projected",
+        "native",
+        "directPE",
+        "interpreter"
+      ],
+      "timings": {
+        "projected": {
+          "batch": 3,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            11.22073633333334,
+            8.870055666666664,
+            8.214236,
+            8.072958333333332,
+            8.273527666666666,
+            8.12204166666667,
+            8.280139
+          ],
+          "medianMs": 8.273527666666666,
+          "minMs": 8.072958333333332,
+          "maxMs": 11.22073633333334
+        },
+        "native": {
+          "batch": 3,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            12.555805666666666,
+            12.618138666666667,
+            12.451986333333332,
+            12.432583333333335,
+            12.792860999999997,
+            11.12729166666666,
+            11.318194333333338
+          ],
+          "medianMs": 12.451986333333332,
+          "minMs": 11.12729166666666,
+          "maxMs": 12.792860999999997
+        },
+        "directPE": {
+          "batch": 3,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            10.894541666666667,
+            10.506486333333337,
+            10.62855566666667,
+            10.634083333333336,
+            10.613569333333336,
+            10.538694333333334,
+            10.623236333333333
+          ],
+          "medianMs": 10.623236333333333,
+          "minMs": 10.506486333333337,
+          "maxMs": 10.894541666666667
+        },
+        "interpreter": {
+          "batch": 1,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            188.280125,
+            188.43200000000002,
+            188.28212499999995,
+            187.91504199999986,
+            186.286333,
+            184.51024999999981,
+            184.20979199999965
+          ],
+          "medianMs": 187.91504199999986,
+          "minMs": 184.20979199999965,
+          "maxMs": 188.43200000000002
+        }
+      },
+      "ratios": {
+        "interpreterOverProjected": 22.71280759198926,
+        "projectedOverNative": 0.6644343677537499
+      }
+    },
+    {
+      "order": [
+        "native",
+        "projected",
+        "interpreter",
+        "directPE"
+      ],
+      "timings": {
+        "native": {
+          "batch": 3,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            10.533194333333334,
+            10.44679166666667,
+            10.382236,
+            10.457902999999996,
+            10.836805666666663,
+            9.544152666666662,
+            9.422430666666665
+          ],
+          "medianMs": 10.44679166666667,
+          "minMs": 9.422430666666665,
+          "maxMs": 10.836805666666663
+        },
+        "projected": {
+          "batch": 3,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            11.037944333333334,
+            8.999777666666668,
+            8.171777666666665,
+            8.257402666666659,
+            8.077249999999992,
+            8.12595833333332,
+            8.29449999999999
+          ],
+          "medianMs": 8.257402666666659,
+          "minMs": 8.077249999999992,
+          "maxMs": 11.037944333333334
+        },
+        "interpreter": {
+          "batch": 1,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            184.43154099999992,
+            185.97733300000004,
+            183.182542,
+            183.93054199999983,
+            182.56408299999998,
+            183.6890830000002,
+            190.95229199999994
+          ],
+          "medianMs": 183.93054199999983,
+          "minMs": 182.56408299999998,
+          "maxMs": 190.95229199999994
+        },
+        "directPE": {
+          "batch": 3,
+          "warmup": 5,
+          "samples": 7,
+          "msPerCall": [
+            10.89975,
+            10.499444666666667,
+            10.48915266666667,
+            10.501236000000006,
+            10.445610999999994,
+            10.459597333333335,
+            10.44031933333334
+          ],
+          "medianMs": 10.48915266666667,
+          "minMs": 10.44031933333334,
+          "maxMs": 10.89975
+        }
+      },
+      "ratios": {
+        "interpreterOverProjected": 22.2746242886383,
+        "projectedOverNative": 0.7904247476298535
+      }
+    }
+  ]
+}

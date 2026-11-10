@@ -1,0 +1,3 @@
+function entry(x){function expr(p,e){var t=p.tag;if(t===0)return p.a;if(t===1)return e[p.a];if(t===2)return expr(p.a,e)+expr(p.b,e);if(t===4)return expr(p.a,e)<expr(p.b,e);return undefined;}
+function stmt(p,e){var t=p.tag;if(t===1){e[p.a]=expr(p.b,e);return;}if(t===2){while(expr(p.a,e)){e[1]=e[1];stmt(p.b,e);}return;}if(t===3){var i=0;while(i<p.a.length){stmt(p.a[i],e);i=i+1;}}}
+var e=[x,0,0];stmt({"tag":3,"a":[{"tag":1,"a":1,"b":{"tag":0,"a":0}},{"tag":1,"a":2,"b":{"tag":0,"a":0}},{"tag":2,"a":{"tag":4,"a":{"tag":1,"a":1},"b":{"tag":1,"a":0}},"b":{"tag":3,"a":[{"tag":1,"a":2,"b":{"tag":2,"a":{"tag":1,"a":2},"b":{"tag":1,"a":1}}},{"tag":1,"a":1,"b":{"tag":2,"a":{"tag":1,"a":1},"b":{"tag":0,"a":1}}}]}}]},e);return e[2];}

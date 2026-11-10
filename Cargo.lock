@@ -117,6 +117,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "c-backend"
+version = "0.1.0"
+dependencies = [
+ "js-frontend",
+ "serde_json",
+ "swc_common",
+ "swc_ecma_ast",
+ "swc_ecma_codegen",
+ "swc_ecma_parser",
+ "swc_ecma_visit",
+]
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

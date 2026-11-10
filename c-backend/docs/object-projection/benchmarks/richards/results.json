@@ -1,0 +1,3364 @@
+{
+  "source_provenance": {
+    "source": {
+      "repository": "https://github.com/facebook/hermes",
+      "commit": "51ae2a08ce8cb06fcfa718cddab9c94ea9eee7f6",
+      "paths": [
+        "benchmarks/octane/richards.js",
+        "benchmarks/octane/splay.js",
+        "benchmarks/octane/raytrace.js",
+        "benchmarks/nbody/original/nbody.js",
+        "benchmarks/nbody/LICENSE.md"
+      ]
+    },
+    "richards_path": "benchmarks/octane/richards.js",
+    "source_url": "https://github.com/facebook/hermes/blob/51ae2a08ce8cb06fcfa718cddab9c94ea9eee7f6/benchmarks/octane/richards.js",
+    "preparation": "tools/c-target.py prepare(manifest case hermes-richards)",
+    "backend_path": "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new",
+    "backend_commit": "4ae8f8ca4f8341b5cb8426f5239f8867c1e2d936",
+    "sha256": {
+      "upstream-richards.js": "a2dfa477f4c36514e1d2e7200d05e4179a9dc97eef81d6ca42aa43c308f3ef06",
+      "input.js": "d73e5fec06f7ab85d9b5b2c1f450f721a17cd4b46ddf91166888b7d7761531f0",
+      "runtime-count.input.js": "425e98ee8f87ff832212581b1ae9ea1d1647d02710f67a919a913e0cb94543f6",
+      "original_adapter": "0d1c1ce9d2ad55a54b02f78a2a50e5b50d64dd0cae583c4bdc9e5ef9029fe08d",
+      "original_preparation_tool": "35f8ece6a7705df589c23ef709885550eb3791dc6e6382ee437d4c821b4a6cdf",
+      "original_manifest": "adca96b015fc1fa6c808cfce8bfce281c0054f484ccb2f673ffd60607d29fe6d"
+    },
+    "exact_adapter": {
+      "meaning": "repeat unchanged runRichards with COUNT=1000 input times, checking the original oracle each time",
+      "inputs": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "expected": true
+    },
+    "runtime_count_adapter": {
+      "meaning": "set COUNT from runtime input, execute unchanged scheduler once, return [queueCount,holdCount]",
+      "domain": "integer 1..1000000 inclusive; all other values rejected",
+      "edits": [
+        "guard standard oracle with COUNT === 1000",
+        "return queueCount and holdCount from runRichards",
+        "replace outer repeat driver with validated runtime COUNT driver"
+      ],
+      "original_algorithm_preserved_by_reverse_edit_check": true
+    }
+  },
+  "run_started_utc": "2026-11-10T01:06:40Z",
+  "inherited_relevant_environment": {},
+  "versions": {
+    "node": "v26.5.0",
+    "clang": "Homebrew clang version 23.1.4\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/23.1.4/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/23.1.4/etc/clang/arm64-apple-darwin27.cfg\n",
+    "python": "3.15.0",
+    "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64"
+  },
+  "pipeline_hashes_before": {
+    "target/release/object-project": "bd2cd4fa7a4e5c919064b14e0c9287643af30cba46359fa4d338854d1114c5d1",
+    "target/release/object-to-c": "7329e70df4ef58b7a944f4d485ee0dcb3ce024e0a1f132ec5c2b3cb27f92bfde",
+    "docs/object-projection/interpreter.js": "e9c0142f92d1a8960ea1bff5dc78e0b78f18c5fb6061e0ac40276a76150d47b6",
+    "docs/object-projection/intrinsics.js": "52750d079f6ab61af5069949fea221ec800484798d347578b48d42a965a99a7b",
+    "js-frontend/src/object_c_runtime.h": "eae86f5f0100d7f74fe864416701917ae58b9f1abe74b0709fba31595065766a",
+    "js-frontend/src/object_c.rs": "eaedcd1eb00e0dbcdb5a8e1249733e76045b9b143277228d83d7294b135e626d",
+    "js-frontend/src/object_projection.rs": "a901f2a8e78243a94e76998fb31af772ff04b186851c2d2d1d1124d38e264491"
+  },
+  "projector_environment": {
+    "SPEC_WEIGHT_BUDGET": "150000000",
+    "PE_NO_SHARED_CONTEXTS": "1",
+    "PE_CONTEXT_POINTS": "1"
+  },
+  "projection_worktree_commit": "442a9dcace18dc4c8963d92ad56b809a816961ea",
+  "methodology": {
+    "rounds": 3,
+    "samples_per_round": 7,
+    "warmup_calls_per_round": 5,
+    "one_untimed_expected_call_per_round": true,
+    "one_untimed_batch_pilot_call": true,
+    "sample_batch_target_seconds": 0.03,
+    "sample_batch_max": 1000,
+    "timed_region": "repeated invocation, output consumption and mismatch checks; process startup, parsing, projection and native compilation excluded",
+    "object_c_lifetime": "fresh context, all allocation blocks and destruction included for every invocation; whole-entry lifetime arena, no GC",
+    "direct_c_lifetime": "fresh context construction and destruction included for every invocation; source/global initialization is part of pe_run",
+    "original_node_fresh_module": "factory source compiled once outside timing; each timed invocation creates fresh guest functions/prototypes/globals and then executes main, without reparsing",
+    "js_lifetime": "source loaded once per process; calls allocate normal JS objects and include any GC triggered during the timed batch",
+    "original_repeat_adapter": "unchanged COUNT=1000 workload, input selects number of independent runs",
+    "runtime_count_adapter": "input controls actual IdleTask scheduling countdown; returned queue and hold counts consumed",
+    "timing_count_inputs": [
+      1000,
+      10000
+    ],
+    "flags": [
+      "-O2",
+      "-ffp-contract=off"
+    ],
+    "official_octane_score": false,
+    "benchmark_algorithm_rewritten": false
+  },
+  "correctness": {
+    "exact": {
+      "original_node": [
+        {
+          "input": 0,
+          "value": true
+        },
+        {
+          "input": 1,
+          "value": true
+        },
+        {
+          "input": 2,
+          "value": true
+        },
+        {
+          "input": 3,
+          "value": true
+        }
+      ],
+      "original_node_fresh_module": [
+        {
+          "input": 0,
+          "value": true
+        },
+        {
+          "input": 1,
+          "value": true
+        },
+        {
+          "input": 2,
+          "value": true
+        },
+        {
+          "input": 3,
+          "value": true
+        }
+      ],
+      "direct_c": [
+        {
+          "input": 0,
+          "value": true
+        },
+        {
+          "input": 1,
+          "value": true
+        },
+        {
+          "input": 2,
+          "value": true
+        },
+        {
+          "input": 3,
+          "value": true
+        }
+      ],
+      "ordinary_interpreter": [
+        {
+          "input": 0,
+          "value": true
+        },
+        {
+          "input": 1,
+          "value": true
+        },
+        {
+          "input": 2,
+          "value": true
+        },
+        {
+          "input": 3,
+          "value": true
+        }
+      ],
+      "projected_js": [
+        {
+          "input": 0,
+          "value": true
+        },
+        {
+          "input": 1,
+          "value": true
+        },
+        {
+          "input": 2,
+          "value": true
+        },
+        {
+          "input": 3,
+          "value": true
+        }
+      ],
+      "object_c": [
+        {
+          "input": 0,
+          "value": true
+        },
+        {
+          "input": 1,
+          "value": true
+        },
+        {
+          "input": 2,
+          "value": true
+        },
+        {
+          "input": 3,
+          "value": true
+        }
+      ]
+    },
+    "runtime_count": {
+      "original_node": [
+        {
+          "input": 1,
+          "value": [
+            8,
+            3
+          ]
+        },
+        {
+          "input": 2,
+          "value": [
+            12,
+            4
+          ]
+        },
+        {
+          "input": 10,
+          "value": [
+            31,
+            12
+          ]
+        },
+        {
+          "input": 100,
+          "value": [
+            239,
+            95
+          ]
+        },
+        {
+          "input": 1000,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        {
+          "input": 2500,
+          "value": [
+            5726,
+            2289
+          ]
+        },
+        {
+          "input": 10000,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        {
+          "input": 37,
+          "value": [
+            91,
+            36
+          ]
+        },
+        {
+          "input": 999,
+          "value": [
+            2320,
+            927
+          ]
+        },
+        {
+          "input": 4093,
+          "value": [
+            9400,
+            3759
+          ]
+        },
+        {
+          "input": 12345,
+          "value": [
+            28689,
+            11475
+          ]
+        }
+      ],
+      "original_node_fresh_module": [
+        {
+          "input": 1,
+          "value": [
+            8,
+            3
+          ]
+        },
+        {
+          "input": 2,
+          "value": [
+            12,
+            4
+          ]
+        },
+        {
+          "input": 10,
+          "value": [
+            31,
+            12
+          ]
+        },
+        {
+          "input": 100,
+          "value": [
+            239,
+            95
+          ]
+        },
+        {
+          "input": 1000,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        {
+          "input": 2500,
+          "value": [
+            5726,
+            2289
+          ]
+        },
+        {
+          "input": 10000,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        {
+          "input": 37,
+          "value": [
+            91,
+            36
+          ]
+        },
+        {
+          "input": 999,
+          "value": [
+            2320,
+            927
+          ]
+        },
+        {
+          "input": 4093,
+          "value": [
+            9400,
+            3759
+          ]
+        },
+        {
+          "input": 12345,
+          "value": [
+            28689,
+            11475
+          ]
+        }
+      ],
+      "direct_c": [
+        {
+          "input": 1,
+          "value": [
+            8,
+            3
+          ]
+        },
+        {
+          "input": 2,
+          "value": [
+            12,
+            4
+          ]
+        },
+        {
+          "input": 10,
+          "value": [
+            31,
+            12
+          ]
+        },
+        {
+          "input": 100,
+          "value": [
+            239,
+            95
+          ]
+        },
+        {
+          "input": 1000,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        {
+          "input": 2500,
+          "value": [
+            5726,
+            2289
+          ]
+        },
+        {
+          "input": 10000,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        {
+          "input": 37,
+          "value": [
+            91,
+            36
+          ]
+        },
+        {
+          "input": 999,
+          "value": [
+            2320,
+            927
+          ]
+        },
+        {
+          "input": 4093,
+          "value": [
+            9400,
+            3759
+          ]
+        },
+        {
+          "input": 12345,
+          "value": [
+            28689,
+            11475
+          ]
+        }
+      ],
+      "ordinary_interpreter": [
+        {
+          "input": 1,
+          "value": [
+            8,
+            3
+          ]
+        },
+        {
+          "input": 2,
+          "value": [
+            12,
+            4
+          ]
+        },
+        {
+          "input": 10,
+          "value": [
+            31,
+            12
+          ]
+        },
+        {
+          "input": 100,
+          "value": [
+            239,
+            95
+          ]
+        },
+        {
+          "input": 1000,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        {
+          "input": 2500,
+          "value": [
+            5726,
+            2289
+          ]
+        },
+        {
+          "input": 10000,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        {
+          "input": 37,
+          "value": [
+            91,
+            36
+          ]
+        },
+        {
+          "input": 999,
+          "value": [
+            2320,
+            927
+          ]
+        },
+        {
+          "input": 4093,
+          "value": [
+            9400,
+            3759
+          ]
+        },
+        {
+          "input": 12345,
+          "value": [
+            28689,
+            11475
+          ]
+        }
+      ],
+      "projected_js": [
+        {
+          "input": 1,
+          "value": [
+            8,
+            3
+          ]
+        },
+        {
+          "input": 2,
+          "value": [
+            12,
+            4
+          ]
+        },
+        {
+          "input": 10,
+          "value": [
+            31,
+            12
+          ]
+        },
+        {
+          "input": 100,
+          "value": [
+            239,
+            95
+          ]
+        },
+        {
+          "input": 1000,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        {
+          "input": 2500,
+          "value": [
+            5726,
+            2289
+          ]
+        },
+        {
+          "input": 10000,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        {
+          "input": 37,
+          "value": [
+            91,
+            36
+          ]
+        },
+        {
+          "input": 999,
+          "value": [
+            2320,
+            927
+          ]
+        },
+        {
+          "input": 4093,
+          "value": [
+            9400,
+            3759
+          ]
+        },
+        {
+          "input": 12345,
+          "value": [
+            28689,
+            11475
+          ]
+        }
+      ],
+      "object_c": [
+        {
+          "input": 1,
+          "value": [
+            8,
+            3
+          ]
+        },
+        {
+          "input": 2,
+          "value": [
+            12,
+            4
+          ]
+        },
+        {
+          "input": 10,
+          "value": [
+            31,
+            12
+          ]
+        },
+        {
+          "input": 100,
+          "value": [
+            239,
+            95
+          ]
+        },
+        {
+          "input": 1000,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        {
+          "input": 2500,
+          "value": [
+            5726,
+            2289
+          ]
+        },
+        {
+          "input": 10000,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        {
+          "input": 37,
+          "value": [
+            91,
+            36
+          ]
+        },
+        {
+          "input": 999,
+          "value": [
+            2320,
+            927
+          ]
+        },
+        {
+          "input": 4093,
+          "value": [
+            9400,
+            3759
+          ]
+        },
+        {
+          "input": 12345,
+          "value": [
+            28689,
+            11475
+          ]
+        }
+      ]
+    }
+  },
+  "timings": {
+    "exact": {
+      "1": {
+        "original_node": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 231,
+              "samples_seconds": [
+                7.117243722943724e-05,
+                6.751389177489177e-05,
+                6.633261471861472e-05,
+                6.770472727272727e-05,
+                6.578084415584415e-05,
+                6.687896969696973e-05,
+                6.550144155844154e-05
+              ],
+              "median_seconds": 6.687896969696973e-05,
+              "consumed_checksum": 1623
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 230,
+              "samples_seconds": [
+                7.747499999999999e-05,
+                6.753007391304349e-05,
+                6.647427391304348e-05,
+                6.744982173913049e-05,
+                6.556684782608698e-05,
+                6.679275652173914e-05,
+                6.654710434782611e-05
+              ],
+              "median_seconds": 6.679275652173914e-05,
+              "consumed_checksum": 1616
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 226,
+              "samples_seconds": [
+                7.245501327433628e-05,
+                6.796994690265486e-05,
+                6.643528761061944e-05,
+                6.665173451327428e-05,
+                6.523082743362828e-05,
+                6.583480530973455e-05,
+                6.55602876106194e-05
+              ],
+              "median_seconds": 6.643528761061944e-05,
+              "consumed_checksum": 1588
+            }
+          ],
+          "median_seconds": 6.679275652173914e-05,
+          "value": true
+        },
+        "original_node_fresh_module": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 31,
+              "samples_seconds": [
+                0.0010023575161290323,
+                0.0010072405806451615,
+                0.001007940870967742,
+                0.0009993279677419351,
+                0.0009841532258064523,
+                0.0009861290322580652,
+                0.0010144153225806454
+              ],
+              "median_seconds": 0.0010023575161290323,
+              "consumed_checksum": 223
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 24,
+              "samples_seconds": [
+                0.0009875659999999998,
+                0.0010120711666666666,
+                0.001007505208333333,
+                0.000981908,
+                0.0009808732916666662,
+                0.0009834444166666666,
+                0.0009792864583333329
+              ],
+              "median_seconds": 0.0009834444166666666,
+              "consumed_checksum": 174
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 31,
+              "samples_seconds": [
+                0.0010016155806451613,
+                0.0010159838709677418,
+                0.0009902056451612904,
+                0.0009771465161290324,
+                0.0009785779677419352,
+                0.000978193548387097,
+                0.0010321559354838712
+              ],
+              "median_seconds": 0.0009902056451612904,
+              "consumed_checksum": 223
+            }
+          ],
+          "median_seconds": 0.0009902056451612904,
+          "value": true
+        },
+        "ordinary_interpreter": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.015739354000000007,
+                0.015904687500000007,
+                0.015922958500000008,
+                0.015532687500000008,
+                0.016380729000000004,
+                0.015820479500000005,
+                0.015420562500000018
+              ],
+              "median_seconds": 0.015820479500000005,
+              "consumed_checksum": 20
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.015598500000000001,
+                0.015693104000000006,
+                0.01578206250000001,
+                0.015485792000000003,
+                0.0154429375,
+                0.0155867705,
+                0.015381833499999999
+              ],
+              "median_seconds": 0.0155867705,
+              "consumed_checksum": 20
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.015688271,
+                0.015682937499999994,
+                0.0159959585,
+                0.015805146000000006,
+                0.01573112500000002,
+                0.015634166500000022,
+                0.015548249999999996
+              ],
+              "median_seconds": 0.015688271,
+              "consumed_checksum": 20
+            }
+          ],
+          "median_seconds": 0.015688271,
+          "value": true
+        },
+        "projected_js": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.007490033400000001,
+                0.006250766799999999,
+                0.006751491599999997,
+                0.006341633400000001,
+                0.0059464584,
+                0.005973366600000003,
+                0.006055074999999999
+              ],
+              "median_seconds": 0.006250766799999999,
+              "consumed_checksum": 41
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.006477075,
+                0.0065575918,
+                0.007076233200000001,
+                0.006156649999999996,
+                0.005957675,
+                0.0060040334000000025,
+                0.005933158200000003
+              ],
+              "median_seconds": 0.006156649999999996,
+              "consumed_checksum": 41
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.0067217000000000015,
+                0.006270075,
+                0.0068350333999999974,
+                0.0062410333999999975,
+                0.006151433399999996,
+                0.005980058200000002,
+                0.006030374999999992
+              ],
+              "median_seconds": 0.0062410333999999975,
+              "consumed_checksum": 41
+            }
+          ],
+          "median_seconds": 0.0062410333999999975,
+          "value": true
+        },
+        "direct_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 13,
+              "samples_seconds": [
+                0.00236438461938,
+                0.00236507693234,
+                0.00235761539079,
+                0.00237823077119,
+                0.00236484616135,
+                0.00236661536977,
+                0.00236123076712
+              ],
+              "consumed_checksum": 97,
+              "median_seconds": 0.00236484616135
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 13,
+              "samples_seconds": [
+                0.00237007691668,
+                0.0023673846064,
+                0.00236407692473,
+                0.00236846153768,
+                0.00238853847035,
+                0.00238407693373,
+                0.00238761536849
+              ],
+              "consumed_checksum": 97,
+              "median_seconds": 0.00237007691668
+            },
+            {
+              "input": 1,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 13,
+              "samples_seconds": [
+                0.00236823076669,
+                0.00238123075822,
+                0.002367000006,
+                0.00236376923007,
+                0.00236469229612,
+                0.00236630769303,
+                0.00236053847206
+              ],
+              "consumed_checksum": 97,
+              "median_seconds": 0.00236630769303
+            }
+          ],
+          "median_seconds": 0.00236630769303,
+          "value": true
+        },
+        "object_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1,
+              "value": true,
+              "allocation_blocks_per_invocation": 120,
+              "object_allocations_per_invocation": 119,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 546,
+              "samples_seconds": [
+                5.49413919647e-05,
+                5.44798534002e-05,
+                5.44908424949e-05,
+                5.4589743494e-05,
+                5.50989010422e-05,
+                5.49542125751e-05,
+                5.54542125445e-05
+              ],
+              "consumed_checksum": 3828,
+              "median_seconds": 5.49413919647e-05
+            },
+            {
+              "input": 1,
+              "value": true,
+              "allocation_blocks_per_invocation": 120,
+              "object_allocations_per_invocation": 119,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 536,
+              "samples_seconds": [
+                5.47238807159e-05,
+                5.47537312551e-05,
+                5.47779851711e-05,
+                5.48414176212e-05,
+                5.47574630612e-05,
+                5.49888059344e-05,
+                5.48470146787e-05
+              ],
+              "consumed_checksum": 3758,
+              "median_seconds": 5.47779851711e-05
+            },
+            {
+              "input": 1,
+              "value": true,
+              "allocation_blocks_per_invocation": 120,
+              "object_allocations_per_invocation": 119,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 536,
+              "samples_seconds": [
+                5.53320895241e-05,
+                5.49067161915e-05,
+                5.48078357103e-05,
+                5.47425375744e-05,
+                5.48582087938e-05,
+                5.49197759924e-05,
+                5.50354476462e-05
+              ],
+              "consumed_checksum": 3758,
+              "median_seconds": 5.49067161915e-05
+            }
+          ],
+          "median_seconds": 5.49067161915e-05,
+          "value": true
+        }
+      },
+      "3": {
+        "original_node": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 73,
+              "samples_seconds": [
+                0.00017730650684931505,
+                0.00016051427397260272,
+                0.00015760445205479452,
+                0.0001583082191780821,
+                0.00015427568493150683,
+                0.00015609817808219178,
+                0.00015594520547945206
+              ],
+              "median_seconds": 0.00015760445205479452,
+              "consumed_checksum": 517
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 171,
+              "samples_seconds": [
+                0.0002029700292397661,
+                0.00020145418713450296,
+                0.00021093859649122803,
+                0.0001993430818713451,
+                0.00019925000000000005,
+                0.0002002314795321638,
+                0.000199841619883041
+              ],
+              "median_seconds": 0.0002002314795321638,
+              "consumed_checksum": 1203
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 73,
+              "samples_seconds": [
+                0.0001996638082191781,
+                0.0002070616438356164,
+                0.00019938298630136985,
+                0.0001985199726027398,
+                0.0001963995479452054,
+                0.00019990068493150678,
+                0.00019704508219178088
+              ],
+              "median_seconds": 0.00019938298630136985,
+              "consumed_checksum": 517
+            }
+          ],
+          "median_seconds": 0.00019938298630136985,
+          "value": true
+        },
+        "original_node_fresh_module": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 11,
+              "samples_seconds": [
+                0.002948837181818182,
+                0.0029344620909090907,
+                0.002975272727272727,
+                0.002935333363636364,
+                0.0029954052727272722,
+                0.0029337576363636358,
+                0.0029205605454545465
+              ],
+              "median_seconds": 0.002935333363636364,
+              "consumed_checksum": 83
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 11,
+              "samples_seconds": [
+                0.0029241136363636357,
+                0.002906878818181818,
+                0.002948132545454544,
+                0.002999189363636364,
+                0.0029611477272727285,
+                0.0029101250000000013,
+                0.0029148901818181823
+              ],
+              "median_seconds": 0.0029241136363636357,
+              "consumed_checksum": 83
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 11,
+              "samples_seconds": [
+                0.00294539390909091,
+                0.002966761363636364,
+                0.003009314454545454,
+                0.0029423863636363645,
+                0.0029804620909090924,
+                0.0029508598181818193,
+                0.0029352310000000004
+              ],
+              "median_seconds": 0.0029508598181818193,
+              "consumed_checksum": 83
+            }
+          ],
+          "median_seconds": 0.002935333363636364,
+          "value": true
+        },
+        "ordinary_interpreter": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.04752241700000002,
+                0.04724729100000002,
+                0.04695720899999998,
+                0.04670179200000001,
+                0.04734170900000004,
+                0.04727254199999993,
+                0.047048333999999956
+              ],
+              "median_seconds": 0.04724729100000002,
+              "consumed_checksum": 13
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.046468040999999974,
+                0.04686183300000005,
+                0.047974625,
+                0.04650808299999994,
+                0.046805666999999974,
+                0.047422792000000075,
+                0.04632654100000002
+              ],
+              "median_seconds": 0.046805666999999974,
+              "consumed_checksum": 13
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.05038120800000002,
+                0.04728395800000004,
+                0.04859625,
+                0.047407125000000064,
+                0.04724875000000009,
+                0.04760237499999994,
+                0.046903041999999916
+              ],
+              "median_seconds": 0.047407125000000064,
+              "consumed_checksum": 13
+            }
+          ],
+          "median_seconds": 0.04724729100000002,
+          "value": true
+        },
+        "projected_js": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.018903812500000002,
+                0.019177062500000005,
+                0.018285458500000004,
+                0.01852102100000002,
+                0.017934,
+                0.018047916499999987,
+                0.017999145999999997
+              ],
+              "median_seconds": 0.018285458500000004,
+              "consumed_checksum": 20
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.019538353999999997,
+                0.0183264585,
+                0.018320187499999988,
+                0.018508354499999997,
+                0.01816681249999999,
+                0.018004479000000004,
+                0.018098625
+              ],
+              "median_seconds": 0.018320187499999988,
+              "consumed_checksum": 20
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.018784083500000007,
+                0.018688979000000005,
+                0.01824737499999999,
+                0.018397437499999995,
+                0.0179713955,
+                0.017898041500000007,
+                0.017857021000000004
+              ],
+              "median_seconds": 0.01824737499999999,
+              "consumed_checksum": 20
+            }
+          ],
+          "median_seconds": 0.018285458500000004,
+          "value": true
+        },
+        "direct_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.00699919997714,
+                0.00701820002869,
+                0.00703920000233,
+                0.00701759997755,
+                0.0069929999765,
+                0.00700520002283,
+                0.00700880000368
+              ],
+              "consumed_checksum": 41,
+              "median_seconds": 0.00700880000368
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.00703839999624,
+                0.00701679997146,
+                0.00702760000713,
+                0.00703779999167,
+                0.00700840000063,
+                0.00701600001194,
+                0.00700759999454
+              ],
+              "consumed_checksum": 41,
+              "median_seconds": 0.00701679997146
+            },
+            {
+              "input": 3,
+              "value": true,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.00700860000215,
+                0.00700019998476,
+                0.00700380001217,
+                0.00698799998499,
+                0.00700940000825,
+                0.00698480000719,
+                0.00697180000134
+              ],
+              "consumed_checksum": 41,
+              "median_seconds": 0.00700019998476
+            }
+          ],
+          "median_seconds": 0.00700880000368,
+          "value": true
+        },
+        "object_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 3,
+              "value": true,
+              "allocation_blocks_per_invocation": 180,
+              "object_allocations_per_invocation": 179,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 186,
+              "samples_seconds": [
+                0.0001637150536,
+                0.000161709677007,
+                0.000163564516071,
+                0.000161994624162,
+                0.000161290322731,
+                0.000162736559036,
+                0.000162521506139
+              ],
+              "consumed_checksum": 1308,
+              "median_seconds": 0.000162521506139
+            },
+            {
+              "input": 3,
+              "value": true,
+              "allocation_blocks_per_invocation": 180,
+              "object_allocations_per_invocation": 179,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 186,
+              "samples_seconds": [
+                0.000162322579893,
+                0.00016139784918,
+                0.000161252689287,
+                0.000161419355971,
+                0.000162844085485,
+                0.00016140860195,
+                0.000161274193576
+              ],
+              "consumed_checksum": 1308,
+              "median_seconds": 0.00016140860195
+            },
+            {
+              "input": 3,
+              "value": true,
+              "allocation_blocks_per_invocation": 180,
+              "object_allocations_per_invocation": 179,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 182,
+              "samples_seconds": [
+                0.000162571429398,
+                0.000162076922696,
+                0.000161934065745,
+                0.000163483516579,
+                0.000162016482676,
+                0.000161829670625,
+                0.000161329670656
+              ],
+              "consumed_checksum": 1280,
+              "median_seconds": 0.000162016482676
+            }
+          ],
+          "median_seconds": 0.000162016482676,
+          "value": true
+        }
+      }
+    },
+    "runtime_count": {
+      "1000": {
+        "original_node": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 232,
+              "samples_seconds": [
+                7.207758620689654e-05,
+                6.761835344827586e-05,
+                6.611637931034483e-05,
+                6.617564655172414e-05,
+                6.657381465517244e-05,
+                6.635434482758617e-05,
+                6.529651724137932e-05
+              ],
+              "median_seconds": 6.635434482758617e-05,
+              "consumed_checksum": 3784872867220
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 231,
+              "samples_seconds": [
+                7.024332467532466e-05,
+                6.733135064935066e-05,
+                6.609559740259743e-05,
+                6.634506060606062e-05,
+                6.59321774891775e-05,
+                6.59951298701299e-05,
+                6.522023809523812e-05
+              ],
+              "median_seconds": 6.609559740259743e-05,
+              "consumed_checksum": 3768618811962
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 232,
+              "samples_seconds": [
+                7.136530172413794e-05,
+                6.693911637931033e-05,
+                6.615265948275863e-05,
+                6.616289655172413e-05,
+                6.522880603448275e-05,
+                6.574209482758622e-05,
+                6.523491379310346e-05
+              ],
+              "median_seconds": 6.615265948275863e-05,
+              "consumed_checksum": 3784872867220
+            }
+          ],
+          "median_seconds": 6.615265948275863e-05,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        "original_node_fresh_module": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 30,
+              "samples_seconds": [
+                0.0009884777666666668,
+                0.001005594466666667,
+                0.0010171375000000002,
+                0.0009871125000000002,
+                0.0009789972333333328,
+                0.0009917805666666661,
+                0.0010204569666666667
+              ],
+              "median_seconds": 0.0009917805666666661,
+              "consumed_checksum": 501553705104
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 32,
+              "samples_seconds": [
+                0.0009504101562499999,
+                0.0009998645625000002,
+                0.0010024270625000001,
+                0.0009963645625000002,
+                0.0009836888125000006,
+                0.0010341523437499998,
+                0.0009863515625000002
+              ],
+              "median_seconds": 0.0009963645625000002,
+              "consumed_checksum": 534061815620
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 32,
+              "samples_seconds": [
+                0.0011542486875,
+                0.0010755052187500004,
+                0.0010001367187499994,
+                0.0009850976562500006,
+                0.0009856718749999996,
+                0.0010064635312499997,
+                0.0010112004999999994
+              ],
+              "median_seconds": 0.0010064635312499997,
+              "consumed_checksum": 534061815620
+            }
+          ],
+          "median_seconds": 0.0009963645625000002,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        "ordinary_interpreter": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.016953500000000007,
+                0.016477103999999996,
+                0.016434958500000006,
+                0.01605056250000001,
+                0.016020229,
+                0.016266958500000015,
+                0.016059958500000023
+              ],
+              "median_seconds": 0.016266958500000015,
+              "consumed_checksum": 46440157880
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.016074041499999994,
+                0.016163083499999998,
+                0.016549916499999994,
+                0.015772000000000005,
+                0.01589114599999999,
+                0.015817979500000006,
+                0.015942499999999995
+              ],
+              "median_seconds": 0.015942499999999995,
+              "consumed_checksum": 46440157880
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.016007999999999994,
+                0.016206625000000002,
+                0.016817791500000012,
+                0.0161436875,
+                0.015986083500000005,
+                0.016235687499999985,
+                0.015885541999999985
+              ],
+              "median_seconds": 0.0161436875,
+              "consumed_checksum": 46440157880
+            }
+          ],
+          "median_seconds": 0.0161436875,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        "projected_js": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.006851358200000002,
+                0.006255458399999998,
+                0.006428833399999997,
+                0.0062811668,
+                0.006051091600000001,
+                0.006036791599999998,
+                0.0060483000000000064
+              ],
+              "median_seconds": 0.006255458399999998,
+              "consumed_checksum": 95202323654
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.006635708399999999,
+                0.0063286666,
+                0.006313333399999999,
+                0.006202300000000003,
+                0.006127016800000002,
+                0.006067533399999997,
+                0.0060251750000000015
+              ],
+              "median_seconds": 0.006202300000000003,
+              "consumed_checksum": 95202323654
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 5,
+              "samples_seconds": [
+                0.006733916800000001,
+                0.006368066799999996,
+                0.006422608199999996,
+                0.006211324999999999,
+                0.005932016600000003,
+                0.006035508399999998,
+                0.006064341799999999
+              ],
+              "median_seconds": 0.006211324999999999,
+              "consumed_checksum": 95202323654
+            }
+          ],
+          "median_seconds": 0.006211324999999999,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        "direct_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 13,
+              "samples_seconds": [
+                0.00245407691154,
+                0.00246353846831,
+                0.00245823077141,
+                0.00249138460136,
+                0.00246761538661,
+                0.00245015385847,
+                0.00245476924241
+              ],
+              "consumed_checksum": 225234765718,
+              "median_seconds": 0.00245823077141
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 13,
+              "samples_seconds": [
+                0.00245999999774,
+                0.00246884614731,
+                0.0025386923136,
+                0.00245915385536,
+                0.00245523076648,
+                0.00251961538855,
+                0.00246684614999
+              ],
+              "consumed_checksum": 225234765718,
+              "median_seconds": 0.00246684614999
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 13,
+              "samples_seconds": [
+                0.00244015383606,
+                0.00243869230438,
+                0.00244061539594,
+                0.00244484614366,
+                0.00243399999678,
+                0.00245446154776,
+                0.00243038460254
+              ],
+              "consumed_checksum": 225234765718,
+              "median_seconds": 0.00244015383606
+            }
+          ],
+          "median_seconds": 0.00245823077141,
+          "value": [
+            2322,
+            928
+          ]
+        },
+        "object_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "allocation_blocks_per_invocation": 121,
+              "object_allocations_per_invocation": 120,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 546,
+              "samples_seconds": [
+                5.5316849714e-05,
+                5.40128202884e-05,
+                5.31849819798e-05,
+                5.62326007799e-05,
+                5.50091571956e-05,
+                5.53388279034e-05,
+                5.52106226518e-05
+              ],
+              "consumed_checksum": 8888646218232,
+              "median_seconds": 5.52106226518e-05
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "allocation_blocks_per_invocation": 121,
+              "object_allocations_per_invocation": 120,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 518,
+              "samples_seconds": [
+                5.53397681118e-05,
+                5.54942085433e-05,
+                5.55405404929e-05,
+                5.51795365799e-05,
+                5.5231660529e-05,
+                5.53339770114e-05,
+                5.52953666788e-05
+              ],
+              "consumed_checksum": 8433532671008,
+              "median_seconds": 5.53339770114e-05
+            },
+            {
+              "input": 1000,
+              "value": [
+                2322,
+                928
+              ],
+              "allocation_blocks_per_invocation": 121,
+              "object_allocations_per_invocation": 120,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 536,
+              "samples_seconds": [
+                5.53097017283e-05,
+                5.52014923835e-05,
+                5.54458954921e-05,
+                5.55671642034e-05,
+                5.67201493697e-05,
+                5.5912313479e-05,
+                5.56641789987e-05
+              ],
+              "consumed_checksum": 8726105665652,
+              "median_seconds": 5.55671642034e-05
+            }
+          ],
+          "median_seconds": 5.53339770114e-05,
+          "value": [
+            2322,
+            928
+          ]
+        }
+      },
+      "10000": {
+        "original_node": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 44,
+              "samples_seconds": [
+                0.0006537395909090908,
+                0.0006534659090909091,
+                0.0006492178181818182,
+                0.000649099431818182,
+                0.0006501600227272729,
+                0.0006539933636363638,
+                0.0006513948863636368
+              ],
+              "median_seconds": 0.0006513948863636368,
+              "consumed_checksum": 7299268816990
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 43,
+              "samples_seconds": [
+                0.0006545600697674417,
+                0.0006542374186046513,
+                0.0006497044418604652,
+                0.0006498226744186046,
+                0.0006482626046511628,
+                0.0006506036744186044,
+                0.0006510281162790694
+              ],
+              "median_seconds": 0.0006506036744186044,
+              "consumed_checksum": 7136546263745
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 43,
+              "samples_seconds": [
+                0.0006536705348837209,
+                0.000655064906976744,
+                0.0006511540697674421,
+                0.0006483226744186044,
+                0.0006526899069767441,
+                0.0006510843023255819,
+                0.0006518459302325578
+              ],
+              "median_seconds": 0.0006518459302325578,
+              "consumed_checksum": 7136546263745
+            }
+          ],
+          "median_seconds": 0.0006513948863636368,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        "original_node_fresh_module": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 3,
+              "samples_seconds": [
+                0.012595736000000001,
+                0.012534986333333336,
+                0.012541666666666666,
+                0.012452680333333329,
+                0.012497055666666663,
+                0.012511444666666668,
+                0.012494000000000009
+              ],
+              "median_seconds": 0.012511444666666668,
+              "consumed_checksum": 627644133945
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 3,
+              "samples_seconds": [
+                0.012270416666666667,
+                0.012284736000000004,
+                0.012234347000000005,
+                0.012332569666666671,
+                0.012335402666666672,
+                0.012204764000000012,
+                0.012327041666666674
+              ],
+              "median_seconds": 0.012284736000000004,
+              "consumed_checksum": 627644133945
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 4,
+              "samples_seconds": [
+                0.009679198000000002,
+                0.009617853999999997,
+                0.009640875000000002,
+                0.009586771000000006,
+                0.009610062499999999,
+                0.009670989499999998,
+                0.009622604249999995
+              ],
+              "median_seconds": 0.009622604249999995,
+              "consumed_checksum": 790366687190
+            }
+          ],
+          "median_seconds": 0.012284736000000004,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        "ordinary_interpreter": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.1567766250000002,
+                0.15678324999999996,
+                0.15614295800000014,
+                0.15826850000000012,
+                0.15706925000000002,
+                0.15816558299999997,
+                0.15588125000000014
+              ],
+              "median_seconds": 0.15678324999999996,
+              "consumed_checksum": 302199027455
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.153614417,
+                0.1502689170000001,
+                0.1506310000000001,
+                0.15023620799999982,
+                0.150085333,
+                0.150699208,
+                0.15387750000000028
+              ],
+              "median_seconds": 0.1506310000000001,
+              "consumed_checksum": 302199027455
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.151331416,
+                0.15257058299999995,
+                0.14942829199999982,
+                0.15296895800000015,
+                0.15012874999999987,
+                0.15140479200000004,
+                0.1521579159999999
+              ],
+              "median_seconds": 0.15140479200000004,
+              "consumed_checksum": 302199027455
+            }
+          ],
+          "median_seconds": 0.15140479200000004,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        "projected_js": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.05985087500000003,
+                0.05858899999999994,
+                0.058601291999999944,
+                0.059004749999999946,
+                0.058799083999999995,
+                0.05843591700000002,
+                0.05881395900000007
+              ],
+              "median_seconds": 0.058799083999999995,
+              "consumed_checksum": 302199027455
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.06129833400000001,
+                0.05975887499999999,
+                0.05984204199999999,
+                0.074641167,
+                0.06598479099999997,
+                0.059113917000000016,
+                0.060528208999999944
+              ],
+              "median_seconds": 0.060528208999999944,
+              "consumed_checksum": 302199027455
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 1,
+              "samples_seconds": [
+                0.059826708000000055,
+                0.05915750000000003,
+                0.058938666000000015,
+                0.058341999999999984,
+                0.05842933300000004,
+                0.06212291700000003,
+                0.05967816700000003
+              ],
+              "median_seconds": 0.05915750000000003,
+              "consumed_checksum": 302199027455
+            }
+          ],
+          "median_seconds": 0.05915750000000003,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        "direct_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.0242415000685,
+                0.0239240000956,
+                0.0244209999219,
+                0.0233000000007,
+                0.0233564999653,
+                0.0238654999994,
+                0.0234415000305
+              ],
+              "consumed_checksum": 464921580700,
+              "median_seconds": 0.0238654999994
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.0234734999249,
+                0.0238605000777,
+                0.0238419999368,
+                0.0235274999868,
+                0.0235254999716,
+                0.0234685000032,
+                0.0235325000249
+              ],
+              "consumed_checksum": 464921580700,
+              "median_seconds": 0.0235274999868
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 2,
+              "samples_seconds": [
+                0.0234860000201,
+                0.0234509999864,
+                0.0234004999511,
+                0.0236794999801,
+                0.0239399999846,
+                0.023529500002,
+                0.0235995000694
+              ],
+              "consumed_checksum": 464921580700,
+              "median_seconds": 0.023529500002
+            }
+          ],
+          "median_seconds": 0.023529500002,
+          "value": [
+            23246,
+            9297
+          ]
+        },
+        "object_c": {
+          "independent_process_rounds": 3,
+          "rounds": [
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "allocation_blocks_per_invocation": 121,
+              "object_allocations_per_invocation": 120,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 59,
+              "samples_seconds": [
+                0.000512728814856,
+                0.000525355930993,
+                0.000528915252505,
+                0.000527864408885,
+                0.000526186441845,
+                0.000530830509487,
+                0.000526254238971
+              ],
+              "consumed_checksum": 9740107115665,
+              "median_seconds": 0.000526254238971
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "allocation_blocks_per_invocation": 121,
+              "object_allocations_per_invocation": 120,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 59,
+              "samples_seconds": [
+                0.000518254237249,
+                0.000506169490232,
+                0.000503542371315,
+                0.000507067798211,
+                0.000501457625463,
+                0.000507593221994,
+                0.000512813557318
+              ],
+              "consumed_checksum": 9740107115665,
+              "median_seconds": 0.000507067798211
+            },
+            {
+              "input": 10000,
+              "value": [
+                23246,
+                9297
+              ],
+              "allocation_blocks_per_invocation": 121,
+              "object_allocations_per_invocation": 120,
+              "warmup_calls": 5,
+              "pilot_calls": 1,
+              "batch": 57,
+              "samples_seconds": [
+                0.000524350874976,
+                0.000512596489371,
+                0.000511736845957,
+                0.000510438594542,
+                0.000508631579578,
+                0.000508368419679,
+                0.000511192982167
+              ],
+              "consumed_checksum": 9414662009175,
+              "median_seconds": 0.000511192982167
+            }
+          ],
+          "median_seconds": 0.000511192982167,
+          "value": [
+            23246,
+            9297
+          ]
+        }
+      }
+    }
+  },
+  "stages": {
+    "exact": {
+      "direct_c": {
+        "status": "passed",
+        "source_sha256": "a3a1b5ed8c87a909fad0fab356bec1fe0a38ac6b41524ae49912faa17465d4c3",
+        "source_bytes": 229633,
+        "translation_unit_stored_only_in_temporary_directory": true
+      },
+      "encoded_guest_ast": {
+        "status": "produced",
+        "sha256": "8b843cb5bf6117f3c717f8436a6c7f4823672763316b1cbf00e3b0ee8325ca0a",
+        "bytes": 51971,
+        "nodes": 1219,
+        "functions": 42
+      },
+      "ordinary_interpreter": {
+        "status": "passed",
+        "sha256": "d80d0f29830fbb8a171a0abc3c074f54d8e93c6d09af2880ea2c24332d1c803b"
+      },
+      "projected_js": {
+        "status": "passed",
+        "sha256": "d83207e5078e3496954cf23eba21961bcd07443d5eb59786900c88039e499dc8",
+        "bytes": 44451,
+        "static_ast_identifiers_absent": true,
+        "residual_guest_functions": 41,
+        "generic_guest_call_sites": 51,
+        "function_identity_reads": 2
+      },
+      "object_c": {
+        "status": "passed",
+        "sha256": "38ed67a94f30e68a078eaeb138f3dcc1364de8b31e8d6ac45320ec90671d24ae",
+        "bytes": 551236,
+        "allocation_observations": [
+          {
+            "input": 0,
+            "value": true,
+            "allocation_blocks_per_invocation": 90,
+            "object_allocations_per_invocation": 89
+          },
+          {
+            "input": 1,
+            "value": true,
+            "allocation_blocks_per_invocation": 120,
+            "object_allocations_per_invocation": 119
+          },
+          {
+            "input": 2,
+            "value": true,
+            "allocation_blocks_per_invocation": 150,
+            "object_allocations_per_invocation": 149
+          },
+          {
+            "input": 3,
+            "value": true,
+            "allocation_blocks_per_invocation": 180,
+            "object_allocations_per_invocation": 179
+          }
+        ]
+      },
+      "sanitizers": {
+        "status": "passed",
+        "checks": [
+          {
+            "input": 0,
+            "value": true,
+            "allocation_blocks_per_invocation": 90,
+            "object_allocations_per_invocation": 89
+          },
+          {
+            "input": 1,
+            "value": true,
+            "allocation_blocks_per_invocation": 120,
+            "object_allocations_per_invocation": 119
+          },
+          {
+            "input": 2,
+            "value": true,
+            "allocation_blocks_per_invocation": 150,
+            "object_allocations_per_invocation": 149
+          },
+          {
+            "input": 3,
+            "value": true,
+            "allocation_blocks_per_invocation": 180,
+            "object_allocations_per_invocation": 179
+          }
+        ],
+        "flags": [
+          "address",
+          "undefined"
+        ],
+        "analysis_proofs_checked": true,
+        "collection_at_every_allocation": true,
+        "leak_detection": "disabled: macOS runtime does not support LeakSanitizer"
+      }
+    },
+    "runtime_count": {
+      "direct_c": {
+        "status": "passed",
+        "source_sha256": "f026431a4963d7f6dc65403514608ff8e2de2464f64a320f4794e4297d2e6c2f",
+        "source_bytes": 934883,
+        "translation_unit_stored_only_in_temporary_directory": true
+      },
+      "encoded_guest_ast": {
+        "status": "produced",
+        "sha256": "f26bf190cb3a7e2388bee9c662625173b3c8b7df5054100a4782cf61944bd3c2",
+        "bytes": 52923,
+        "nodes": 1241,
+        "functions": 42
+      },
+      "ordinary_interpreter": {
+        "status": "passed",
+        "sha256": "1506c96f55a7ddfa9b75483e5fc6b385b71f76a56e076bf37ef7180b64b8ebc6"
+      },
+      "projected_js": {
+        "status": "passed",
+        "sha256": "9d6cb020b8c151fc3e989bb9c548bc579123585ac80e932962863aacb35a797c",
+        "bytes": 46071,
+        "static_ast_identifiers_absent": true,
+        "residual_guest_functions": 41,
+        "generic_guest_call_sites": 51,
+        "function_identity_reads": 2
+      },
+      "object_c": {
+        "status": "passed",
+        "sha256": "e345cfee2454167611e4b779f1cffec686ce9ce6abb602b69c8e3af3cbf5ec5d",
+        "bytes": 557378,
+        "allocation_observations": [
+          {
+            "input": 1,
+            "value": [
+              8,
+              3
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 2,
+            "value": [
+              12,
+              4
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 10,
+            "value": [
+              31,
+              12
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 100,
+            "value": [
+              239,
+              95
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 2500,
+            "value": [
+              5726,
+              2289
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 37,
+            "value": [
+              91,
+              36
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 999,
+            "value": [
+              2320,
+              927
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 4093,
+            "value": [
+              9400,
+              3759
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 12345,
+            "value": [
+              28689,
+              11475
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          }
+        ]
+      },
+      "sanitizers": {
+        "status": "passed",
+        "checks": [
+          {
+            "input": 1,
+            "value": [
+              8,
+              3
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 2,
+            "value": [
+              12,
+              4
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 10,
+            "value": [
+              31,
+              12
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 100,
+            "value": [
+              239,
+              95
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 2500,
+            "value": [
+              5726,
+              2289
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 37,
+            "value": [
+              91,
+              36
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 999,
+            "value": [
+              2320,
+              927
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 4093,
+            "value": [
+              9400,
+              3759
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          },
+          {
+            "input": 12345,
+            "value": [
+              28689,
+              11475
+            ],
+            "allocation_blocks_per_invocation": 121,
+            "object_allocations_per_invocation": 120
+          }
+        ],
+        "flags": [
+          "address",
+          "undefined"
+        ],
+        "analysis_proofs_checked": true,
+        "collection_at_every_allocation": true,
+        "leak_detection": "disabled: macOS runtime does not support LeakSanitizer"
+      }
+    }
+  },
+  "oracles": {
+    "runtimeCount": [
+      {
+        "input": 1,
+        "value": [
+          8,
+          3
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 2,
+        "value": [
+          12,
+          4
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 10,
+        "value": [
+          31,
+          12
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 100,
+        "value": [
+          239,
+          95
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 1000,
+        "value": [
+          2322,
+          928
+        ],
+        "validation": "passed"
+      },
+      {
+        "input": 2500,
+        "value": [
+          5726,
+          2289
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 10000,
+        "value": [
+          23246,
+          9297
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 37,
+        "value": [
+          91,
+          36
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 999,
+        "value": [
+          2320,
+          927
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 4093,
+        "value": [
+          9400,
+          3759
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      },
+      {
+        "input": 12345,
+        "value": [
+          28689,
+          11475
+        ],
+        "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+      }
+    ],
+    "originalAdapter": [
+      {
+        "input": 0,
+        "value": true
+      },
+      {
+        "input": 1,
+        "value": true
+      },
+      {
+        "input": 2,
+        "value": true
+      },
+      {
+        "input": 3,
+        "value": true
+      }
+    ],
+    "rejectedInputs": [
+      {
+        "input": "0",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "-1",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "1.5",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "NaN",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "Infinity",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "-Infinity",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "1000001",
+        "type": "number",
+        "error": "Error"
+      },
+      {
+        "input": "1000",
+        "type": "string",
+        "error": "Error"
+      },
+      {
+        "input": "null",
+        "type": "object",
+        "error": "Error"
+      },
+      {
+        "input": "undefined",
+        "type": "undefined",
+        "error": "Error"
+      }
+    ],
+    "standardValidationPreserved": true,
+    "allocationAudit": {
+      "input": 1000,
+      "scope": "Explicit guest new calls to Scheduler, Packet, TaskControlBlock, task constructors, and Array. Excludes source initialization, function/prototype infrastructure, instrumentation, and adapter result-array literal.",
+      "allocationSites": {
+        "Scheduler": 1,
+        "Array": 9,
+        "IdleTask": 1,
+        "TaskControlBlock": 6,
+        "Packet": 8,
+        "WorkerTask": 1,
+        "HandlerTask": 2,
+        "DeviceTask": 2
+      },
+      "allocationsBeforeSchedule": 30,
+      "allocationsDuringSchedule": 0,
+      "methodRuns": {
+        "TaskControlBlock": 6573,
+        "HandlerTask": 2328,
+        "WorkerTask": 468,
+        "DeviceTask": 2777,
+        "IdleTask": 1000
+      },
+      "queueCount": 2322,
+      "holdCount": 928
+    }
+  },
+  "invalid_inputs": {
+    "original_node": [
+      {
+        "input": 0,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": -1,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1.5,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "NaN",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "-Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1000001,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      }
+    ],
+    "original_node_fresh_module": [
+      {
+        "input": 0,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": -1,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1.5,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "NaN",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "-Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1000001,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      }
+    ],
+    "ordinary_interpreter": [
+      {
+        "input": 0,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": -1,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1.5,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "NaN",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "-Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1000001,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      }
+    ],
+    "projected_js": [
+      {
+        "input": 0,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": -1,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1.5,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "NaN",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": "-Infinity",
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      },
+      {
+        "input": 1000001,
+        "accepted": false,
+        "error": "Error",
+        "message": "COUNT must be an integer from 1 to 1000000"
+      }
+    ],
+    "direct_c": [
+      {
+        "input": 0,
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      },
+      {
+        "input": -1,
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      },
+      {
+        "input": 1.5,
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      },
+      {
+        "input": "NaN",
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      },
+      {
+        "input": "Infinity",
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      },
+      {
+        "input": "-Infinity",
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      },
+      {
+        "input": 1000001,
+        "exit_code": 3,
+        "stderr": "[\"object\",{\"name\":[\"string\",\"Error\"],\"message\":[\"string\",\"COUNT must be an integer from 1 to 1000000\"]}]\n"
+      }
+    ],
+    "object_c": [
+      {
+        "input": 0,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": -1,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1.5,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "NaN",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "-Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1000001,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      }
+    ]
+  },
+  "all_executed_comparisons_equal": true,
+  "all_five_paths_correct": true,
+  "read_only_input_hashes_before": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend": "29c60a887b0a2bf8d0659104c9559ac326e7e2d7513a417bd37b87fa85be528c",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/tools/c-target.py": "35f8ece6a7705df589c23ef709885550eb3791dc6e6382ee437d4c821b4a6cdf",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/corpus-c/upstream/richards.js": "a2dfa477f4c36514e1d2e7200d05e4179a9dc97eef81d6ca42aa43c308f3ef06",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/corpus-c/adapters/richards.js": "0d1c1ce9d2ad55a54b02f78a2a50e5b50d64dd0cae583c4bdc9e5ef9029fe08d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/js-frontend/src/c_backend.rs": "db2980fc49fef53f4eb643e5913175dcd5d16e98de6e313b8567cfa7759a57f8",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/driver.c": "52e4f4effb7a2b1296e0c3537fe39f13e0146b966940c0d4f976dd3b2e11e20f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c": "af39afcb97edeb6080fec6ca66e3a75d73dba8b4f058f617fee9ab7b5e88a718",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c": "d2e5ee19cd697b84cd36e462b86e11aaa3910505df1d017d9660463a5cbf15eb",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.h": "a7acb13ed0744d7dba5576880374d24109f34ddf4e42d9c07ae98df2b8fedb4b",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime_internal.h": "2dcd79cd4f568d0a1fe0e51fccfc5d104b04b74c53239f19fd2a287546208002",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/descriptor_guards.c": "e18e36f510b45353eb4a8fd33408a4ffb181ce95c1ceeed19293c5ee415b73c6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/record_layouts.c": "07a950c7628a89ca8fad8c6ebad7fdd80ea799f57c17a3ff8c92ed35be808858",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Apache2": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Boost": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/SOURCE.json": "325877bd34c58ffdb079e44f957c9961dea01cdbf896c3887f0f11a13f1dbedd",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16"
+  },
+  "read_only_input_hashes_after": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend": "29c60a887b0a2bf8d0659104c9559ac326e7e2d7513a417bd37b87fa85be528c",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/tools/c-target.py": "35f8ece6a7705df589c23ef709885550eb3791dc6e6382ee437d4c821b4a6cdf",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/corpus-c/upstream/richards.js": "a2dfa477f4c36514e1d2e7200d05e4179a9dc97eef81d6ca42aa43c308f3ef06",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/corpus-c/adapters/richards.js": "0d1c1ce9d2ad55a54b02f78a2a50e5b50d64dd0cae583c4bdc9e5ef9029fe08d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/js-frontend/src/c_backend.rs": "db2980fc49fef53f4eb643e5913175dcd5d16e98de6e313b8567cfa7759a57f8",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/driver.c": "52e4f4effb7a2b1296e0c3537fe39f13e0146b966940c0d4f976dd3b2e11e20f",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c": "af39afcb97edeb6080fec6ca66e3a75d73dba8b4f058f617fee9ab7b5e88a718",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c": "d2e5ee19cd697b84cd36e462b86e11aaa3910505df1d017d9660463a5cbf15eb",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.h": "a7acb13ed0744d7dba5576880374d24109f34ddf4e42d9c07ae98df2b8fedb4b",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime_internal.h": "2dcd79cd4f568d0a1fe0e51fccfc5d104b04b74c53239f19fd2a287546208002",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/descriptor_guards.c": "e18e36f510b45353eb4a8fd33408a4ffb181ce95c1ceeed19293c5ee415b73c6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/tests/record_layouts.c": "07a950c7628a89ca8fad8c6ebad7fdd80ea799f57c17a3ff8c92ed35be808858",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Apache2": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/LICENSE-Boost": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/SOURCE.json": "325877bd34c58ffdb079e44f957c9961dea01cdbf896c3887f0f11a13f1dbedd",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/common.h": "0bbd71d26da6193e678d0776cf418f43f287c73d6fd6725353df0aadf70f2a19",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c": "d24323c7eb77d63f1e52c415212b50060b776f0883525d907d04954fcd48cf64",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_full_table.h": "2618f6e5fae6c4443899b184efe3d08295dd267dc9f1a994c983c7caca59ebe6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_intrinsics.h": "1d05702f2edacce428223d4b43dd3095c1bd1f3ad30128ce1761d84356dddc7d",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s_small_table.h": "54fec51f1c5eed786a8ce6de881b81582dd71f0812dcd4324b37396617bb0fa9",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/digit_table.h": "8b782573abc0b8554d74163ae6c02f0beb5c30d1e63eaebdb0ddf2c98d817e01",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/ryu.h": "b7feab0ba1df5e9ef3d602f386592ad152491405e49b408fb21c0e0e9e6bfb16"
+  },
+  "read_only_inputs_unchanged": true,
+  "commands": [
+    "node --version",
+    "clang --version",
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new rev-parse HEAD",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/oracles.js '[1, 2, 10, 100, 1000, 2500, 10000, 37, 999, 4093, 12345]'",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original check '[0, 1, 2, 3]' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh check '[0, 1, 2, 3]' 7 5",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend --c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js",
+    "clang -std=c11 -O2 -ffp-contract=off -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor /tmp/object-richards-l_mgbqxe/input.direct.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/direct-timed-driver.c -lm -o /tmp/object-richards-l_mgbqxe/input.direct",
+    "/tmp/object-richards-l_mgbqxe/input.direct 0 0 0",
+    "/tmp/object-richards-l_mgbqxe/input.direct 1 0 0",
+    "/tmp/object-richards-l_mgbqxe/input.direct 2 0 0",
+    "/tmp/object-richards-l_mgbqxe/input.direct 3 0 0",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-project --ast /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-project --harness /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object check '[0, 1, 2, 3]' 7 5",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-project /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object check '[0, 1, 2, 3]' 7 5",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-to-c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js",
+    "clang -std=c11 -O2 -ffp-contract=off /tmp/object-richards-l_mgbqxe/exact.object-tu.c -lm -o /tmp/object-richards-l_mgbqxe/exact.object",
+    "/tmp/object-richards-l_mgbqxe/exact.object 0 0 0",
+    "/tmp/object-richards-l_mgbqxe/exact.object 1 0 0",
+    "/tmp/object-richards-l_mgbqxe/exact.object 2 0 0",
+    "/tmp/object-richards-l_mgbqxe/exact.object 3 0 0",
+    "clang -std=c11 -O1 -g -DOC_VERIFY_PROOFS -DOC_GC_STRESS -fsanitize=address,undefined -fno-sanitize-recover=all -ffp-contract=off /tmp/object-richards-l_mgbqxe/exact.object-tu.c -lm -o /tmp/object-richards-l_mgbqxe/exact.object-san",
+    "/tmp/object-richards-l_mgbqxe/exact.object-san 0 0 0",
+    "/tmp/object-richards-l_mgbqxe/exact.object-san 1 0 0",
+    "/tmp/object-richards-l_mgbqxe/exact.object-san 2 0 0",
+    "/tmp/object-richards-l_mgbqxe/exact.object-san 3 0 0",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object time 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object time 1 7 5",
+    "/tmp/object-richards-l_mgbqxe/input.direct 1 7 5",
+    "/tmp/object-richards-l_mgbqxe/input.direct 1 7 5",
+    "/tmp/object-richards-l_mgbqxe/input.direct 1 7 5",
+    "/tmp/object-richards-l_mgbqxe/exact.object 1 7 5",
+    "/tmp/object-richards-l_mgbqxe/exact.object 1 7 5",
+    "/tmp/object-richards-l_mgbqxe/exact.object 1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/input.js original_fresh time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.interpreter-harness.js object time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object time 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/exact.residual.js object time 3 7 5",
+    "/tmp/object-richards-l_mgbqxe/input.direct 3 7 5",
+    "/tmp/object-richards-l_mgbqxe/input.direct 3 7 5",
+    "/tmp/object-richards-l_mgbqxe/input.direct 3 7 5",
+    "/tmp/object-richards-l_mgbqxe/exact.object 3 7 5",
+    "/tmp/object-richards-l_mgbqxe/exact.object 3 7 5",
+    "/tmp/object-richards-l_mgbqxe/exact.object 3 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original check '[1, 2, 10, 100, 1000, 2500, 10000, 37, 999, 4093, 12345]' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh check '[1, 2, 10, 100, 1000, 2500, 10000, 37, 999, 4093, 12345]' 7 5",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/target/debug/js-frontend --c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js",
+    "clang -std=c11 -O2 -ffp-contract=off -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c -I /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor /tmp/object-richards-l_mgbqxe/runtime-count.input.direct.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/partial_runtime.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/number_string.c /Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new/runtime/c/vendor/ryu/d2s.c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/direct-timed-driver.c -lm -o /tmp/object-richards-l_mgbqxe/runtime-count.input.direct",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 2 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 10 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 100 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1000 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 2500 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 10000 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 37 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 999 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 4093 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 12345 0 0",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-project --ast /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-project --harness /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object check '[1, 2, 10, 100, 1000, 2500, 10000, 37, 999, 4093, 12345]' 7 5",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-project /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object check '[1, 2, 10, 100, 1000, 2500, 10000, 37, 999, 4093, 12345]' 7 5",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/target/release/object-to-c /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js",
+    "clang -std=c11 -O2 -ffp-contract=off /tmp/object-richards-l_mgbqxe/runtime-count.object-tu.c -lm -o /tmp/object-richards-l_mgbqxe/runtime-count.object",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 2 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 10 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 100 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1000 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 2500 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 10000 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 37 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 999 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 4093 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 12345 0 0",
+    "clang -std=c11 -O1 -g -DOC_VERIFY_PROOFS -DOC_GC_STRESS -fsanitize=address,undefined -fno-sanitize-recover=all -ffp-contract=off /tmp/object-richards-l_mgbqxe/runtime-count.object-tu.c -lm -o /tmp/object-richards-l_mgbqxe/runtime-count.object-san",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 1 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 2 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 10 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 100 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 1000 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 2500 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 10000 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 37 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 999 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 4093 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object-san 12345 0 0",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject 0 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject -1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject 1.5 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject '\"NaN\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject '\"Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject '\"-Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original reject 1000001 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject 0 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject -1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject 1.5 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject '\"NaN\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject '\"Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject '\"-Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh reject 1000001 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject 0 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject -1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject 1.5 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject '\"NaN\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject '\"Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject '\"-Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object reject 1000001 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject 0 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject -1 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject 1.5 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject '\"NaN\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject '\"Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject '\"-Infinity\"' 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object reject 1000001 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 0 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct -1 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1.5 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct NaN 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct Infinity 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct -Infinity 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1000001 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 0 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object -1 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1.5 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object NaN 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object Infinity 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object -Infinity 0 0",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1000001 0 0",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object time 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object time 1000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 1000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 1000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js original_fresh time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.interpreter-harness.js object time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object time 10000 7 5",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/js-worker.js /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.residual.js object time 10000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 10000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 10000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.input.direct 10000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 10000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 10000 7 5",
+    "/tmp/object-richards-l_mgbqxe/runtime-count.object 10000 7 5"
+  ],
+  "pipeline_hashes_after": {
+    "target/release/object-project": "bd2cd4fa7a4e5c919064b14e0c9287643af30cba46359fa4d338854d1114c5d1",
+    "target/release/object-to-c": "7329e70df4ef58b7a944f4d485ee0dcb3ce024e0a1f132ec5c2b3cb27f92bfde",
+    "docs/object-projection/interpreter.js": "e9c0142f92d1a8960ea1bff5dc78e0b78f18c5fb6061e0ac40276a76150d47b6",
+    "docs/object-projection/intrinsics.js": "52750d079f6ab61af5069949fea221ec800484798d347578b48d42a965a99a7b",
+    "js-frontend/src/object_c_runtime.h": "eae86f5f0100d7f74fe864416701917ae58b9f1abe74b0709fba31595065766a",
+    "js-frontend/src/object_c.rs": "eaedcd1eb00e0dbcdb5a8e1249733e76045b9b143277228d83d7294b135e626d",
+    "js-frontend/src/object_projection.rs": "a901f2a8e78243a94e76998fb31af772ff04b186851c2d2d1d1124d38e264491"
+  },
+  "pipeline_unchanged_during_run": true
+}

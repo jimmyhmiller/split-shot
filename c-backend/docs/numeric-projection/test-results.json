@@ -1,0 +1,104 @@
+{
+  "command": "node docs/numeric-projection/test.js",
+  "completedAt": "2026-11-09T17:37:41.063Z",
+  "nodeVersion": "v26.5.0",
+  "inputs": [
+    -3,
+    -1,
+    0,
+    1,
+    3,
+    5,
+    10,
+    19
+  ],
+  "paths": [
+    "original Node",
+    "ordinary numeric interpreter",
+    "projected JavaScript",
+    "compiled C"
+  ],
+  "comparison": "Object.is: exact finite values and signed zero; NaN payloads ignored",
+  "projectionEnvironment": {
+    "PE_CONTEXT_POINTS": "1",
+    "PE_NO_SHARED_CONTEXTS": "1",
+    "SPEC_WEIGHT_BUDGET": "150000000",
+    "PE_NO_COALESCE": null
+  },
+  "cFlags": [
+    "-std=c11",
+    "-O2",
+    "-ffp-contract=off",
+    "-DNUMERIC_STANDALONE",
+    "-lm"
+  ],
+  "passedFixtures": 9,
+  "failedFixtures": 0,
+  "exactComparisons": 216,
+  "elapsedSeconds": 1.9367164170000002,
+  "fixtures": [
+    {
+      "name": "arithmetic",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.353431
+    },
+    {
+      "name": "dense-array",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.18828833400000008
+    },
+    {
+      "name": "dynamic-loops",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.13743495799999994
+    },
+    {
+      "name": "loop-allocation",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.199429667
+    },
+    {
+      "name": "loop-completions",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.17648749999999996
+    },
+    {
+      "name": "nested-captures",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.3067087920000001
+    },
+    {
+      "name": "nested-loops",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.16180729199999996
+    },
+    {
+      "name": "numeric-edges",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.158030125
+    },
+    {
+      "name": "record-mutation",
+      "status": "passed",
+      "inputs": 8,
+      "exactComparisons": 24,
+      "elapsedSeconds": 0.24644954200000008
+    }
+  ]
+}

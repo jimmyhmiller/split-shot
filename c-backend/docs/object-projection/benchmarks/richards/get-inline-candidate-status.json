@@ -1,0 +1,31 @@
+{
+  "status": "candidate preserved, source restored after user priority change",
+  "baseline_commit": "5f472baa1aeef07761932e02f73a37ab4598547a",
+  "header_source_sha256": "c200f0d950561c71821dfbdf10cda353cf46886dfbf2dbb4410ba4ac9ba73d92",
+  "saved_candidate_header_sha256": "b325de08bf84d8d77b3b63aa4dbddd73b1cc3ea1585da40d46a307e76a79723b",
+  "portable_header_patch": "get-inline-integration.patch",
+  "temporary_c_ablation_patch": "get-inline-ablation.patch",
+  "raw_ablation": "get-inline-ablation.json",
+  "abi_run": {
+    "status": "bounded call completed after stop instruction",
+    "fixtures": 49,
+    "exact_comparisons": 478,
+    "expected_rejections": 6,
+    "native_dispatch_routing_assertions": 3,
+    "raw_output": "get-inline-abi-output.txt",
+    "scope": "candidate release binary only; source was restored and full guest suite/official benchmark were not run"
+  },
+  "full_guest_suite": "not started",
+  "official_benchmark": "not started",
+  "release_binary_state": "Rebuilt from restored baseline source after stop; candidate remains a patch only.",
+  "baseline_rebuild_after_stop": {
+    "completed_utc": "2026-11-09T19:32:57.642402+00:00",
+    "command": "cargo build --release -p js-frontend --bin object-project --bin object-to-c --bin js-frontend --bin numeric-to-c",
+    "binaries": {
+      "target/release/js-frontend": "f6b6ceabfa43f66b2a4f8be9067e2d3bab2711a1626fa3eee404c297f268d721",
+      "target/release/numeric-to-c": "2cc4e2afbd7185ed0edba3e8343c4cc001b9151258ff59d8e79c945d38bcd0ca",
+      "target/release/object-project": "9b345a506fa95376bb826624013c2dcc06d9c4f749624d3ea9271c9ba0968e61",
+      "target/release/object-to-c": "eae5e53d1130038004393bbbab5c69bbf2681bde049c09d3abf6835604830fba"
+    }
+  }
+}

@@ -1,0 +1,607 @@
+[marking 0x2373441ff261 <JSFunction isPosixPathSeparator (sfi = 0x33a543d1b581)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x2373441ff261 <JSFunction isPosixPathSeparator (sfi = 0x33a543d1b581)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[marking 0x2373441ff389 <JSFunction normalizeString (sfi = 0x33a543d1b7a9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x2373441ff389 <JSFunction normalizeString (sfi = 0x33a543d1b7a9)> (target MAGLEV) OSR, mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x2373441ff261 <JSFunction isPosixPathSeparator (sfi = 0x33a543d1b581)> (target MAGLEV) - took 0.000, 0.124, 0.002 ms]
+[compiling method 0x2373441ff389 <JSFunction normalizeString (sfi = 0x33a543d1b7a9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x2373441ff389 <JSFunction normalizeString (sfi = 0x33a543d1b7a9)> (target MAGLEV) OSR - took 0.000, 0.426, 0.001 ms]
+[completed compiling 0x2373441ff389 <JSFunction normalizeString (sfi = 0x33a543d1b7a9)> (target MAGLEV) - took 0.000, 0.280, 0.001 ms]
+[marking 0x10143447bbe9 <JSFunction TaskControlBlock.isHeldOrSuspended (sfi = 0x1b1e4d5164c9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447bbe9 <JSFunction TaskControlBlock.isHeldOrSuspended (sfi = 0x1b1e4d5164c9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[marking 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target MAGLEV) OSR, mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447bbe9 <JSFunction TaskControlBlock.isHeldOrSuspended (sfi = 0x1b1e4d5164c9)> (target MAGLEV) - took 0.000, 0.086, 0.003 ms]
+[marking 0x10143447be69 <JSFunction TaskControlBlock.run (sfi = 0x1b1e4d516661)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447be69 <JSFunction TaskControlBlock.run (sfi = 0x1b1e4d516661)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447be69 <JSFunction TaskControlBlock.run (sfi = 0x1b1e4d516661)> (target MAGLEV) - took 0.000, 0.116, 0.004 ms]
+[marking 0x10143447bc29 <JSFunction TaskControlBlock.markAsSuspended (sfi = 0x1b1e4d516551)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x10143447b591 <JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[completed compiling 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target MAGLEV) OSR - took 0.001, 0.314, 0.005 ms]
+[compiling method 0x10143447b591 <JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x10143447bc29 <JSFunction TaskControlBlock.markAsSuspended (sfi = 0x1b1e4d516551)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[marking 0x10143447b5d1 <JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b5d1 <JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447bc29 <JSFunction TaskControlBlock.markAsSuspended (sfi = 0x1b1e4d516551)> (target MAGLEV) - took 0.000, 0.025, 0.000 ms]
+[completed compiling 0x10143447b591 <JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> (target MAGLEV) - took 0.000, 0.057, 0.001 ms]
+[compiling method 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS) OSR, mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447b5d1 <JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> (target MAGLEV) - took 0.000, 0.119, 0.005 ms]
+[marking 0x10143447c409 <JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447c409 <JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710ca8c0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>}[marking 0x10143447c159  for inlining with 0x76710b70b8 {0x1b1e4d519561 <FeedbackVector[5]>}
+<JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[completed compiling 0x10143447c409 <JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> (target MAGLEV) - took 0.000, 0.141, 0.005 ms]
+Considering 0x76710cace8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>} for inlining with 0x76710b8498 {0x1b1e4d519af1 [compiling method 0x10143447c159 <JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+<FeedbackVector[20]>}
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #48 with frequency 2332, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710ca8c0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>}, bytecode size: 31
+- candidate: JSCall node #94 with frequency 1426, has_heapnum_param:0, 1 target(s):
+[marking 0x10143447be29   - target: 0x76710cace8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>}, bytecode size: 67
+<JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Inlining 0x76710ca8c0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>} into 0x76710ca400 {0x1b1e4d515fe9 [completed compiling 0x10143447c159 <SharedFunctionInfo Scheduler.schedule>}
+<JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)> (target MAGLEV) - took 0.000, 0.065, 0.003 ms]
+[compiling method 0x10143447be29 <JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Budget used: 31/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #94 with frequency 1426, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710cace8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>}, bytecode size: 67
+[marking 0x10143447c561 <JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Inlining 0x76710cace8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[completed compiling 0x10143447be29 <JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> (target MAGLEV) - took 0.000, 0.039, 0.001 ms]
+[compiling method 0x10143447c561 <JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710bbe50 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>} for inlining with 0x767125c218 {0x1b1e4d519be1 <FeedbackVector[71]>}
+[marking 0x10143447ba69 <JSFunction TaskControlBlock.markAsNotHeld (sfi = 0x1b1e4d5163b9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Considering 0x76710bbf50 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>} for inlining with 0x767125c268 {0x1b1e4d51a469 <FeedbackVector[41]>}
+[completed compiling 0x10143447c561 <JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> (target MAGLEV) - took 0.000, 0.061, 0.001 ms]
+Considering 0x767125c078 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>} for inlining with 0x767125c2b8 {0x1b1e4d51a659 <FeedbackVector[26]>}
+[compiling method 0x10143447ba69 <JSFunction TaskControlBlock.markAsNotHeld (sfi = 0x1b1e4d5163b9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Considering 0x767125c178 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>} for inlining with 0x767125c308 {0x1b1e4d51aa01 <FeedbackVector[39]>}
+Budget used: [marking 0x10143447baa9 <JSFunction TaskControlBlock.markAsHeld (sfi = 0x1b1e4d516441)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x10143447b551 <JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+98/[completed compiling 0x10143447ba69 <JSFunction TaskControlBlock.markAsNotHeld (sfi = 0x1b1e4d5163b9)> (target MAGLEV) - took 0.000, 0.023, 0.001 ms]
+920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #246 with frequency 1424.82, has_heapnum_param:0, 4 target(s):
+  - target: 0x76710bbe50 {0x1b1e4d516c09 <SharedFunctionInfo [compiling method 0x10143447b551 <JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+HandlerTask.run>}, bytecode size: 208
+  - target: 0x76710bbf50 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}, bytecode size: 137
+  - target: 0x767125c078 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}, bytecode size: 74
+  - target: 0x767125c178 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}, bytecode size: 122
+[compiling method 0x10143447baa9 <JSFunction TaskControlBlock.markAsHeld (sfi = 0x1b1e4d516441)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Inlining 0x76710bbe50 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[completed compiling 0x10143447b551 <JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> (target MAGLEV) - took 0.000, 0.047, 0.002 ms]
+[completed compiling 0x10143447baa9 <JSFunction TaskControlBlock.markAsHeld (sfi = 0x1b1e4d516441)> (target MAGLEV) - took 0.000, 0.021, 0.001 ms]
+Inlining 0x76710bbf50 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[marking 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Inlining 0x767125c078 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[marking 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Inlining 0x767125c178 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[completed compiling 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> (target MAGLEV) - took 0.000, 0.070, 0.002 ms]
+[compiling method 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Considering 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x7671260330 {0x1b1e4d51a279 <FeedbackVector[7]>}
+[marking 0x10143447c2b1 Considering 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x7671260330 {0x1b1e4d51a279 <FeedbackVector[7]>}
+<JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[completed compiling 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> (target MAGLEV) - took 0.000, 0.062, 0.001 ms]
+[compiling method 0x10143447c2b1 <JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Considering 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x7671262800 {0x1b1e4d51a191 <FeedbackVector[23]>}
+[bailout (kind: deopt-eager, reason: Insufficient type feedback for generic named access): begin. deoptimizing 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)>, 0x3f9715d86b71 <Code MAGLEV>, opt id 18, bytecode offset 22, deopt exit 5, FP to SP delta 32, caller SP 0x00016ef18d70, pc 0x00011fec30b0]
+Considering 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x7671262800 {0x1b1e4d51a191 <FeedbackVector[23]>}
+Considering 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} for inlining with 0x7671263360 {0x1b1e4d519f41 <FeedbackVector[8]>}
+[completed compiling 0x10143447c2b1 <JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> (target MAGLEV) - took 0.000, 0.121, 0.003 ms]
+Considering 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} for inlining with 0x7671263360 {0x1b1e4d519f41 <FeedbackVector[8]>}
+Considering 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x7671262800 {0x1b1e4d51a191 <FeedbackVector[23]>}
+Considering 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} for inlining with 0x7671263360 {0x1b1e4d519f41 <FeedbackVector[8]>}
+Considering 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x7671262800 {0x1b1e4d51a191 <FeedbackVector[23]>}
+Considering 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>} for inlining with 0x7671297028 {0x1b1e4d51a811 <FeedbackVector[15]>}
+Considering 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} for inlining with 0x76712982c0 {0x1b1e4d51a931 <FeedbackVector[16]>}
+Considering 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} for inlining with 0x76712982c0 {0x1b1e4d51a931 <FeedbackVector[16]>}
+Budget used: 639/920 -- 12 candidate(s) for inlining:
+- candidate: JSCall node #550 with frequency 712.409, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #518 with frequency 708.934, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #700 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #369 with frequency 565.294, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #840 with frequency 742.343, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #813 with frequency 680.081, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+Inlining 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x7671298828 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x7671298ca0 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #1026:JSCall
+Inlining 0x7671298828 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Budget used: 658/920 -- 11 candidate(s) for inlining:
+- candidate: JSCall node #518 with frequency 708.934, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #700 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #369 with frequency 565.294, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #840 with frequency 742.343, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #813 with frequency 680.081, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+[marking 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59[compiling method 0x10143447c001 , existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+<JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Inlining 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x7671298828 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x7671298ca0 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #1089:JSCall
+Inlining 0x7671298828 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[completed compiling 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> (target MAGLEV) - took 0.001, 0.106, 0.003 ms]
+Budget used: 677/920 -- 10 candidate(s) for inlining:
+- candidate: JSCall node #700 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #369 with frequency 565.294, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #840 with frequency 742.343, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #813 with frequency 680.081, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+Inlining 0x767125ee98 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x7671298828 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x7671298ca0 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #1150:JSCall
+Inlining 0x7671298828 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+[marking 0x10143447b5d1 <JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Budget used: 696/920 -- 9 candidate(s) for inlining:
+- candidate: JSCall node #369 with frequency 565.294, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #840 with frequency 742.343, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release[compiling method 0x10143447b5d1 >}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #813 with frequency 680.081, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:<JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+[marking 0x10143447b591 <JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Inlining 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>[compiling method 0x10143447b591 } into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+<JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710d4c58 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} for inlining with 0x76710bd6a8 {0x1b1e4d51a321 <FeedbackVector[20]>}
+Budget used: 0/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #72 with frequency 0.998073, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710d4c58 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>}, bytecode size: 64
+[marking 0x10143447c409 Inlining 0x76710d4c58 {<JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} into 0x76710d4488 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}
+[compiling method 0x10143447c409 <JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Budget used: 740/920 -- 8 candidate(s) for inlining:
+- candidate: JSCall node #840 with frequency 742.343, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #813 with frequency 680.081, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #[marking 0x10143447c159 744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #469 with frequency <JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, [compiling method 0x10143447c159 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+<JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)>Inlining 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+ (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710d88c0 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x76710d9ef0 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #25:JSCall
+Considering 0x76710bd758 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} for inlining with 0x76710bf6f0 {0x1b1e4d51a411 <FeedbackVector[5]>}
+Inlining small function(s) at call site #136:JSCall
+Inlining 0x76710bd758 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} into 0x76710d4488 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}
+Considering 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76713125c8 {0x1b1e4d51a279 <FeedbackVector[7]>}
+Considering 0x7671299a20 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} for inlining with 0x767129a560 {0x1b1e4d51a8d9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #1281:JSCall
+Inlining 0x7671299a20 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Inlining 0x76710d88c0 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x76710d8480 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}
+Considering 0x76710bec40 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76710c06e8 {0x1b1e4d51a279 <FeedbackVector[7]>}
+Budget used: 64/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #168 with frequency 0.345561, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710bec40 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+[marking 0x10143447be29 <JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Inlining 0x76710bec40 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} into 0x76710d4488 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}
+[compiling method 0x10143447be29 <JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76713125c8 {0x1b1e4d51a279 <FeedbackVector[7]>}
+Budget used: 794/920 -- 7 candidate(s) for inlining:
+- candidate: JSCall node #813 with frequency 680.081, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+[marking 0x10143447c561   - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: <JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 64
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: [completed compiling 0x10143447b591 59, existing opt code's inlined bytecode size: 64
+<JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> (target TURBOFAN_JS) - took 0.001, 1.762, 0.008 ms]
+[completed optimizing 0x10143447b591 Inlining 0x767125f268 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} into 0x76710ca400 {0x1b1e4d515fe9<JSFunction Scheduler.suspendCurrent (sfi = 0x1b1e4d516179)> (target TURBOFAN_JS)]
+ <SharedFunctionInfo Scheduler.schedule>}
+Considering [completed compiling 0x10143447be29 0x76710dedc0 {0x1b1e4d516201 <JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> (target TURBOFAN_JS) - took 0.001, 0.129, 0.013 ms]
+[completed optimizing 0x10143447be29 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x76713164a0 {0x1b1e4d51a191 <FeedbackVector[23]>}
+<JSFunction TaskControlBlock.markAsRunnable (sfi = 0x1b1e4d5165d9)> (target TURBOFAN_JS)]
+Considering 0x76710e4bd8 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} for inlining with 0x76713284b8[completed compiling 0x10143447b5d1 <JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> (target TURBOFAN_JS) - took 0.002, 2.766, 0.010 ms]
+[completed optimizing  {0x1b1e4d519f41 <FeedbackVector[8]>}
+0x10143447b5d1 <JSFunction Scheduler.queue (sfi = 0x1b1e4d516201)> (target TURBOFAN_JS)]
+Inlining small function(s) at call site #42:JSCall
+[compiling method 0x10143447c561 Inlining 0x76710e4bd8 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+<JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x7671299a20 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} for inlining with 0x767129a560 {0x1b1e4d51a8d9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #1387:JSCall
+Inlining 0x7671299a20 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x76713164a0 {0x1b1e4d51a191 <FeedbackVector[23]>}
+Considering 0x7671328558 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x7671329500 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #120:JSCall
+Inlining 0x7671328558 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+Budget used: 848/920 -- 6 candidate(s) for inlining:
+- candidate: JSCall node #744 with frequency 473.408, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>[completed compiling 0x10143447c561 }, bytecode size: 59<JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> (target TURBOFAN_JS) - took 0.002, 0.312, 0.004 ms]
+[completed optimizing 0x10143447c561 <JSFunction Packet.addTo (sfi = 0x1b1e4d516d51)> (target TURBOFAN_JS)]
+, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x767125f0f0 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x76710df8e0 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} for inlining with 0x7671414030 {0x1b1e4d519f41 <FeedbackVector[8]>}
+Budget used: 0/920 -- 5 candidate(s) for inlining:
+- candidate: JSCall node #213 with frequency 0.497561, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710df8e0 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #63 with frequency 0.396748, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #163 with frequency 0.401626, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59[marking 0x10143447b551 , existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #44 with frequency 0.100813, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+<JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Inlining 0x76710df8e0 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+[compiling method 0x10143447b551 <JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710e4cd0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x767132b1a0 {0x1b1e4d51a191 <FeedbackVector[23]>}
+[marking 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x767129b2e8 {0x1b1e4d516441 <SharedFunctionInfo TaskControlBlock.markAsHeld>} for inlining with 0x767129bc68 {0x1b1e4d51a7b9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #1488:JSCall
+Inlining 0x767129b2e8 {0x1b1e4d516441 <SharedFunctionInfo TaskControlBlock.markAsHeld>} into 0x76710ca400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x76714140e0 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x76714147d0 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #311:JSCall
+Inlining 0x76714140e0 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x7671356c10 {0x1b1e4d516441 <SharedFunctionInfo TaskControlBlock.markAsHeld>} for inlining with 0x767133c698 {0x1b1e4d51a7b9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #35:JSCall
+Inlining 0x7671356c10 {0x1b1e4d516441 <SharedFunctionInfo TaskControlBlock.markAsHeld>} into 0x7671356480 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}
+Considering 0x76710e4da8 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>} for inlining with 0x767132b748 {0x1b1e4d51a811 <FeedbackVector[15]>}
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #87 with frequency 0.332258, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710e4da8 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>}, bytecode size: 34, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #68 with frequency 0.333333, has_heapnum_param:0, [marking 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+1 target(s):
+  - target: 0x76710e4cd0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+[compiling method 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)>Inlining 0x76710e4da8 {0x1b1e4d5160f1 <SharedFunctionInfo  (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Scheduler.holdCurrent>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+[completed compiling 0x10143447b551 <JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> (target TURBOFAN_JS) - took 0.001, 0.552, 0.006 ms]
+[completed optimizing 0x10143447b551 Budget used: 882/920 -- 5 candidate(s) for inlining:
+- candidate: JSCall node #659 with frequency 706.887, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #469 with frequency 572.244, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #724 with frequency 474.94, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #350 with frequency 143.64, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ebf8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #503 with frequency 141.323, has_heapnum_param:0, 1 target(s):
+  - target: 0x767125ed78 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Budget used: 19/920 -- 4 candidate(s) for inlining:
+- candidate: JSCall node #63 with frequency 0.396748, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #163 with frequency 0.401626, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #44 with frequency 0.100813, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+<JSFunction Scheduler.holdCurrent (sfi = 0x1b1e4d5160f1)> (target TURBOFAN_JS)]
+Inlining 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x76713548c8 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} for inlining with 0x7671337280 {0x1b1e4d51a8d9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #40:JSCall
+Inlining 0x76713548c8 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} into 0x7671354488 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}
+Considering 0x767132b828 {0x1b1e4d516441 <SharedFunctionInfo TaskControlBlock.markAsHeld>} for inlining with 0x767132c3e8 {0x1b1e4d51a7b9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #211:JSCall
+Inlining 0x767132b828 {0x1b1e4d516441 <SharedFunctionInfo TaskControlBlock.markAsHeld>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+Budget used: 34/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #68 with frequency 0.333333, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710e4cd0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x76710e4cd0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+Considering 0x767132cba0 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} for inlining with 0x76713d17d8 {0x1b1e4d51a321 <FeedbackVector[[completed compiling 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> (target TURBOFAN_JS) - took 0.001, 1.405, 0.008 ms]
+[completed optimizing 0x10143447b511 <JSFunction Scheduler.release (sfi = 0x1b1e4d516071)> (target TURBOFAN_JS)]
+20]>}
+Budget used: 93/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #330 with frequency 0.332691, has_heapnum_param:0, 1 target(s):
+  - target: 0x767132cba0 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>}, bytecode size: 64
+Inlining 0x767132cba0 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+Budget used: 63/920 -- 3 candidate(s) for inlining:
+- candidate: JSCall node #163 with frequency 0.401626, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+- candidate: JSCall node #44 with frequency 0.100813, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x7671348c18 {0x1b1e4d5160f1 <SharedFunctionInfo Scheduler.holdCurrent>} for inlining with 0x767133c928 {0x1b1e4d51a811 <FeedbackVector[15]>}
+Considering 0x76713d1878 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} for inlining with 0x76713d4e60 {0x1b1e4d51a411 <FeedbackVector[5]>}
+[marking 0x10143447c2b1 Inlining small function(s) at call site #395:JSCall
+Inlining 0x76713d1878 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+<JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Considering 0x7671415360 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} for inlining with 0x7671417158 {[compiling method 0x10143447c2b1 <JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+0x1b1e4d51a321 <FeedbackVector[20]>}
+Budget used: 122/920 -- 3 candidate(s) for inlining:
+- candidate: JSCall node #476 with frequency 0.400852, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671415360 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>}, bytecode size: 64
+- candidate: JSCall node #44 with frequency 0.100813, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x7671415360 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} for inlining with 0x767133d4e8 {0x1b1e4d51a931 <FeedbackVector[16]>}
+Considering 0x76713d4160 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76713d5a00 {0x1b1e4d51a279 <FeedbackVector[7]>}
+Budget used: 157/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #427 with frequency 0.115187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76713d4160 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+Inlining 0x76713d4160 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} into 0x76710e4488 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}
+Considering 0x76714181f8 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} for inlining with 0x767141a2d0 {0x1b1e4d51a411 <FeedbackVector[5]>}
+Inlining small function(s) at call site #541:JSCall
+Inlining 0x76714181f8 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} for inlining with 0x767133d4e8 {0x1b1e4d51a931 <FeedbackVector[16]>}
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #84 with frequency 0.501086, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #111 with frequency 0.49819, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+[completed compiling 0x10143447b4d1 Inlining 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} into 0x7671348488 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}
+<JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS) OSR - took 0.013, 15.763, 0.035 ms]
+[completed optimizing 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)>Considering 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76713125c8 {0x1b1e4d51a279 <FeedbackVector[7]>}
+ (target TURBOFAN_JS) OSR]
+Considering 0x76713548c8 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} for inlining with 0x76710c1280 {0x1b1e4d519f41 <FeedbackVector[8]>}
+[bailout (kind: deopt-eager, reason: prepare for on stack replacement (OSR)): begin. deoptimizing Considering 0x767133da60 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} for inlining with 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)>, 0x3f9715d83ec9 <Code MAGLEV>, opt id 5, bytecode offset 77, deopt exit 20, FP to SP delta 80, caller SP 0x00016ef18c38, pc 0x00011fe49714]
+0x767133faf8 {0x1b1e4d51a8d9 <FeedbackVector[5]>}
+[completed compiling 0x10143447c159 <JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)> (target TURBOFAN_JS) - took 0.002, 6.246, 0.016 ms]
+[completed optimizing 0x10143447c159 <JSFunction DeviceTask.run (sfi = 0x1b1e4d516979)> (target TURBOFAN_JS)]
+Inlining small function(s) at call site #182:JSCall
+Inlining 0x767133da60 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} into 0x7671348488 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}
+[bailout (kind: deopt-eager, reason: Insufficient type feedback for generic named access): begin. deoptimizing 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)>, 0x2b2df03bd9f1 <Code TURBOFAN_JS>, opt id 8, bytecode offset 16, deopt exit 51, FP to SP delta 144, caller SP 0x00016ef18c38, pc 0x00011fe83068]
+Budget used: 186/920 -- 3 candidate(s) for inlining:
+- candidate: JSCall node #573 with frequency 0.138786, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #44 with frequency 0.100813, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} into 0x76710de488 {0x1b1e4d516c09 [marking 0x10143447b4d1 <SharedFunctionInfo HandlerTask.run>}
+<JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+Considering 0x7671354d98 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} for inlining with 0x76710c48f0 {0x1b1e4d51a191 <FeedbackVector[23]>}
+[compiling method 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target MAGLEV) OSR, mode: ConcurrencyMode::kConcurrent]
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #33 with frequency 0.5, has_heapnum_param:0, 1 target(s):
+  - target: 0x76713548c8 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>}, bytecode size: 19, existing opt code's inlined bytecode size: 16
+- candidate: JSCall node #143 with frequency 0.497845, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671354d98 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x76713548c8 {0x1b1e4d516179 <SharedFunctionInfo Scheduler.suspendCurrent>} into 0x7671354488 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}
+Budget used: 54/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #111 with frequency 0.49819, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>}, bytecode size: 54, existing opt code's inlined bytecode size: 16
+Inlining 0x7671348d98 {0x1b1e4d516071 <SharedFunctionInfo Scheduler.release>} into 0x7671348488 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}
+Budget used: 230/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #44 with frequency 0.100813, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+[completed compiling 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target MAGLEV) OSR - took 0.001, 0.329, 0.005 ms]
+Inlining 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+[compiling method 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS) OSR, mode: ConcurrencyMode::kConcurrent]
+Considering 0x76710c49a0 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} for inlining with 0x76710c52c0 {0x1b1e4d519ee9 <FeedbackVector[5]>}
+[compiling method 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+Inlining small function(s) at call site #218:JSCall
+Inlining 0x76710c49a0 {0x1b1e4d516551 <SharedFunctionInfo TaskControlBlock.markAsSuspended>} into 0x7671354488 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}
+Considering 0x767133da60 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} for inlining with 0x767133faf8 {0x1b1e4d51a8d9 <FeedbackVector[5]>}
+Inlining small function(s) at call site #288:JSCall
+Inlining 0x767133da60 {0x1b1e4d5163b9 <SharedFunctionInfo TaskControlBlock.markAsNotHeld>} into 0x7671348488 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}
+Budget used: 274/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #198 with frequency 0.099187, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x76710dedc0 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x767134c8c0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>} for inlining with 0x76713280b8 {0x1b1e4d519561 <FeedbackVector[5]>}
+Budget used: 19/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #143 with frequency 0.497845, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671354d98 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>}, bytecode size: 59, existing opt code's inlined bytecode size: 124
+Inlining 0x7671354d98 {0x1b1e4d516201 <SharedFunctionInfo Scheduler.queue>} into 0x7671354488 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}
+Considering 0x7671415360 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} for inlining with 0x7671417158 {0x1b1e4d51a321 <FeedbackVector[20]>}
+Budget used: 333/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #804 with frequency 0.0989959, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671415360 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>}, bytecode size: 64
+Inlining 0x7671415360 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+Considering 0x767134cce8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>} for inlining with 0x7671329498 {0x1b1e4d519af1 <FeedbackVector[20]>}
+[completed compiling 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> (target TURBOFAN_JS) - took 0.001, 4.193, 0.008 ms]
+[completed optimizing 0x10143447c001 <JSFunction IdleTask.run (sfi = 0x1b1e4d516831)> (target TURBOFAN_JS)]
+Considering 0x76710c59e0 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} for inlining with 0x76713713c0 {0x1b1e4d51a321 <FeedbackVector[20]>}
+Budget used: 78/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #325 with frequency 0.496886, has_heapnum_param:0, 1 target(s):
+  - target: 0x76710c59e0 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>}, bytecode size: 64
+Inlining 0x76710c59e0 {0x1b1e4d5166e1 <SharedFunctionInfo TaskControlBlock.checkPriorityAdd>} into 0x7671354488 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}
+Considering 0x76714181f8 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} for inlining with 0x767141a2d0 {0x1b1e4d51a411 <FeedbackVector[5]>}
+Inlining small function(s) at call site #867:JSCall
+Inlining 0x76714181f8 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} into 0x76710de488 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}
+[completed compiling 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target MAGLEV) - took 0.000, 0.293, 0.005 ms]
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #48 with frequency 278.2, has_heapnum_param:0, 1 target(s):
+  - target: 0x767134c8c0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>}, bytecode size: 31
+- candidate: JSCall node #94 with frequency 169.9, has_heapnum_param:0, 1 target(s):
+  - target: 0x767134cce8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>}, bytecode size: 67
+Inlining 0x767134c8c0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>} into 0x767134c400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x7671371460 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} for inlining with 0x7671373740 {0x1b1e4d51a411 <FeedbackVector[5]>}
+Inlining small function(s) at call site #390:JSCall
+Inlining 0x7671371460 {0x1b1e4d5165d9 <SharedFunctionInfo TaskControlBlock.markAsRunnable>} into 0x7671354488 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}
+Considering 0x76710debd8 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76713125c8 {0x1b1e4d51a279 <FeedbackVector[7]>}
+Budget used: 31/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #94 with frequency 169.9, has_heapnum_param:0, 1 target(s):
+  - target: 0x767134cce8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>}, bytecode size: 67
+Inlining 0x767134cce8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>} into 0x767134c400 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+Considering 0x7671371548 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} for inlining with 0x76713755e8 {0x1b1e4d51a279 <FeedbackVector[7]>}
+Considering 0x767132ce50 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>} for inlining with 0x7671378218 {0x1b1e4d519be1 <FeedbackVector[71]>}
+Considering 0x767132cf50 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>} for inlining with 0x7671378268 {0x1b1e4d51a469 <FeedbackVector[41]>}
+Considering 0x7671378078 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>} for inlining with 0x76713782b8 {0x1b1e4d51a659 <FeedbackVector[26]>}
+Considering 0x7671378178 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>} for inlining with 0x7671378308 {0x1b1e4d51aa01 <FeedbackVector[39]>}
+Budget used: 98/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #246 with frequency 169.759, has_heapnum_param:0, 4 target(s):
+  - target: 0x767132ce50 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}, bytecode size: 208
+  - target: 0x767132cf50 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}, bytecode size: 137
+  - target: 0x7671378078 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}, bytecode size: 74, existing opt code's inlined bytecode size: 268
+  - target: 0x7671378178 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}, bytecode size: 122
+Budget used: 142/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #422 with frequency 0.172036, has_heapnum_param:0, 1 target(s):
+  - target: 0x7671371548 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>}, bytecode size: 44
+Inlining 0x7671371548 {0x1b1e4d516d51 <SharedFunctionInfo Packet.addTo>} into 0x7671354488 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}
+[marking 0x10143447ac29 <JSFunction Packet (sfi = 0x1b1e4d515aa1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447ac29 <JSFunction Packet (sfi = 0x1b1e4d515aa1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447ac29 <JSFunction Packet (sfi = 0x1b1e4d515aa1)> (target MAGLEV) - took 0.000, 0.114, 0.004 ms]
+[completed compiling 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS) OSR - took 0.001, 2.633, 0.016 ms]
+[completed optimizing 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS) OSR]
+[marking 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> for optimization to TURBOFAN_JS, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS), mode: ConcurrencyMode::kConcurrent]
+Considering 0x767135cbd0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>} for inlining with 0x76713376f0 {0x1b1e4d519561 <FeedbackVector[5]>}
+Considering 0x767135ccf8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>} for inlining with 0x7671338900 {0x1b1e4d519af1 <FeedbackVector[20]>}
+Budget used: 0/920 -- 2 candidate(s) for inlining:
+- candidate: JSCall node #50 with frequency 222.76, has_heapnum_param:0, 1 target(s):
+  - target: 0x767135cbd0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>}, bytecode size: 31
+- candidate: JSCall node #96 with frequency 135.92, has_heapnum_param:0, 1 target(s):
+  - target: 0x767135ccf8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>}, bytecode size: 67
+[completed compiling 0x10143447c2b1 Inlining 0x767135cbd0 {0x1b1e4d5164c9 <SharedFunctionInfo TaskControlBlock.isHeldOrSuspended>} into 0x767135c480 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+<JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> (target TURBOFAN_JS) - took 0.001, 4.715, 0.011 ms]
+[completed optimizing 0x10143447c2b1 Budget used: 31/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #96 with frequency 135.92, has_heapnum_param:0, 1 target(s):
+  - target: 0x767135ccf8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>}, bytecode size: 67
+Inlining 0x767135ccf8 {0x1b1e4d516661 <SharedFunctionInfo TaskControlBlock.run>} into 0x767135c480 {0x1b1e4d515fe9 <SharedFunctionInfo Scheduler.schedule>}
+<JSFunction WorkerTask.run (sfi = 0x1b1e4d516ac1)> (target TURBOFAN_JS)]
+[completed compiling 0x10143447c409 <JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> (target TURBOFAN_JS) - took 0.001, 12.395, 0.017 ms]
+[completed optimizing 0x10143447c409 <JSFunction HandlerTask.run (sfi = 0x1b1e4d516c09)> (target TURBOFAN_JS)]
+Considering 0x7671370370 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>} for inlining with 0x7671370710 {0x1b1e4d519be1 <FeedbackVector[71]>}
+Considering 0x7671370470 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>} for inlining with 0x7671370760 {0x1b1e4d51a469 <FeedbackVector[41]>}
+Considering 0x7671370570 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>} for inlining with 0x7671370ab8 {0x1b1e4d51a659 <FeedbackVector[26]>}
+Considering 0x7671370670 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>} for inlining with 0x7671370b08 {0x1b1e4d51aa01 <FeedbackVector[39]>}
+Budget used: 98/920 -- 1 candidate(s) for inlining:
+- candidate: JSCall node #254 with frequency 135.807, has_heapnum_param:0, 4 target(s):
+  - target: 0x7671370370 {0x1b1e4d516c09 <SharedFunctionInfo HandlerTask.run>}, bytecode size: 208
+  - target: 0x7671370470 {0x1b1e4d516ac1 <SharedFunctionInfo WorkerTask.run>}, bytecode size: 137, existing opt code's inlined bytecode size: 218
+  - target: 0x7671370570 {0x1b1e4d516979 <SharedFunctionInfo DeviceTask.run>}, bytecode size: 74, existing opt code's inlined bytecode size: 268
+  - target: 0x7671370670 {0x1b1e4d516831 <SharedFunctionInfo IdleTask.run>}, bytecode size: 122, existing opt code's inlined bytecode size: 140
+[completed compiling 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS) - took 0.001, 1.627, 0.012 ms]
+[completed optimizing 0x10143447b4d1 <JSFunction Scheduler.schedule (sfi = 0x1b1e4d515fe9)> (target TURBOFAN_JS)]
+[marking 0x10143447aae9 <JSFunction TaskControlBlock (sfi = 0x1b1e4d515939)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447aae9 <JSFunction TaskControlBlock (sfi = 0x1b1e4d515939)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[marking 0x10143447b491 <JSFunction Scheduler.addTask (sfi = 0x1b1e4d515f69)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b491 <JSFunction Scheduler.addTask (sfi = 0x1b1e4d515f69)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447aae9 <JSFunction TaskControlBlock (sfi = 0x1b1e4d515939)> (target MAGLEV) - took 0.001, 0.083, 0.003 ms]
+[completed compiling 0x10143447b491 <JSFunction Scheduler.addTask (sfi = 0x1b1e4d515f69)> (target MAGLEV) - took 0.000, 0.142, 0.004 ms]
+[marking 0x10143447abe9 <JSFunction HandlerTask (sfi = 0x1b1e4d515a59)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x10143447b111 <JSFunction Scheduler.addHandlerTask (sfi = 0x1b1e4d515dd1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x10143447ab69 <JSFunction DeviceTask (sfi = 0x1b1e4d5159c9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x10143447b251 <JSFunction Scheduler.addDeviceTask (sfi = 0x1b1e4d515e59)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x10143447b111 <JSFunction Scheduler.addHandlerTask (sfi = 0x1b1e4d515dd1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x10143447abe9 <JSFunction HandlerTask (sfi = 0x1b1e4d515a59)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x10143447b251 <JSFunction Scheduler.addDeviceTask (sfi = 0x1b1e4d515e59)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x10143447ab69 <JSFunction DeviceTask (sfi = 0x1b1e4d5159c9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x10143447abe9 <JSFunction HandlerTask (sfi = 0x1b1e4d515a59)> (target MAGLEV) - took 0.000, 0.062, 0.002 ms]
+[completed compiling 0x10143447b111 <JSFunction Scheduler.addHandlerTask (sfi = 0x1b1e4d515dd1)> (target MAGLEV) - took 0.000, 0.117, 0.001 ms]
+[completed compiling 0x10143447b251 <JSFunction Scheduler.addDeviceTask (sfi = 0x1b1e4d515e59)> (target MAGLEV) - took 0.000, 0.053, 0.002 ms]
+[completed compiling 0x10143447ab69 <JSFunction DeviceTask (sfi = 0x1b1e4d5159c9)> (target MAGLEV) - took 0.000, 0.032, 0.001 ms]
+[marking 0x2321fdfa0999 <JSFunction main (sfi = 0x1b1e4d515ae9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x2321fdfa0999 <JSFunction main (sfi = 0x1b1e4d515ae9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x2321fdfa0999 <JSFunction main (sfi = 0x1b1e4d515ae9)> (target MAGLEV) - took 0.001, 0.094, 0.004 ms]
+[marking 0x2321fdf9a139 <JSFunction Scheduler (sfi = 0x1b1e4d5158f1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdf9a9e9 <JSFunction IdleTask (sfi = 0x1b1e4d515981)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdfa0781 <JSFunction TaskControlBlock.setRunning (sfi = 0x1b1e4d516331)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdfa07c1 <JSFunction Scheduler.addRunningTask (sfi = 0x1b1e4d515ee1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdfa0801 <JSFunction Scheduler.addIdleTask (sfi = 0x1b1e4d515cc1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdf9bea9 <JSFunction WorkerTask (sfi = 0x1b1e4d515a11)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdfa0841 <JSFunction Scheduler.addWorkerTask (sfi = 0x1b1e4d515d49)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdfa0941 <JSFunction runRichards (sfi = 0x1b1e4d5158a9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[marking 0x2321fdfa03a1 <JSFunction invoke (sfi = 0x1b1e4d512ea1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x2321fdfa03a1 <JSFunction invoke (sfi = 0x1b1e4d512ea1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdfa0941 <JSFunction runRichards (sfi = 0x1b1e4d5158a9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdf9a139 <JSFunction Scheduler (sfi = 0x1b1e4d5158f1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdfa0801 <JSFunction Scheduler.addIdleTask (sfi = 0x1b1e4d515cc1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdf9a9e9 <JSFunction IdleTask (sfi = 0x1b1e4d515981)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdfa07c1 <JSFunction Scheduler.addRunningTask (sfi = 0x1b1e4d515ee1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdfa0781 <JSFunction TaskControlBlock.setRunning (sfi = 0x1b1e4d516331)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x2321fdfa03a1 <JSFunction invoke (sfi = 0x1b1e4d512ea1)> (target MAGLEV) - took 0.000, 0.111, 0.001 ms]
+[compiling method 0x2321fdfa0841 <JSFunction Scheduler.addWorkerTask (sfi = 0x1b1e4d515d49)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[compiling method 0x2321fdf9bea9 <JSFunction WorkerTask (sfi = 0x1b1e4d515a11)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x2321fdf9a139 <JSFunction Scheduler (sfi = 0x1b1e4d5158f1)> (target MAGLEV) - took 0.000, 0.073, 0.005 ms]
+[completed compiling 0x2321fdfa0801 <JSFunction Scheduler.addIdleTask (sfi = 0x1b1e4d515cc1)> (target MAGLEV) - took 0.000, 0.095, 0.004 ms]
+[completed compiling 0x2321fdf9a9e9 <JSFunction IdleTask (sfi = 0x1b1e4d515981)> (target MAGLEV) - took 0.000, 0.034, 0.001 ms]
+[completed compiling 0x2321fdfa07c1 <JSFunction Scheduler.addRunningTask (sfi = 0x1b1e4d515ee1)> (target MAGLEV) - took 0.000, 0.034, 0.001 ms]
+[completed compiling 0x2321fdfa0781 <JSFunction TaskControlBlock.setRunning (sfi = 0x1b1e4d516331)> (target MAGLEV) - took 0.000, 0.017, 0.000 ms]
+[completed compiling 0x2321fdfa0841 <JSFunction Scheduler.addWorkerTask (sfi = 0x1b1e4d515d49)> (target MAGLEV) - took 0.000, 0.041, 0.002 ms]
+[completed compiling 0x2321fdf9bea9 <JSFunction WorkerTask (sfi = 0x1b1e4d515a11)> (target MAGLEV) - took 0.000, 0.028, 0.001 ms]
+[completed compiling 0x2321fdfa0941 <JSFunction runRichards (sfi = 0x1b1e4d5158a9)> (target MAGLEV) - took 0.000, 0.511, 0.011 ms]
+[marking 0x2321fdfa03e1 <JSFunction consume (sfi = 0x1b1e4d512ee9)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x2321fdfa03e1 <JSFunction consume (sfi = 0x1b1e4d512ee9)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x2321fdfa03e1 <JSFunction consume (sfi = 0x1b1e4d512ee9)> (target MAGLEV) - took 0.000, 0.158, 0.004 ms]
+[marking 0x1b1e4d534891 <JSFunction run (sfi = 0x1b1e4d512fc1)> for optimization to MAGLEV, ConcurrencyMode::kConcurrent, reason: hot and stable]
+[compiling method 0x1b1e4d534891 <JSFunction run (sfi = 0x1b1e4d512fc1)> (target MAGLEV), mode: ConcurrencyMode::kConcurrent]
+[completed compiling 0x1b1e4d534891 <JSFunction run (sfi = 0x1b1e4d512fc1)> (target MAGLEV) - took 0.000, 0.202, 0.002 ms]
+{"input":1000,"value":[2322,928],"warmup_calls":5,"pilot_calls":1,"batch":200,"samples_seconds":[0.00011956625000000002,0.000070659165,0.00006974771,0.000068141045,0.00006660041999999997,0.00006531604000000003,0.00006627999999999994],"median_seconds":0.000068141045,"consumed_checksum":3264743098964}

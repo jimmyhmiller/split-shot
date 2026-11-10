@@ -1,0 +1,12 @@
+{
+ "source": {
+  "repository": "https://github.com/facebook/hermes",
+  "commit": "04941834ca9fe6d010f086a10e1c0cedad0e13b7",
+  "path": "benchmarks/octane/deltablue.js"
+ },
+ "input": "lines 420-1273 of the upstream file unchanged, plus a throwing alert and a main(size) adapter",
+ "sha256": {
+  "upstream-deltablue.js": "d4a1d0382a5502af5df4dc3a586a31558ab3778c86ea2def00a6c45d3a69c5a6",
+  "input.js": "86e78572bb4abd7496eab2bf42c2618b7e34dbcc33bfbd6d93e0a5ff89e032e2"
+ }
+}

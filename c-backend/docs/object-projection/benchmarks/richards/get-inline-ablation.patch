@@ -1,0 +1,11 @@
+--- baseline.c
++++ get-inline.c
+@@ -2455,7 +2455,7 @@
+     oc_fail(c, "numeric value required");
+   return v.as.number;
+ }
+-static oc_value oc_get(oc_ctx *c, oc_value v, double atom) {
++static __attribute__((always_inline)) inline oc_value oc_get(oc_ctx *c, oc_value v, double atom) {
+   size_t key = oc_size(c, atom);
+   for (size_t depth = 0; depth < 10000; depth++) {
+     oc_obj *o = oc_object(c, v);

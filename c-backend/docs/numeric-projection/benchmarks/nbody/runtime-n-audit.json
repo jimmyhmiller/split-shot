@@ -1,0 +1,134 @@
+{
+  "timestamp": "2026-11-09T17:40:48.055524+00:00",
+  "generated_c_sha256": "d00cda7c49b8c8eaf52e3066ee3839c2d8607c84c512d1cfbff674e0b65896ea",
+  "runtime_n": true,
+  "entry": "double numeric_main(double input)",
+  "driver_n": "strtod(argv[1], 0)",
+  "compiled_once_for_unseen_inputs": [
+    37,
+    211,
+    1234,
+    4321,
+    54321,
+    123456,
+    10.5,
+    -1
+  ],
+  "unseen_input_results": [
+    {
+      "input": 37,
+      "stdout": "-0.16906680025496557",
+      "bits": "bfc5a3fb1cf79bc8"
+    },
+    {
+      "input": 211,
+      "stdout": "-0.16902479078929289",
+      "bits": "bfc5a29ab6539ddc"
+    },
+    {
+      "input": 1234,
+      "stdout": "-0.1690593476684043",
+      "bits": "bfc5a3bc98a8d166"
+    },
+    {
+      "input": 4321,
+      "stdout": "-0.16905855592623889",
+      "bits": "bfc5a3b5f467f59d"
+    },
+    {
+      "input": 54321,
+      "stdout": "-0.16905637363741988",
+      "bits": "bfc5a3a3a5f9fe5c"
+    },
+    {
+      "input": 123456,
+      "stdout": "-0.16907127347858497",
+      "bits": "bfc5a420a3244cd4"
+    },
+    {
+      "input": 10.5,
+      "stdout": "-0.16907280226422178",
+      "bits": "bfc5a42d762f1796"
+    },
+    {
+      "input": -1,
+      "stdout": "-0.16907516382852447",
+      "bits": "bfc5a441459acc23"
+    }
+  ],
+  "original_results": [
+    {
+      "input": 37,
+      "bits": "bfc5a3fb1cf79bc8"
+    },
+    {
+      "input": 211,
+      "bits": "bfc5a29ab6539ddc"
+    },
+    {
+      "input": 1234,
+      "bits": "bfc5a3bc98a8d166"
+    },
+    {
+      "input": 4321,
+      "bits": "bfc5a3b5f467f59d"
+    },
+    {
+      "input": 54321,
+      "bits": "bfc5a3a3a5f9fe5c"
+    },
+    {
+      "input": 123456,
+      "bits": "bfc5a420a3244cd4"
+    },
+    {
+      "input": 10.5,
+      "bits": "bfc5a42d762f1796"
+    },
+    {
+      "input": -1,
+      "bits": "bfc5a441459acc23"
+    }
+  ],
+  "all_bitwise_equal": true,
+  "compile_command": [
+    "clang",
+    "-std=c11",
+    "-O2",
+    "-ffp-contract=off",
+    "-DNUMERIC_STANDALONE",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/numeric-projection/benchmarks/nbody/generated.c",
+    "-lm",
+    "-o",
+    "<temporary executable>"
+  ],
+  "lto": false,
+  "flags": [
+    "-O2",
+    "-ffp-contract=off"
+  ],
+  "js_validation_overhead_probe": {
+    "input": 100000,
+    "bits": "0000000000000000",
+    "warmup_calls": 5,
+    "samples_seconds": [
+      1.6808299999999933e-06,
+      1.0200000000000032e-06,
+      6.7499999999999e-07,
+      6.958399999999897e-07,
+      1.0399999999999922e-06,
+      1.0362499999999918e-06,
+      7.05000000000009e-07
+    ],
+    "batch": 100,
+    "median_seconds": 1.0200000000000032e-06
+  },
+  "fairness_notes": [
+    "All performance runs use runtime command-line inputs; no step count is supplied to the partial evaluator.",
+    "Generated and driver C are separate translation units without LTO, so calls cannot be folded to a fixed result in the timed driver.",
+    "Numeric C includes three allocations and frees in its timed function; direct tagged C excludes context create/free.",
+    "JS result-bit validation is inside the timer; native C result-bit formatting is outside. The constant-result probe estimates this overhead, not subtraction from reported results.",
+    "JS has five designated warmup calls plus an untimed expected-result call and pilot; native C has five warmup calls.",
+    "The source is the exact existing C-corpus benchmark+adapter, not its upstream scoring harness. Numeric value/layout restrictions are narrower than generic JS semantics."
+  ]
+}

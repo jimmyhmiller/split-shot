@@ -1,0 +1,58 @@
+{
+  "timestamp": "2026-11-09T16:25:11.899Z",
+  "node": "v26.5.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M2 Max",
+  "input": 10000,
+  "inputs": [
+    0,
+    1,
+    2,
+    10,
+    100,
+    1000,
+    2500,
+    10000
+  ],
+  "samples": 7,
+  "warmup": 5,
+  "timing": "Separate 120-second-bounded Node process per mode; ordinary Node globals, no vm proxy costs; 5 warmups; 7 samples; adaptive batch targeting 30 ms, capped at 100 calls. Compilation excluded. Output checked every call. Correctness separately uses vm with 20-second timeouts.",
+  "modes": {
+    "native": {
+      "bytes": 4520,
+      "sha256": "87f818c40daf3438635151214159b6a6939ab6fd017b7dcaf88fb0d51df748f1",
+      "interpreterHelperOccurrences": 0,
+      "dispatchTagOccurrences": 0,
+      "mathSqrtOccurrences": 2,
+      "timing": {
+        "batch": 4,
+        "warmup": 5,
+        "samples": 7,
+        "msPerCall": [
+          10.993302,
+          10.675812500000003,
+          10.575010499999998,
+          10.708396,
+          9.795552250000007,
+          9.532948000000005,
+          9.38504175
+        ],
+        "medianMs": 10.575010499999998,
+        "minMs": 9.38504175,
+        "maxMs": 10.993302
+      }
+    }
+  },
+  "status": "native-only",
+  "expected": [
+    -0.16907516382852447,
+    -0.16907495402506745,
+    -0.16907474322097799,
+    -0.16907302171469984,
+    -0.1690507623824094,
+    -0.169087605234606,
+    -0.16904494640912998,
+    -0.16901644126443094
+  ]
+}

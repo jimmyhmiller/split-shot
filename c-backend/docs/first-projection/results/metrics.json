@@ -1,0 +1,136 @@
+{
+  "baseCommit": "69af4d25b",
+  "interpreterBytes": 8336,
+  "generatedPrograms": 40,
+  "differentialComparisons": 780,
+  "rejectedSources": 12,
+  "results": [
+    {
+      "name": "affine",
+      "inputs": 7,
+      "sourceBytes": 78,
+      "astBytes": 356,
+      "residualBytes": 41,
+      "directPEBytes": 41,
+      "compileMs": 9.1,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 5
+    },
+    {
+      "name": "closure",
+      "inputs": 7,
+      "sourceBytes": 181,
+      "astBytes": 610,
+      "residualBytes": 101,
+      "directPEBytes": 53,
+      "compileMs": 11,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 26
+    },
+    {
+      "name": "short-circuit",
+      "inputs": 10,
+      "sourceBytes": 133,
+      "astBytes": 561,
+      "residualBytes": 189,
+      "directPEBytes": 187,
+      "compileMs": 19,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 30
+    },
+    {
+      "name": "recursion",
+      "inputs": 4,
+      "sourceBytes": 135,
+      "astBytes": 591,
+      "residualBytes": 39,
+      "directPEBytes": 39,
+      "compileMs": 13.3,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 3
+    },
+    {
+      "name": "sum",
+      "inputs": 8,
+      "sourceBytes": 114,
+      "astBytes": 433,
+      "residualBytes": 405,
+      "directPEBytes": 109,
+      "compileMs": 10.7,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 84
+    },
+    {
+      "name": "arrays",
+      "inputs": 6,
+      "sourceBytes": 153,
+      "astBytes": 847,
+      "residualBytes": 162,
+      "directPEBytes": 60,
+      "compileMs": 17.1,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 55
+    },
+    {
+      "name": "control",
+      "inputs": 9,
+      "sourceBytes": 194,
+      "astBytes": 912,
+      "residualBytes": 386,
+      "directPEBytes": 740,
+      "compileMs": 119.4,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 41
+    },
+    {
+      "name": "hoisting",
+      "inputs": 4,
+      "sourceBytes": 153,
+      "astBytes": 516,
+      "residualBytes": 60,
+      "directPEBytes": 60,
+      "compileMs": 9.9,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 10
+    },
+    {
+      "name": "evaluation-order",
+      "inputs": 4,
+      "sourceBytes": 126,
+      "astBytes": 720,
+      "residualBytes": 124,
+      "directPEBytes": 62,
+      "compileMs": 9.9,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 20
+    },
+    {
+      "name": "numeric-edges",
+      "inputs": 11,
+      "sourceBytes": 91,
+      "astBytes": 486,
+      "residualBytes": 75,
+      "directPEBytes": 75,
+      "compileMs": 8.1,
+      "functions": 1,
+      "calls": 0,
+      "expression_nodes": 15
+    }
+  ],
+  "limitations": [
+    {
+      "name": "dynamic-recursion",
+      "status": "LIMIT",
+      "reason": "specialization budget exceeded"
+    }
+  ]
+}

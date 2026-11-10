@@ -1,0 +1,1236 @@
+{
+  "run_started_utc": "2026-11-09T19:05:11Z",
+  "baseline_commit": "fa283978ae28b979f17039fd049090dae0d8f0a1",
+  "versions": {
+    "clang": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+    "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64"
+  },
+  "driver_sha256": "690f3be9f290b738cb3a6a4988dff37140c1831f81f6fe29158d05369bae1d89",
+  "source_sha256": "425e98ee8f87ff832212581b1ae9ea1d1647d02710f67a919a913e0cb94543f6",
+  "methodology": {
+    "all_variants_compiled_before_any_timing": true,
+    "same_driver_for_all_variants": true,
+    "flags": [
+      "-std=c11",
+      "-O2",
+      "-ffp-contract=off"
+    ],
+    "rounds": 3,
+    "samples_per_process": 7,
+    "warmup_calls_per_process": 5,
+    "one_expected_result_call_and_one_batch_pilot_outside_timing": true,
+    "stage_order": "cyclic rotation between paired rounds",
+    "timed_region": "fresh context allocation, guest entry, returned queue/hold consumption and validation, all context destruction",
+    "excluded": "process startup, source parsing/projection and native compilation",
+    "algorithm_edits": false,
+    "inputs": "COUNT passed as runtime argv, not a compile-time macro or generated constant",
+    "ratio_of_medians": "median process time for earlier stage divided by median process time for later stage",
+    "paired_round_ratio": "earlier-stage process median divided by later-stage process median in the same round",
+    "same_window_only": "Do not substitute earlier standalone timings for any stage in this report."
+  },
+  "stages": {
+    "generic_baseline": {
+      "sha256": "1efc6705ae992a702f58136282197e020ba190fe12ce21f8dce01678edb9a344",
+      "bytes": 880189,
+      "source": "git show fa283978ae28b979f17039fd049090dae0d8f0a1:claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.generated.c",
+      "commit": "fa283978ae28b979f17039fd049090dae0d8f0a1",
+      "compiler_stderr": "",
+      "compiled": true
+    },
+    "frame_promotion": {
+      "sha256": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+      "bytes": 700594,
+      "source": "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/frame-promotion.generated.c",
+      "snapshot_matches_saved_commit": false,
+      "compiler_stderr": "",
+      "compiled": true,
+      "source_implementation_commit": "4e85986fa991412e9b919e4940a68eddf6e75d6c",
+      "snapshot_commit_check": "artifact absent from implementation commit",
+      "saved_artifact_audit": {
+        "report": "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/frame-promotion-audit.json",
+        "report_sha256": "4c6cd84169b38f4292e81275b370aadee31840caa09d740592f060fc9110dd1c",
+        "audited_source_sha256": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+        "source_matches_audit": true
+      },
+      "verified_artifact_storage_commit": "bd1dec2ea2a963c4349c851dae1a61d8bf677f2b"
+    },
+    "known_callee": {
+      "sha256": "bc6f51ef8739f46241fde69d7fa98e95c14f2a9946f59378381a36defaf6dac1",
+      "bytes": 773580,
+      "source": "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.generated.c",
+      "worktree_commit": "bd1dec2ea2a963c4349c851dae1a61d8bf677f2b",
+      "compiler_stderr": "",
+      "compiled": true
+    }
+  },
+  "correctness": {
+    "generic_baseline": [
+      {
+        "input": 1,
+        "value": [
+          8,
+          3
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 2,
+        "value": [
+          12,
+          4
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 10,
+        "value": [
+          31,
+          12
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 100,
+        "value": [
+          239,
+          95
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 1000,
+        "value": [
+          2322,
+          928
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 2500,
+        "value": [
+          5726,
+          2289
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 10000,
+        "value": [
+          23246,
+          9297
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 37,
+        "value": [
+          91,
+          36
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 999,
+        "value": [
+          2320,
+          927
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 4093,
+        "value": [
+          9400,
+          3759
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 12345,
+        "value": [
+          28689,
+          11475
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      }
+    ],
+    "frame_promotion": [
+      {
+        "input": 1,
+        "value": [
+          8,
+          3
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 2,
+        "value": [
+          12,
+          4
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 10,
+        "value": [
+          31,
+          12
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 100,
+        "value": [
+          239,
+          95
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 1000,
+        "value": [
+          2322,
+          928
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 2500,
+        "value": [
+          5726,
+          2289
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 10000,
+        "value": [
+          23246,
+          9297
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 37,
+        "value": [
+          91,
+          36
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 999,
+        "value": [
+          2320,
+          927
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 4093,
+        "value": [
+          9400,
+          3759
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 12345,
+        "value": [
+          28689,
+          11475
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      }
+    ],
+    "known_callee": [
+      {
+        "input": 1,
+        "value": [
+          8,
+          3
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 2,
+        "value": [
+          12,
+          4
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 10,
+        "value": [
+          31,
+          12
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 100,
+        "value": [
+          239,
+          95
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 1000,
+        "value": [
+          2322,
+          928
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 2500,
+        "value": [
+          5726,
+          2289
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 10000,
+        "value": [
+          23246,
+          9297
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 37,
+        "value": [
+          91,
+          36
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 999,
+        "value": [
+          2320,
+          927
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 4093,
+        "value": [
+          9400,
+          3759
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      },
+      {
+        "input": 12345,
+        "value": [
+          28689,
+          11475
+        ],
+        "allocation_blocks_per_invocation": 377,
+        "object_allocations_per_invocation": 120
+      }
+    ]
+  },
+  "invalid_inputs": {
+    "generic_baseline": [
+      {
+        "input": 0,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": -1,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1.5,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "NaN",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "-Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1000001,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      }
+    ],
+    "frame_promotion": [
+      {
+        "input": 0,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": -1,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1.5,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "NaN",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "-Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1000001,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      }
+    ],
+    "known_callee": [
+      {
+        "input": 0,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": -1,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1.5,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "NaN",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": "-Infinity",
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      },
+      {
+        "input": 1000001,
+        "exit_code": 3,
+        "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+      }
+    ]
+  },
+  "timings": {
+    "1000": {
+      "generic_baseline": {
+        "rounds": [
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 16,
+            "samples_seconds": [
+              0.00201668748923,
+              0.00201887500589,
+              0.00198231248942,
+              0.00199656251061,
+              0.00199581249035,
+              0.00200700000278,
+              0.00202637500479
+            ],
+            "consumed_checksum": 273996931492,
+            "median_seconds": 0.00200700000278,
+            "round_index": 0
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 15,
+            "samples_seconds": [
+              0.00201813333357,
+              0.00200306666084,
+              0.00201086667366,
+              0.00200966666453,
+              0.00202660000262,
+              0.00199400000274,
+              0.00199886667542
+            ],
+            "consumed_checksum": 257742876234,
+            "median_seconds": 0.00200966666453,
+            "round_index": 1
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 15,
+            "samples_seconds": [
+              0.00199533334623,
+              0.00201593333234,
+              0.00199846667238,
+              0.00202413333269,
+              0.00199046665803,
+              0.00200440000432,
+              0.0019927999936
+            ],
+            "consumed_checksum": 257742876234,
+            "median_seconds": 0.00199846667238,
+            "round_index": 2
+          }
+        ],
+        "median_seconds": 0.00200700000278
+      },
+      "frame_promotion": {
+        "rounds": [
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 23,
+            "samples_seconds": [
+              0.00128200000314,
+              0.00127926087209,
+              0.00128104347412,
+              0.00127313043112,
+              0.00129530435104,
+              0.00128043478395,
+              0.00129039130052
+            ],
+            "consumed_checksum": 387775318298,
+            "median_seconds": 0.00128104347412,
+            "round_index": 0
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 23,
+            "samples_seconds": [
+              0.0012826521719,
+              0.00127778261009,
+              0.00128573913168,
+              0.00127804348164,
+              0.00128973913177,
+              0.00128769565819,
+              0.00127839130026
+            ],
+            "consumed_checksum": 387775318298,
+            "median_seconds": 0.0012826521719,
+            "round_index": 1
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 23,
+            "samples_seconds": [
+              0.00130952173925,
+              0.00128660869339,
+              0.00129213043408,
+              0.00127165216912,
+              0.00129317392028,
+              0.00130213043936,
+              0.00129365217467
+            ],
+            "consumed_checksum": 387775318298,
+            "median_seconds": 0.00129317392028,
+            "round_index": 2
+          }
+        ],
+        "median_seconds": 0.0012826521719
+      },
+      "known_callee": {
+        "rounds": [
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 28,
+            "samples_seconds": [
+              0.00114903571583,
+              0.00113239285669,
+              0.00113078571823,
+              0.00115242857386,
+              0.00116085714295,
+              0.00114042857396,
+              0.00113585714384
+            ],
+            "consumed_checksum": 469045594588,
+            "median_seconds": 0.00114042857396,
+            "round_index": 0
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 26,
+            "samples_seconds": [
+              0.00114961538929,
+              0.00115338461294,
+              0.00114815384866,
+              0.00115973076138,
+              0.00115330769824,
+              0.00114061538345,
+              0.00115703846006
+            ],
+            "consumed_checksum": 436537484072,
+            "median_seconds": 0.00115330769824,
+            "round_index": 1
+          },
+          {
+            "input": 1000,
+            "value": [
+              2322,
+              928
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 27,
+            "samples_seconds": [
+              0.00114688888641,
+              0.00114125925703,
+              0.00114785184808,
+              0.00114888889301,
+              0.00115374073869,
+              0.00114196296609,
+              0.00115518518551
+            ],
+            "consumed_checksum": 452791539330,
+            "median_seconds": 0.00114785184808,
+            "round_index": 2
+          }
+        ],
+        "median_seconds": 0.00114785184808
+      }
+    },
+    "10000": {
+      "generic_baseline": {
+        "rounds": [
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 2,
+            "samples_seconds": [
+              0.0195204999764,
+              0.0193979999749,
+              0.0197009999538,
+              0.0200485000387,
+              0.019999000011,
+              0.0196634999011,
+              0.0198110000929
+            ],
+            "consumed_checksum": 464921580700,
+            "median_seconds": 0.0197009999538,
+            "round_index": 0
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 2,
+            "samples_seconds": [
+              0.0197359999875,
+              0.0196355000371,
+              0.0196609999985,
+              0.0195494999643,
+              0.0195140000433,
+              0.019642499974,
+              0.0196889999788
+            ],
+            "consumed_checksum": 464921580700,
+            "median_seconds": 0.019642499974,
+            "round_index": 1
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 2,
+            "samples_seconds": [
+              0.0195734999143,
+              0.019551500096,
+              0.0200090000872,
+              0.0196010000072,
+              0.0197455000598,
+              0.0201334999874,
+              0.0201050000032
+            ],
+            "consumed_checksum": 464921580700,
+            "median_seconds": 0.0197455000598,
+            "round_index": 2
+          }
+        ],
+        "median_seconds": 0.0197009999538
+      },
+      "frame_promotion": {
+        "rounds": [
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 3,
+            "samples_seconds": [
+              0.0126689999985,
+              0.0127423332694,
+              0.0126269999892,
+              0.0127010000094,
+              0.012523999981,
+              0.0127756667013,
+              0.0127349999578
+            ],
+            "consumed_checksum": 627644133945,
+            "median_seconds": 0.0127010000094,
+            "round_index": 0
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 3,
+            "samples_seconds": [
+              0.0127909999962,
+              0.0126840000351,
+              0.0128096666497,
+              0.0126096666791,
+              0.0126216666152,
+              0.0126996666659,
+              0.0126850000427
+            ],
+            "consumed_checksum": 627644133945,
+            "median_seconds": 0.0126850000427,
+            "round_index": 1
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 3,
+            "samples_seconds": [
+              0.012799333393,
+              0.0127696667332,
+              0.0127936666055,
+              0.0156636666507,
+              0.0128103333991,
+              0.0128553333537,
+              0.0128143333519
+            ],
+            "consumed_checksum": 627644133945,
+            "median_seconds": 0.0128103333991,
+            "round_index": 2
+          }
+        ],
+        "median_seconds": 0.0127010000094
+      },
+      "known_callee": {
+        "rounds": [
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 3,
+            "samples_seconds": [
+              0.0113303333831,
+              0.0112740000089,
+              0.0113700000414,
+              0.0113109999802,
+              0.0114676666756,
+              0.0112753333524,
+              0.0113126666596
+            ],
+            "consumed_checksum": 627644133945,
+            "median_seconds": 0.0113126666596,
+            "round_index": 0
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 3,
+            "samples_seconds": [
+              0.0112983332947,
+              0.0112030000115,
+              0.0112013333322,
+              0.0112576666288,
+              0.0112033333474,
+              0.0113396666323,
+              0.0112693333843
+            ],
+            "consumed_checksum": 627644133945,
+            "median_seconds": 0.0112576666288,
+            "round_index": 1
+          },
+          {
+            "input": 10000,
+            "value": [
+              23246,
+              9297
+            ],
+            "allocation_blocks_per_invocation": 377,
+            "object_allocations_per_invocation": 120,
+            "warmup_calls": 5,
+            "pilot_calls": 1,
+            "batch": 3,
+            "samples_seconds": [
+              0.0112259999538,
+              0.0112626666669,
+              0.0112363333659,
+              0.0112239999386,
+              0.0112580000423,
+              0.0111996666528,
+              0.0112179999705
+            ],
+            "consumed_checksum": 627644133945,
+            "median_seconds": 0.0112259999538,
+            "round_index": 2
+          }
+        ],
+        "median_seconds": 0.0112576666288
+      }
+    }
+  },
+  "round_order": {
+    "1000": [
+      [
+        "generic_baseline",
+        "frame_promotion",
+        "known_callee"
+      ],
+      [
+        "frame_promotion",
+        "known_callee",
+        "generic_baseline"
+      ],
+      [
+        "known_callee",
+        "generic_baseline",
+        "frame_promotion"
+      ]
+    ],
+    "10000": [
+      [
+        "generic_baseline",
+        "frame_promotion",
+        "known_callee"
+      ],
+      [
+        "frame_promotion",
+        "known_callee",
+        "generic_baseline"
+      ],
+      [
+        "known_callee",
+        "generic_baseline",
+        "frame_promotion"
+      ]
+    ]
+  },
+  "comparisons": {
+    "1000": {
+      "generic_baseline_over_frame_promotion": {
+        "ratio_of_medians": 1.564726624059755,
+        "paired_round_ratios": [
+          1.5666915630312146,
+          1.5668056457995694,
+          1.5453966717387009
+        ],
+        "median_paired_round_ratio": 1.5666915630312146
+      },
+      "frame_promotion_over_known_callee": {
+        "ratio_of_medians": 1.1174370403684755,
+        "paired_round_ratios": [
+          1.1233000499730832,
+          1.1121508803395534,
+          1.1266035093667173
+        ],
+        "median_paired_round_ratio": 1.1233000499730832
+      },
+      "generic_baseline_over_known_callee": {
+        "ratio_of_medians": 1.748483487775089,
+        "paired_round_ratios": [
+          1.7598647110453711,
+          1.7425242782969736,
+          1.7410493137444654
+        ],
+        "median_paired_round_ratio": 1.7425242782969736
+      }
+    },
+    "10000": {
+      "generic_baseline_over_frame_promotion": {
+        "ratio_of_medians": 1.5511377009069605,
+        "paired_round_ratios": [
+          1.5511377009069605,
+          1.5484824523358138,
+          1.5413728467978232
+        ],
+        "median_paired_round_ratio": 1.5484824523358138
+      },
+      "frame_promotion_over_known_callee": {
+        "ratio_of_medians": 1.128208928918501,
+        "paired_round_ratios": [
+          1.1227237919736504,
+          1.126787678207535,
+          1.1411307190290612
+        ],
+        "median_paired_round_ratio": 1.126787678207535
+      },
+      "generic_baseline_over_known_callee": {
+        "ratio_of_medians": 1.7500074041453482,
+        "paired_round_ratios": [
+          1.7414992014355526,
+          1.744810947212582,
+          1.7589079049582708
+        ],
+        "median_paired_round_ratio": 1.744810947212582
+      }
+    }
+  },
+  "oracles": [
+    {
+      "input": 1,
+      "value": [
+        8,
+        3
+      ]
+    },
+    {
+      "input": 2,
+      "value": [
+        12,
+        4
+      ]
+    },
+    {
+      "input": 10,
+      "value": [
+        31,
+        12
+      ]
+    },
+    {
+      "input": 100,
+      "value": [
+        239,
+        95
+      ]
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ]
+    },
+    {
+      "input": 2500,
+      "value": [
+        5726,
+        2289
+      ]
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ]
+    },
+    {
+      "input": 37,
+      "value": [
+        91,
+        36
+      ]
+    },
+    {
+      "input": 999,
+      "value": [
+        2320,
+        927
+      ]
+    },
+    {
+      "input": 4093,
+      "value": [
+        9400,
+        3759
+      ]
+    },
+    {
+      "input": 12345,
+      "value": [
+        28689,
+        11475
+      ]
+    }
+  ],
+  "timing_window_started_utc": "2026-11-09T19:05:14Z",
+  "timing_window_finished_utc": "2026-11-09T19:05:19Z",
+  "all_stage_oracles_equal": true,
+  "status": "passed",
+  "commands": [
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new rev-parse --show-prefix",
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new rev-parse fa283978ae28b979f17039fd049090dae0d8f0a1",
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new show fa283978ae28b979f17039fd049090dae0d8f0a1:claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.generated.c",
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new rev-parse 4e85986fa",
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new show 4e85986fa991412e9b919e4940a68eddf6e75d6c:claude-experiments/partial-new/docs/object-projection/benchmarks/richards/frame-promotion.generated.c",
+    "clang --version",
+    "git -C /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new rev-parse HEAD",
+    "node /Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/oracles.js '[1, 2, 10, 100, 1000, 2500, 10000, 37, 999, 4093, 12345]'",
+    "clang -std=c11 -O2 -ffp-contract=off /tmp/richards-stage-comparison-t47qu2vl/generic_baseline.tu.c -lm -o /tmp/richards-stage-comparison-t47qu2vl/generic_baseline",
+    "clang -std=c11 -O2 -ffp-contract=off /tmp/richards-stage-comparison-t47qu2vl/frame_promotion.tu.c -lm -o /tmp/richards-stage-comparison-t47qu2vl/frame_promotion",
+    "clang -std=c11 -O2 -ffp-contract=off /tmp/richards-stage-comparison-t47qu2vl/known_callee.tu.c -lm -o /tmp/richards-stage-comparison-t47qu2vl/known_callee",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 2 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 10 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 100 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1000 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 2500 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 10000 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 37 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 999 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 4093 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 12345 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 0 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline -1 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1.5 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline NaN 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline Infinity 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline -Infinity 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1000001 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 2 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 10 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 100 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1000 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 2500 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 10000 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 37 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 999 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 4093 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 12345 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 0 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion -1 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1.5 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion NaN 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion Infinity 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion -Infinity 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1000001 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 2 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 10 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 100 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1000 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 2500 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 10000 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 37 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 999 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 4093 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 12345 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 0 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee -1 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1.5 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee NaN 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee Infinity 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee -Infinity 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1000001 0 0",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 1000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/known_callee 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/generic_baseline 10000 7 5",
+    "/tmp/richards-stage-comparison-t47qu2vl/frame_promotion 10000 7 5"
+  ],
+  "input_hashes_before": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/object-timed-driver.c": "690f3be9f290b738cb3a6a4988dff37140c1831f81f6fe29158d05369bae1d89",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/frame-promotion.generated.c": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.generated.c": "bc6f51ef8739f46241fde69d7fa98e95c14f2a9946f59378381a36defaf6dac1",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js": "425e98ee8f87ff832212581b1ae9ea1d1647d02710f67a919a913e0cb94543f6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/upstream-richards.js": "a2dfa477f4c36514e1d2e7200d05e4179a9dc97eef81d6ca42aa43c308f3ef06",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/oracles.js": "b097b62d9fe14b5758b99f37147904b8d115f1e8bed447d915b1fff82166734f"
+  },
+  "input_hashes_after": {
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/object-timed-driver.c": "690f3be9f290b738cb3a6a4988dff37140c1831f81f6fe29158d05369bae1d89",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/frame-promotion.generated.c": "77406298c6fc6367c85265776f9d22b951a6827ae133480094286f54355aeab7",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.generated.c": "bc6f51ef8739f46241fde69d7fa98e95c14f2a9946f59378381a36defaf6dac1",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/runtime-count.input.js": "425e98ee8f87ff832212581b1ae9ea1d1647d02710f67a919a913e0cb94543f6",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/upstream-richards.js": "a2dfa477f4c36514e1d2e7200d05e4179a9dc97eef81d6ca42aa43c308f3ef06",
+    "/Users/jimmyhmiller/Documents/Code/PlayGround-worktrees/js-interpreter-projection/claude-experiments/partial-new/docs/object-projection/benchmarks/richards/oracles.js": "b097b62d9fe14b5758b99f37147904b8d115f1e8bed447d915b1fff82166734f"
+  },
+  "inputs_unchanged_during_run": true,
+  "executed_comparison_script_sha256": "12997052014fed1c8bc64f43a611589ee9136a2f44a9e81a664bbf0a7d92e460",
+  "report_metadata_updated_after_run": "Added the verified saved-artifact audit and clarified that the generated flat snapshot is absent from its implementation commit. Raw samples, measured source hashes, commands and timing outcomes are unchanged. Verified the unchanged flat C artifact is stored in the later bd1dec2ea2a963c4349c851dae1a61d8bf677f2b commit."
+}

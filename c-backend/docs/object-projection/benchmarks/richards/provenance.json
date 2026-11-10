@@ -1,0 +1,46 @@
+{
+  "source": {
+    "repository": "https://github.com/facebook/hermes",
+    "commit": "51ae2a08ce8cb06fcfa718cddab9c94ea9eee7f6",
+    "paths": [
+      "benchmarks/octane/richards.js",
+      "benchmarks/octane/splay.js",
+      "benchmarks/octane/raytrace.js",
+      "benchmarks/nbody/original/nbody.js",
+      "benchmarks/nbody/LICENSE.md"
+    ]
+  },
+  "richards_path": "benchmarks/octane/richards.js",
+  "source_url": "https://github.com/facebook/hermes/blob/51ae2a08ce8cb06fcfa718cddab9c94ea9eee7f6/benchmarks/octane/richards.js",
+  "preparation": "tools/c-target.py prepare(manifest case hermes-richards)",
+  "backend_path": "/Users/jimmyhmiller/Documents/Code/PlayGround/claude-experiments/partial-new/.worktrees/residual-language/claude-experiments/partial-new",
+  "backend_commit": "4ae8f8ca4f8341b5cb8426f5239f8867c1e2d936",
+  "sha256": {
+    "upstream-richards.js": "a2dfa477f4c36514e1d2e7200d05e4179a9dc97eef81d6ca42aa43c308f3ef06",
+    "input.js": "d73e5fec06f7ab85d9b5b2c1f450f721a17cd4b46ddf91166888b7d7761531f0",
+    "runtime-count.input.js": "425e98ee8f87ff832212581b1ae9ea1d1647d02710f67a919a913e0cb94543f6",
+    "original_adapter": "0d1c1ce9d2ad55a54b02f78a2a50e5b50d64dd0cae583c4bdc9e5ef9029fe08d",
+    "original_preparation_tool": "35f8ece6a7705df589c23ef709885550eb3791dc6e6382ee437d4c821b4a6cdf",
+    "original_manifest": "adca96b015fc1fa6c808cfce8bfce281c0054f484ccb2f673ffd60607d29fe6d"
+  },
+  "exact_adapter": {
+    "meaning": "repeat unchanged runRichards with COUNT=1000 input times, checking the original oracle each time",
+    "inputs": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "expected": true
+  },
+  "runtime_count_adapter": {
+    "meaning": "set COUNT from runtime input, execute unchanged scheduler once, return [queueCount,holdCount]",
+    "domain": "integer 1..1000000 inclusive; all other values rejected",
+    "edits": [
+      "guard standard oracle with COUNT === 1000",
+      "return queueCount and holdCount from runRichards",
+      "replace outer repeat driver with validated runtime COUNT driver"
+    ],
+    "original_algorithm_preserved_by_reverse_edit_check": true
+  }
+}

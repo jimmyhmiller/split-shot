@@ -1,0 +1,651 @@
+{
+  "date_utc": "2026-11-09T19:14:31.583236+00:00",
+  "source_sha256": {
+    "baseline": "310ed905bc2f63437bb78fc66b317a279ebd0a506a2e2200e49701057bac09f0",
+    "get-inline": "f870794510f8575605eadbc4c5cff6bbbf53990bfce0f4012287ba37ccb7eb81"
+  },
+  "flags": [
+    "-std=c11",
+    "-O2",
+    "-ffp-contract=off",
+    "-lm"
+  ],
+  "correctness": [
+    {
+      "input": "1",
+      "exit_code": 0,
+      "stdout": "{\"input\":1,\"value\":[8,3],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "2",
+      "exit_code": 0,
+      "stdout": "{\"input\":2,\"value\":[12,4],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "10",
+      "exit_code": 0,
+      "stdout": "{\"input\":10,\"value\":[31,12],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "37",
+      "exit_code": 0,
+      "stdout": "{\"input\":37,\"value\":[91,36],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "100",
+      "exit_code": 0,
+      "stdout": "{\"input\":100,\"value\":[239,95],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "999",
+      "exit_code": 0,
+      "stdout": "{\"input\":999,\"value\":[2320,927],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "1000",
+      "exit_code": 0,
+      "stdout": "{\"input\":1000,\"value\":[2322,928],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "2500",
+      "exit_code": 0,
+      "stdout": "{\"input\":2500,\"value\":[5726,2289],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "4093",
+      "exit_code": 0,
+      "stdout": "{\"input\":4093,\"value\":[9400,3759],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "10000",
+      "exit_code": 0,
+      "stdout": "{\"input\":10000,\"value\":[23246,9297],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "12345",
+      "exit_code": 0,
+      "stdout": "{\"input\":12345,\"value\":[28689,11475],\"allocation_blocks_per_invocation\":377,\"object_allocations_per_invocation\":120}\n",
+      "stderr": ""
+    },
+    {
+      "input": "0",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    },
+    {
+      "input": "-1",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    },
+    {
+      "input": "1.5",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    },
+    {
+      "input": "NaN",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    },
+    {
+      "input": "Infinity",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    },
+    {
+      "input": "-Infinity",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    },
+    {
+      "input": "1000001",
+      "exit_code": 3,
+      "stdout": "",
+      "stderr": "guest exception: [\"string\",\"COUNT must be an integer from 1 to 1000000\"]\n"
+    }
+  ],
+  "rounds": [
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 26,
+      "samples_seconds": [
+        0.00112526923812,
+        0.00112599999501,
+        0.00113769231113,
+        0.00113011538409,
+        0.00111946154637,
+        0.00112742307381,
+        0.00114019230331
+      ],
+      "consumed_checksum": 436537484072,
+      "round": 0,
+      "name": "baseline",
+      "median_seconds": 0.00112742307381
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 40,
+      "samples_seconds": [
+        0.000773474999005,
+        0.000771299999906,
+        0.00076487500337,
+        0.000774299999466,
+        0.000781374995131,
+        0.000771575002,
+        0.000771325000096
+      ],
+      "consumed_checksum": 664094257684,
+      "round": 0,
+      "name": "get-inline",
+      "median_seconds": 0.000771575002
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 43,
+      "samples_seconds": [
+        0.000745116278183,
+        0.000765511630709,
+        0.000750744184696,
+        0.000763488370319,
+        0.0007563953472,
+        0.000750162790335,
+        0.000750093027776
+      ],
+      "consumed_checksum": 712856423458,
+      "round": 1,
+      "name": "get-inline",
+      "median_seconds": 0.000750744184696
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 27,
+      "samples_seconds": [
+        0.00110774074198,
+        0.00111837036632,
+        0.00112203704366,
+        0.00111540740666,
+        0.00112437036889,
+        0.00111888888878,
+        0.0011084074051
+      ],
+      "consumed_checksum": 452791539330,
+      "round": 1,
+      "name": "baseline",
+      "median_seconds": 0.00111837036632
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 29,
+      "samples_seconds": [
+        0.00114103447614,
+        0.00114351724563,
+        0.00109824137602,
+        0.00110324138197,
+        0.00112348275484,
+        0.00112824137965,
+        0.00114396551688
+      ],
+      "consumed_checksum": 485299649846,
+      "round": 2,
+      "name": "baseline",
+      "median_seconds": 0.00112824137965
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 41,
+      "samples_seconds": [
+        0.000744658533665,
+        0.000754975611571,
+        0.000767951217912,
+        0.000757536583966,
+        0.000773902442988,
+        0.000752731709082,
+        0.000749682928095
+      ],
+      "consumed_checksum": 680348312942,
+      "round": 2,
+      "name": "get-inline",
+      "median_seconds": 0.000754975611571
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 37,
+      "samples_seconds": [
+        0.00100035135433,
+        0.0010341621583,
+        0.0010172432427,
+        0.0010260810849,
+        0.00103275675478,
+        0.00103643243327,
+        0.0010236216193
+      ],
+      "consumed_checksum": 615332091910,
+      "round": 3,
+      "name": "get-inline",
+      "median_seconds": 0.0010260810849
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 29,
+      "samples_seconds": [
+        0.00112293103453,
+        0.00113831034155,
+        0.00114241379699,
+        0.00111137931075,
+        0.00113031034486,
+        0.00111972413764,
+        0.00111651724076
+      ],
+      "consumed_checksum": 485299649846,
+      "round": 3,
+      "name": "baseline",
+      "median_seconds": 0.00112293103453
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 28,
+      "samples_seconds": [
+        0.00110528571531,
+        0.00110357142486,
+        0.00111257142687,
+        0.00110300000025,
+        0.00109814286199,
+        0.00111224999585,
+        0.00110200000095
+      ],
+      "consumed_checksum": 469045594588,
+      "round": 4,
+      "name": "baseline",
+      "median_seconds": 0.00110357142486
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 41,
+      "samples_seconds": [
+        0.000763512193793,
+        0.000758121954277,
+        0.000762560972717,
+        0.000770463415126,
+        0.000775000000963,
+        0.000766341460914,
+        0.000772487803748
+      ],
+      "consumed_checksum": 680348312942,
+      "round": 4,
+      "name": "get-inline",
+      "median_seconds": 0.000766341460914
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 3,
+      "samples_seconds": [
+        0.0111389999899,
+        0.0110186666716,
+        0.011181666671,
+        0.0109219999673,
+        0.0108760000051,
+        0.0109819999586,
+        0.0112793333828
+      ],
+      "consumed_checksum": 627644133945,
+      "round": 0,
+      "name": "baseline",
+      "median_seconds": 0.0110186666716
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 4,
+      "samples_seconds": [
+        0.00744675000897,
+        0.00743125000736,
+        0.00737775000744,
+        0.00739524996607,
+        0.00735600001644,
+        0.00727474997984,
+        0.00729550002143
+      ],
+      "consumed_checksum": 790366687190,
+      "round": 0,
+      "name": "get-inline",
+      "median_seconds": 0.00737775000744
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 4,
+      "samples_seconds": [
+        0.00824425002793,
+        0.00906074995873,
+        0.0090574999922,
+        0.00902900000801,
+        0.00914849998662,
+        0.00900725001702,
+        0.00912249996327
+      ],
+      "consumed_checksum": 790366687190,
+      "round": 1,
+      "name": "get-inline",
+      "median_seconds": 0.0090574999922
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 3,
+      "samples_seconds": [
+        0.0109756666546,
+        0.0109880000042,
+        0.0110976666523,
+        0.011141333341,
+        0.0111310000066,
+        0.011245666615,
+        0.011299000044
+      ],
+      "consumed_checksum": 627644133945,
+      "round": 1,
+      "name": "baseline",
+      "median_seconds": 0.0111310000066
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 3,
+      "samples_seconds": [
+        0.01127733329,
+        0.0110683333284,
+        0.0110120000318,
+        0.0109866666608,
+        0.0109826666303,
+        0.010985999989,
+        0.010957000001
+      ],
+      "consumed_checksum": 627644133945,
+      "round": 2,
+      "name": "baseline",
+      "median_seconds": 0.0109866666608
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 5,
+      "samples_seconds": [
+        0.00748099996708,
+        0.00742480000481,
+        0.00745100001805,
+        0.00750639997423,
+        0.00746560003608,
+        0.0074474000372,
+        0.00747339995578
+      ],
+      "consumed_checksum": 953089240435,
+      "round": 2,
+      "name": "get-inline",
+      "median_seconds": 0.00746560003608
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 5,
+      "samples_seconds": [
+        0.00745139997452,
+        0.00747839999385,
+        0.00744040003046,
+        0.00742139997892,
+        0.00738760000095,
+        0.00747679998167,
+        0.00747620002367
+      ],
+      "consumed_checksum": 953089240435,
+      "round": 3,
+      "name": "get-inline",
+      "median_seconds": 0.00745139997452
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 3,
+      "samples_seconds": [
+        0.010957000001,
+        0.0109703333583,
+        0.0109666666637,
+        0.0110189999299,
+        0.0109680000072,
+        0.0110520000259,
+        0.0110153333129
+      ],
+      "consumed_checksum": 627644133945,
+      "round": 3,
+      "name": "baseline",
+      "median_seconds": 0.0109703333583
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 3,
+      "samples_seconds": [
+        0.0110696666719,
+        0.010969333273,
+        0.0110413333556,
+        0.0110283333343,
+        0.0110256666473,
+        0.0110183333357,
+        0.0109686666789
+      ],
+      "consumed_checksum": 627644133945,
+      "round": 4,
+      "name": "baseline",
+      "median_seconds": 0.0110256666473
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "allocation_blocks_per_invocation": 377,
+      "object_allocations_per_invocation": 120,
+      "warmup_calls": 5,
+      "pilot_calls": 1,
+      "batch": 5,
+      "samples_seconds": [
+        0.00742659997195,
+        0.00748180001974,
+        0.00747259999625,
+        0.00753019996919,
+        0.00754619999789,
+        0.00749840000644,
+        0.0075780000072
+      ],
+      "consumed_checksum": 953089240435,
+      "round": 4,
+      "name": "get-inline",
+      "median_seconds": 0.00749840000644
+    }
+  ],
+  "summary": [
+    {
+      "input": 1000,
+      "baseline_median_seconds": 0.00112293103453,
+      "inline_get_median_seconds": 0.000766341460914,
+      "speedup": 1.4653142127932146,
+      "reduction": 0.317552514491907
+    },
+    {
+      "input": 10000,
+      "baseline_median_seconds": 0.0110186666716,
+      "inline_get_median_seconds": 0.00746560003608,
+      "speedup": 1.475925125689646,
+      "reduction": 0.32245885472493974
+    }
+  ],
+  "caveat": "Temporary-copy experiment, not official pipeline benchmark or committed implementation; only oc_get forced always_inline, with full generic semantics retained; all context creation/destruction and output checks included.",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "original_generated_source_sha256": "bc6f51ef8739f46241fde69d7fa98e95c14f2a9946f59378381a36defaf6dac1",
+  "driver_sha256": "690f3be9f290b738cb3a6a4988dff37140c1831f81f6fe29158d05369bae1d89",
+  "source_change": {
+    "before": "static oc_value oc_get(oc_ctx *c, oc_value v, double atom) {",
+    "after": "static __attribute__((always_inline)) inline oc_value oc_get(oc_ctx *c, oc_value v, double atom) {"
+  },
+  "interpretation": "Measures the combined effect of inlining the generic property getter, propagating static atoms and resulting local compiler optimization. Does not independently attribute percentage to atom validation, tags, presence checks, prototype walk or call overhead. Not a full pipeline or full semantic regression run.",
+  "measurement_script_sha256": "75334afb3c85f3c5abf9174bd503eec7a786fcfebe6bf2787ad19d244913879e"
+}

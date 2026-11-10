@@ -1,0 +1,167 @@
+{
+  "gitHead": "972f26599dc8bfcd88bf3e5b0b3be39aacc4cbba",
+  "binarySha256": "f6b6ceabfa43f66b2a4f8be9067e2d3bab2711a1626fa3eee404c297f268d721",
+  "node": "v26.5.0",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "flags": {
+    "SPEC_WEIGHT_BUDGET": "10000",
+    "PE_NO_SHARED_CONTEXTS": "1",
+    "PE_CONTEXT_POINTS": "1"
+  },
+  "rows": [
+    {
+      "name": "static-linear",
+      "ast": [
+        "binding",
+        [
+          "literal",
+          "beta"
+        ]
+      ],
+      "sourceSha256": "ce39cef295470d880039262c2a0ceb5b0658f3c6b6ca29225ba5b604399bf106",
+      "residualSha256": "3376507ef65655122bb349de5f1683641de95a1de646e809e69dead7b0ee40f2",
+      "sourceBytes": 424,
+      "residualBytes": 58,
+      "compileMs": 5.793458000000001,
+      "inputChecks": 12,
+      "comparisons": 24,
+      "lookupContainerRemains": false,
+      "interpreterHelperCalls": 0,
+      "astDispatchTags": 0
+    },
+    {
+      "name": "static-map",
+      "ast": [
+        "binding",
+        [
+          "literal",
+          "beta"
+        ]
+      ],
+      "sourceSha256": "d3b70a3ba40b9f7437691be374ea622ed6c828803b63b5c1c98ac5082818034b",
+      "residualSha256": "3eed2f4be3b96f0d8e3756712dcb9373a03183fe5883c0bd11cc52f3e2da0f0b",
+      "sourceBytes": 365,
+      "residualBytes": 40,
+      "compileMs": 4.408541000000003,
+      "inputChecks": 12,
+      "comparisons": 24,
+      "lookupContainerRemains": false,
+      "interpreterHelperCalls": 0,
+      "astDispatchTags": 0
+    },
+    {
+      "name": "dynamic-linear",
+      "ast": [
+        "binding",
+        [
+          "input",
+          "key"
+        ]
+      ],
+      "sourceSha256": "ef1d4957d14d04275caf8419434e0219a9ce718ec909088c48443d4c57727300",
+      "residualSha256": "1c83f903df38148e578216bf5f10814303fffc25055fd99779e9aaeb305d7b31",
+      "sourceBytes": 421,
+      "residualBytes": 189,
+      "compileMs": 4.741042,
+      "inputChecks": 12,
+      "comparisons": 24,
+      "lookupContainerRemains": false,
+      "interpreterHelperCalls": 0,
+      "astDispatchTags": 0
+    },
+    {
+      "name": "dynamic-map",
+      "ast": [
+        "binding",
+        [
+          "input",
+          "key"
+        ]
+      ],
+      "sourceSha256": "68c831e37df73831fad8a7941d4951c405e5d4b52b1986cb6329f1096bb02775",
+      "residualSha256": "4762b56d7d43e19cb46e182e303881975993176035d079712d9b4f8e4fd1874c",
+      "sourceBytes": 362,
+      "residualBytes": 137,
+      "compileMs": 4.5576659999999976,
+      "inputChecks": 12,
+      "comparisons": 24,
+      "lookupContainerRemains": true,
+      "interpreterHelperCalls": 0,
+      "astDispatchTags": 0
+    }
+  ],
+  "comparisons": 96,
+  "benchmarks": [
+    {
+      "name": "dynamic-linear-interpreted",
+      "calls": 500000,
+      "medianMs": 18.561042000000043,
+      "samplesMs": [
+        19.75583400000005,
+        19.217167000000018,
+        19.407625000000053,
+        19.44987500000002,
+        18.404874999999947,
+        18.561042000000043,
+        17.99633300000005,
+        18.06749999999988,
+        18.08220799999981
+      ]
+    },
+    {
+      "name": "dynamic-linear-residual",
+      "calls": 500000,
+      "medianMs": 4.392624999999953,
+      "samplesMs": [
+        4.974166999999966,
+        4.811374999999998,
+        4.792332999999985,
+        5.052290999999968,
+        4.206457999999884,
+        4.392624999999953,
+        4.293458000000101,
+        4.179499999999962,
+        4.230833000000075
+      ]
+    },
+    {
+      "name": "dynamic-map-interpreted",
+      "calls": 500000,
+      "medianMs": 96.46025000000003,
+      "samplesMs": [
+        96.46025000000003,
+        96.83183299999996,
+        95.70395900000005,
+        103.27558399999998,
+        96.60287500000004,
+        95.6357089999999,
+        96.47529199999985,
+        94.29920800000014,
+        93.60975000000008
+      ]
+    },
+    {
+      "name": "dynamic-map-residual",
+      "calls": 500000,
+      "medianMs": 85.91954099999998,
+      "samplesMs": [
+        84.95141699999999,
+        85.91954099999998,
+        86.34074999999996,
+        85.94341600000007,
+        87.66612499999997,
+        87.467625,
+        85.82308400000011,
+        85.73733300000004,
+        85.70795799999996
+      ]
+    }
+  ],
+  "limits": [
+    "Bindings are three distinct strings, not an arbitrary Map implementation.",
+    "Each call constructs a fresh environment in both representations. Dynamic Map retains construction, so timings include allocation and do not isolate Map.get.",
+    "Static-key Map and list both eliminate the container. Residual size is not runtime cost.",
+    "Other interpreter/PE settings and mutable or duplicate bindings were not tested here."
+  ]
+}

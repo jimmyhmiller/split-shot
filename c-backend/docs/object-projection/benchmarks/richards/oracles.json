@@ -1,0 +1,188 @@
+{
+  "runtimeCount": [
+    {
+      "input": 1,
+      "value": [
+        8,
+        3
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 2,
+      "value": [
+        12,
+        4
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 10,
+      "value": [
+        31,
+        12
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 100,
+      "value": [
+        239,
+        95
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 1000,
+      "value": [
+        2322,
+        928
+      ],
+      "validation": "passed"
+    },
+    {
+      "input": 2500,
+      "value": [
+        5726,
+        2289
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 10000,
+      "value": [
+        23246,
+        9297
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 37,
+      "value": [
+        91,
+        36
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 999,
+      "value": [
+        2320,
+        927
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 4093,
+      "value": [
+        9400,
+        3759
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    },
+    {
+      "input": 12345,
+      "value": [
+        28689,
+        11475
+      ],
+      "validation": "original fixed-size oracle rejected nonstandard COUNT, as expected"
+    }
+  ],
+  "originalAdapter": [
+    {
+      "input": 0,
+      "value": true
+    },
+    {
+      "input": 1,
+      "value": true
+    },
+    {
+      "input": 2,
+      "value": true
+    },
+    {
+      "input": 3,
+      "value": true
+    }
+  ],
+  "rejectedInputs": [
+    {
+      "input": "0",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "-1",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "1.5",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "NaN",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "Infinity",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "-Infinity",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "1000001",
+      "type": "number",
+      "error": "Error"
+    },
+    {
+      "input": "1000",
+      "type": "string",
+      "error": "Error"
+    },
+    {
+      "input": "null",
+      "type": "object",
+      "error": "Error"
+    },
+    {
+      "input": "undefined",
+      "type": "undefined",
+      "error": "Error"
+    }
+  ],
+  "standardValidationPreserved": true,
+  "allocationAudit": {
+    "input": 1000,
+    "scope": "Explicit guest new calls to Scheduler, Packet, TaskControlBlock, task constructors, and Array. Excludes source initialization, function/prototype infrastructure, instrumentation, and adapter result-array literal.",
+    "allocationSites": {
+      "Scheduler": 1,
+      "Array": 9,
+      "IdleTask": 1,
+      "TaskControlBlock": 6,
+      "Packet": 8,
+      "WorkerTask": 1,
+      "HandlerTask": 2,
+      "DeviceTask": 2
+    },
+    "allocationsBeforeSchedule": 30,
+    "allocationsDuringSchedule": 0,
+    "methodRuns": {
+      "TaskControlBlock": 6573,
+      "HandlerTask": 2328,
+      "WorkerTask": 468,
+      "DeviceTask": 2777,
+      "IdleTask": 1000
+    },
+    "queueCount": 2322,
+    "holdCount": 928
+  }
+}

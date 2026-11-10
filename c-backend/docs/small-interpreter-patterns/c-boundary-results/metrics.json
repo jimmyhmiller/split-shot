@@ -1,0 +1,1297 @@
+{
+  "compiler_version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+  "node_version": "v26.5.0",
+  "flags": {
+    "SPEC_WEIGHT_BUDGET": "10000",
+    "PE_NO_SHARED_CONTEXTS": "1",
+    "PE_CONTEXT_POINTS": "1"
+  },
+  "frontend_sha256": "f6b6ceabfa43f66b2a4f8be9067e2d3bab2711a1626fa3eee404c297f268d721",
+  "c_backend_sha256": "2cc4e2afbd7185ed0edba3e8343c4cc001b9151258ff59d8e79c945d38bcd0ca",
+  "git_head": "972f26599dc8bfcd88bf3e5b0b3be39aacc4cbba",
+  "rows": [
+    {
+      "name": "static-linear",
+      "family": "static",
+      "source_bytes": 506,
+      "source_sha256": "f6ef8ae996dfaea8ec407eb92ca2e74fb2dff322a05d70753877e1fd4efd7b94",
+      "residual_bytes": 42,
+      "residual_sha256": "4b403d881a0f6a82dbc2d88629f36bd4ffa78a4fc1444ccf0c1383927c6a7a3c",
+      "compile_process_ms": 5.550249945372343,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-3"
+          },
+          {
+            "input": "-1",
+            "value": "1"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "3"
+          },
+          {
+            "input": "0",
+            "value": "3"
+          },
+          {
+            "input": "1",
+            "value": "5"
+          },
+          {
+            "input": "2",
+            "value": "7"
+          },
+          {
+            "input": "3",
+            "value": "9"
+          },
+          {
+            "input": "4",
+            "value": "11"
+          },
+          {
+            "input": "10",
+            "value": "23"
+          },
+          {
+            "input": "2.5",
+            "value": "8"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 992,
+      "c_sha256": "b0f2c3bca1633aa8653c8c977e0a609af9c22f5cf3d03b92a17ea61905828ec3",
+      "c_input_checks": 14,
+      "native_body_sha256": "5841ba0c71295467aea922195c664e5208c0bc2f05bd24437338c01665787d30",
+      "native_body": "fadd\td0, d0, d0\nfmov\td1, #3.00000000\nfadd\td0, d0, d1\nret"
+    },
+    {
+      "name": "static-object",
+      "family": "static",
+      "source_bytes": 426,
+      "source_sha256": "9d2ac4616e45df3548a95da85ae1daaf65f2baed29c4ee772ee655d97b4512d0",
+      "residual_bytes": 42,
+      "residual_sha256": "4b403d881a0f6a82dbc2d88629f36bd4ffa78a4fc1444ccf0c1383927c6a7a3c",
+      "compile_process_ms": 5.219999933615327,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-3"
+          },
+          {
+            "input": "-1",
+            "value": "1"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "3"
+          },
+          {
+            "input": "0",
+            "value": "3"
+          },
+          {
+            "input": "1",
+            "value": "5"
+          },
+          {
+            "input": "2",
+            "value": "7"
+          },
+          {
+            "input": "3",
+            "value": "9"
+          },
+          {
+            "input": "4",
+            "value": "11"
+          },
+          {
+            "input": "10",
+            "value": "23"
+          },
+          {
+            "input": "2.5",
+            "value": "8"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 992,
+      "c_sha256": "b0f2c3bca1633aa8653c8c977e0a609af9c22f5cf3d03b92a17ea61905828ec3",
+      "c_input_checks": 14,
+      "native_body_sha256": "5841ba0c71295467aea922195c664e5208c0bc2f05bd24437338c01665787d30",
+      "native_body": "fadd\td0, d0, d0\nfmov\td1, #3.00000000\nfadd\td0, d0, d1\nret"
+    },
+    {
+      "name": "static-map",
+      "family": "static",
+      "source_bytes": 451,
+      "source_sha256": "b3d63385eecb6260aa5c6a98e3f5fcf73ea94e93d6719c9e6e8739b4eaf1eb7c",
+      "residual_bytes": 42,
+      "residual_sha256": "4b403d881a0f6a82dbc2d88629f36bd4ffa78a4fc1444ccf0c1383927c6a7a3c",
+      "compile_process_ms": 5.004792008548975,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-3"
+          },
+          {
+            "input": "-1",
+            "value": "1"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "3"
+          },
+          {
+            "input": "0",
+            "value": "3"
+          },
+          {
+            "input": "1",
+            "value": "5"
+          },
+          {
+            "input": "2",
+            "value": "7"
+          },
+          {
+            "input": "3",
+            "value": "9"
+          },
+          {
+            "input": "4",
+            "value": "11"
+          },
+          {
+            "input": "10",
+            "value": "23"
+          },
+          {
+            "input": "2.5",
+            "value": "8"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 992,
+      "c_sha256": "b0f2c3bca1633aa8653c8c977e0a609af9c22f5cf3d03b92a17ea61905828ec3",
+      "c_input_checks": 14,
+      "native_body_sha256": "5841ba0c71295467aea922195c664e5208c0bc2f05bd24437338c01665787d30",
+      "native_body": "fadd\td0, d0, d0\nfmov\td1, #3.00000000\nfadd\td0, d0, d1\nret"
+    },
+    {
+      "name": "static-visible-hash",
+      "family": "static",
+      "source_bytes": 529,
+      "source_sha256": "131f2e48b3eb3e05f44c1ceb7a196405ced1e37c734c7b4e3cc276ef5ac11232",
+      "residual_bytes": 42,
+      "residual_sha256": "4b403d881a0f6a82dbc2d88629f36bd4ffa78a4fc1444ccf0c1383927c6a7a3c",
+      "compile_process_ms": 5.570332985371351,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-3"
+          },
+          {
+            "input": "-1",
+            "value": "1"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "3"
+          },
+          {
+            "input": "0",
+            "value": "3"
+          },
+          {
+            "input": "1",
+            "value": "5"
+          },
+          {
+            "input": "2",
+            "value": "7"
+          },
+          {
+            "input": "3",
+            "value": "9"
+          },
+          {
+            "input": "4",
+            "value": "11"
+          },
+          {
+            "input": "10",
+            "value": "23"
+          },
+          {
+            "input": "2.5",
+            "value": "8"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 992,
+      "c_sha256": "b0f2c3bca1633aa8653c8c977e0a609af9c22f5cf3d03b92a17ea61905828ec3",
+      "c_input_checks": 14,
+      "native_body_sha256": "5841ba0c71295467aea922195c664e5208c0bc2f05bd24437338c01665787d30",
+      "native_body": "fadd\td0, d0, d0\nfmov\td1, #3.00000000\nfadd\td0, d0, d1\nret"
+    },
+    {
+      "name": "dynamic-linear",
+      "family": "dynamic",
+      "source_bytes": 568,
+      "source_sha256": "9c59a1283aa4c0c145f39d067d4ea34b734e1e54fd6e2fb0f78ff818684d6c45",
+      "residual_bytes": 156,
+      "residual_sha256": "af61371599cec41391f8e39dd5b91e8469a0dd7f434a348fcfa23af890178776",
+      "compile_process_ms": 5.14970812946558,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "4"
+          },
+          {
+            "input": "-1",
+            "value": "7"
+          },
+          {
+            "input": "-1.5",
+            "value": "7"
+          },
+          {
+            "input": "-0",
+            "value": "7"
+          },
+          {
+            "input": "0",
+            "value": "7"
+          },
+          {
+            "input": "1",
+            "value": "9"
+          },
+          {
+            "input": "2",
+            "value": "10"
+          },
+          {
+            "input": "3",
+            "value": "10"
+          },
+          {
+            "input": "4",
+            "value": "9"
+          },
+          {
+            "input": "10",
+            "value": "9"
+          },
+          {
+            "input": "2.5",
+            "value": "7"
+          },
+          {
+            "input": "NaN",
+            "value": "7"
+          },
+          {
+            "input": "Infinity",
+            "value": "7"
+          },
+          {
+            "input": "-Infinity",
+            "value": "7"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 1472,
+      "c_sha256": "9a41df29a04f36191526d5ce87678d2941e1048fe6317f2d91cf8fc46bf2b92e",
+      "c_input_checks": 14,
+      "native_body_sha256": "910a009ade73148606f1d69321a9576ca5b77336e45b5c17ffc6d27a9435e56e",
+      "native_body": "stp\td9, d8, [sp, #-32]!             ; 16-byte Folded Spill\nstp\tx29, x30, [sp, #16]             ; 16-byte Folded Spill\nadd\tx29, sp, #16\nmov.16b\tv8, v0\nfmov\td1, #3.00000000\nbl\t_fmod\nfmov\td1, #9.00000000\nfmov\td2, #1.00000000\nfmov\td3, #2.00000000\nfcmp\td0, d3\nfmov\td3, #10.00000000\nfmov\td4, #7.00000000\nfcsel\td3, d4, d3, ne\nfcmp\td0, d2\nfcsel\td1, d1, d3, eq\nfadd\td2, d8, d4\nfcmp\td0, #0.0\nfcsel\td0, d1, d2, ne\nldp\tx29, x30, [sp, #16]             ; 16-byte Folded Reload\nldp\td9, d8, [sp], #32               ; 16-byte Folded Reload\nret"
+    },
+    {
+      "name": "dynamic-object",
+      "family": "dynamic",
+      "source_bytes": 518,
+      "source_sha256": "dd98fee6b602a5f4224b866c545d70e979516bd840859cd6dc37c2708b5db8ef",
+      "residual_bytes": 101,
+      "residual_sha256": "6011cebe583b709df94b629cac1e6513d6e31a4d2e49a7f2173ed2d190a424f0",
+      "compile_process_ms": 5.40870800614357,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "4"
+          },
+          {
+            "input": "-1",
+            "value": "7"
+          },
+          {
+            "input": "-1.5",
+            "value": "7"
+          },
+          {
+            "input": "-0",
+            "value": "7"
+          },
+          {
+            "input": "0",
+            "value": "7"
+          },
+          {
+            "input": "1",
+            "value": "9"
+          },
+          {
+            "input": "2",
+            "value": "10"
+          },
+          {
+            "input": "3",
+            "value": "10"
+          },
+          {
+            "input": "4",
+            "value": "9"
+          },
+          {
+            "input": "10",
+            "value": "9"
+          },
+          {
+            "input": "2.5",
+            "value": "7"
+          },
+          {
+            "input": "NaN",
+            "value": "7"
+          },
+          {
+            "input": "Infinity",
+            "value": "7"
+          },
+          {
+            "input": "-Infinity",
+            "value": "7"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: side effects within unsequenced C operands are unsupported; use separate statements"
+    },
+    {
+      "name": "dynamic-map",
+      "family": "dynamic",
+      "source_bytes": 537,
+      "source_sha256": "ba3c23a6227dbb1705aeedc0fe097147d93147659953d4d925fe36c116caee50",
+      "residual_bytes": 122,
+      "residual_sha256": "a86ea3e62d828e23cdff3806472d67f89db44fb8b7e043553084b23393670bb9",
+      "compile_process_ms": 4.7523751854896545,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "4"
+          },
+          {
+            "input": "-1",
+            "value": "7"
+          },
+          {
+            "input": "-1.5",
+            "value": "7"
+          },
+          {
+            "input": "-0",
+            "value": "7"
+          },
+          {
+            "input": "0",
+            "value": "7"
+          },
+          {
+            "input": "1",
+            "value": "9"
+          },
+          {
+            "input": "2",
+            "value": "10"
+          },
+          {
+            "input": "3",
+            "value": "10"
+          },
+          {
+            "input": "4",
+            "value": "9"
+          },
+          {
+            "input": "10",
+            "value": "9"
+          },
+          {
+            "input": "2.5",
+            "value": "7"
+          },
+          {
+            "input": "NaN",
+            "value": "7"
+          },
+          {
+            "input": "Infinity",
+            "value": "7"
+          },
+          {
+            "input": "-Infinity",
+            "value": "7"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: side effects within unsequenced C operands are unsupported; use separate statements"
+    },
+    {
+      "name": "dynamic-visible-hash",
+      "family": "dynamic",
+      "source_bytes": 634,
+      "source_sha256": "9d1a9fbd1bc0f67c83d3a1df886fb316a01f10d16fa6554e5516ced320353ee0",
+      "residual_bytes": 312,
+      "residual_sha256": "1d66517c33bbe03ef0daa33004532b04ce6af74336f893d73f01b73362d15cd3",
+      "compile_process_ms": 5.223459098488092,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "4"
+          },
+          {
+            "input": "-1",
+            "value": "7"
+          },
+          {
+            "input": "-1.5",
+            "value": "7"
+          },
+          {
+            "input": "-0",
+            "value": "7"
+          },
+          {
+            "input": "0",
+            "value": "7"
+          },
+          {
+            "input": "1",
+            "value": "9"
+          },
+          {
+            "input": "2",
+            "value": "10"
+          },
+          {
+            "input": "3",
+            "value": "10"
+          },
+          {
+            "input": "4",
+            "value": "9"
+          },
+          {
+            "input": "10",
+            "value": "9"
+          },
+          {
+            "input": "2.5",
+            "value": "7"
+          },
+          {
+            "input": "NaN",
+            "value": "7"
+          },
+          {
+            "input": "Infinity",
+            "value": "7"
+          },
+          {
+            "input": "-Infinity",
+            "value": "7"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: side effects within unsequenced C operands are unsupported; use separate statements"
+    },
+    {
+      "name": "primitive-visible",
+      "family": "primitive",
+      "source_bytes": 336,
+      "source_sha256": "77dc63f5bacb57450878e9e4e30b156677ea8ad547309ce6853804101b8ae786",
+      "residual_bytes": 38,
+      "residual_sha256": "28681c8e26938177007289dde9b4937fa746ad7bbd4f12ce5fdd29133e420d7a",
+      "compile_process_ms": 5.5815838277339935,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-6"
+          },
+          {
+            "input": "-1",
+            "value": "-2"
+          },
+          {
+            "input": "-1.5",
+            "value": "-3"
+          },
+          {
+            "input": "-0",
+            "value": "-0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "2"
+          },
+          {
+            "input": "2",
+            "value": "4"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "8"
+          },
+          {
+            "input": "10",
+            "value": "20"
+          },
+          {
+            "input": "2.5",
+            "value": "5"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 962,
+      "c_sha256": "5d2563b045997ce8302374e458cabc17a8beb31b287a37976a86205fd5757783",
+      "c_input_checks": 14,
+      "native_body_sha256": "2af46feb22eca1142cc1487e75bb342f485b5e563091ee910726efc525640449",
+      "native_body": "fadd\td0, d0, d0\nret"
+    },
+    {
+      "name": "primitive-opaque",
+      "family": "primitive",
+      "source_bytes": 334,
+      "source_sha256": "28d949185b86ae68824caa4309cd7c9fa7b17dde221a3f4f37b183f969a671cc",
+      "residual_bytes": 47,
+      "residual_sha256": "8fec3d08d8efe1405e96cbae2243324114dedaaab5193a48d99b6714eaa2e9d1",
+      "compile_process_ms": 5.281708901748061,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-6"
+          },
+          {
+            "input": "-1",
+            "value": "-2"
+          },
+          {
+            "input": "-1.5",
+            "value": "-3"
+          },
+          {
+            "input": "-0",
+            "value": "-0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "2"
+          },
+          {
+            "input": "2",
+            "value": "4"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "8"
+          },
+          {
+            "input": "10",
+            "value": "20"
+          },
+          {
+            "input": "2.5",
+            "value": "5"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 968,
+      "c_sha256": "f7fe56cebbb9e25e0337ca659770016fe9592917f397fd5bb60f63b36552a74c",
+      "c_input_checks": 14,
+      "native_body_sha256": "2af46feb22eca1142cc1487e75bb342f485b5e563091ee910726efc525640449",
+      "native_body": "fadd\td0, d0, d0\nret"
+    },
+    {
+      "name": "call-mixed",
+      "family": "call",
+      "source_bytes": 369,
+      "source_sha256": "bdeac31cc85d86d01cf0d310268c041354d1d09e9dad0215ff6ade9cc9c86752",
+      "residual_bytes": 492,
+      "residual_sha256": "16b96a53ce8374d379b38ecd9ea51b8d72d17ca13cb4b2fe5a0543ee2291bff2",
+      "compile_process_ms": 5.438291933387518,
+      "residual_function_declarations": 3,
+      "js_checks": {
+        "input_checks": 12,
+        "comparisons": 24,
+        "values": [
+          {
+            "input": "-3",
+            "value": "0"
+          },
+          {
+            "input": "-1",
+            "value": "0"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "0"
+          },
+          {
+            "input": "2",
+            "value": "2"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "12"
+          },
+          {
+            "input": "10",
+            "value": "90"
+          },
+          {
+            "input": "2.5",
+            "value": "6"
+          },
+          {
+            "input": "NaN",
+            "value": "0"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: expected exactly one top-level function main(input)"
+    },
+    {
+      "name": "call-split",
+      "family": "call",
+      "source_bytes": 353,
+      "source_sha256": "dc69dc7acac7341298985a50ff8f1e88362590d1ad5e1f484f29b445bec75814",
+      "residual_bytes": 490,
+      "residual_sha256": "35b357e5e50fd01df041814449e0a489fc175fec705731d3589b52d51da73d2f",
+      "compile_process_ms": 5.211082985624671,
+      "residual_function_declarations": 3,
+      "js_checks": {
+        "input_checks": 12,
+        "comparisons": 24,
+        "values": [
+          {
+            "input": "-3",
+            "value": "0"
+          },
+          {
+            "input": "-1",
+            "value": "0"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "0"
+          },
+          {
+            "input": "2",
+            "value": "2"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "12"
+          },
+          {
+            "input": "10",
+            "value": "90"
+          },
+          {
+            "input": "2.5",
+            "value": "6"
+          },
+          {
+            "input": "NaN",
+            "value": "0"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: expected exactly one top-level function main(input)"
+    },
+    {
+      "name": "sum-array",
+      "family": "sum",
+      "source_bytes": 528,
+      "source_sha256": "e750b420c489e0cbebbc3c62f196e42fdeb5344d2b2f3bf8f4a7d3feb19571e2",
+      "residual_bytes": 212,
+      "residual_sha256": "7536db7e3f5f4f44f9f1bea53590077e36ea5b56f618c08de6f35ad6f95cfc67",
+      "compile_process_ms": 5.377666093409061,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 12,
+        "comparisons": 24,
+        "values": [
+          {
+            "input": "-3",
+            "value": "0"
+          },
+          {
+            "input": "-1",
+            "value": "0"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "0"
+          },
+          {
+            "input": "2",
+            "value": "1"
+          },
+          {
+            "input": "3",
+            "value": "3"
+          },
+          {
+            "input": "4",
+            "value": "6"
+          },
+          {
+            "input": "10",
+            "value": "45"
+          },
+          {
+            "input": "2.5",
+            "value": "3"
+          },
+          {
+            "input": "NaN",
+            "value": "0"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: side effects within unsequenced C operands are unsupported; use separate statements"
+    },
+    {
+      "name": "sum-buffer",
+      "family": "sum",
+      "source_bytes": 553,
+      "source_sha256": "9f670689f944afb7c3c8294509492375ae0831cba3b0e457aa9fcbfeaba297a6",
+      "residual_bytes": 215,
+      "residual_sha256": "702d70b52106dd08d5e04a0fd0a26dea369aa483e034678bf2628adf874ba883",
+      "compile_process_ms": 5.065750097855926,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 12,
+        "comparisons": 24,
+        "values": [
+          {
+            "input": "-3",
+            "value": "0"
+          },
+          {
+            "input": "-1",
+            "value": "0"
+          },
+          {
+            "input": "-1.5",
+            "value": "0"
+          },
+          {
+            "input": "-0",
+            "value": "0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "0"
+          },
+          {
+            "input": "2",
+            "value": "1"
+          },
+          {
+            "input": "3",
+            "value": "3"
+          },
+          {
+            "input": "4",
+            "value": "6"
+          },
+          {
+            "input": "10",
+            "value": "45"
+          },
+          {
+            "input": "2.5",
+            "value": "3"
+          },
+          {
+            "input": "NaN",
+            "value": "0"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 1944,
+      "c_sha256": "6272b827383a876abd38a3d0ad8ecf123d914eb1a8795f6fc52c85d4b1fab3d2",
+      "c_input_checks": 12,
+      "native_body_sha256": "9668f98add528e27278f8bed3864cf86eabda436f5e39f177b39aeb2eae6d437",
+      "native_body": "movi.2d\tv1, #0000000000000000\nfcmp\td0, #0.0\nb.le\tLBB0_3\nfmov\td2, #1.00000000\nmovi.2d\tv3, #0000000000000000\nLBB0_2:                                 ; =>This Inner Loop Header: Depth=1\nfadd\td1, d3, d1\nfadd\td3, d3, d2\nfcmp\td3, d0\nb.mi\tLBB0_2\nLBB0_3:\nmov.16b\tv0, v1\nret"
+    },
+    {
+      "name": "cache-direct",
+      "family": "cache",
+      "source_bytes": 403,
+      "source_sha256": "d41c9c265a2442a8926557ecec9c3809f3829785b745dc4ec7fd26f31cce5ce4",
+      "residual_bytes": 48,
+      "residual_sha256": "b8a1d4593a48176c67c5691be15cb02996236867938dcfad71140ffb0719cf5b",
+      "compile_process_ms": 6.154916947707534,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-6"
+          },
+          {
+            "input": "-1",
+            "value": "-2"
+          },
+          {
+            "input": "-1.5",
+            "value": "-3"
+          },
+          {
+            "input": "-0",
+            "value": "-0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "2"
+          },
+          {
+            "input": "2",
+            "value": "4"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "8"
+          },
+          {
+            "input": "10",
+            "value": "20"
+          },
+          {
+            "input": "2.5",
+            "value": "5"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 1007,
+      "c_sha256": "8baba36dac9af424ce108c48a8aa075c236f22c454e3f8bd45a7315bd271ac69",
+      "c_input_checks": 14,
+      "native_body_sha256": "2af46feb22eca1142cc1487e75bb342f485b5e563091ee910726efc525640449",
+      "native_body": "fadd\td0, d0, d0\nret"
+    },
+    {
+      "name": "cache-static-key",
+      "family": "cache",
+      "source_bytes": 503,
+      "source_sha256": "480803097ad31cbc616ec4a45abc3324af33e69951f66b8c2fe8f293326ff86a",
+      "residual_bytes": 48,
+      "residual_sha256": "b8a1d4593a48176c67c5691be15cb02996236867938dcfad71140ffb0719cf5b",
+      "compile_process_ms": 5.09979110211134,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-6"
+          },
+          {
+            "input": "-1",
+            "value": "-2"
+          },
+          {
+            "input": "-1.5",
+            "value": "-3"
+          },
+          {
+            "input": "-0",
+            "value": "-0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "2"
+          },
+          {
+            "input": "2",
+            "value": "4"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "8"
+          },
+          {
+            "input": "10",
+            "value": "20"
+          },
+          {
+            "input": "2.5",
+            "value": "5"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "accepted",
+      "c_reason": "",
+      "c_bytes": 1007,
+      "c_sha256": "8baba36dac9af424ce108c48a8aa075c236f22c454e3f8bd45a7315bd271ac69",
+      "c_input_checks": 14,
+      "native_body_sha256": "2af46feb22eca1142cc1487e75bb342f485b5e563091ee910726efc525640449",
+      "native_body": "fadd\td0, d0, d0\nret"
+    },
+    {
+      "name": "cache-runtime-key",
+      "family": "cache",
+      "source_bytes": 545,
+      "source_sha256": "91a20a186d1362c93918b098261ae01ce38d155da58d79804394340a4b947277",
+      "residual_bytes": 228,
+      "residual_sha256": "6ea00b997267a67bce3e682514fa97886bf87efc9d384890e7e85f7747d713a9",
+      "compile_process_ms": 5.541250109672546,
+      "residual_function_declarations": 1,
+      "js_checks": {
+        "input_checks": 14,
+        "comparisons": 28,
+        "values": [
+          {
+            "input": "-3",
+            "value": "-6"
+          },
+          {
+            "input": "-1",
+            "value": "-2"
+          },
+          {
+            "input": "-1.5",
+            "value": "-3"
+          },
+          {
+            "input": "-0",
+            "value": "-0"
+          },
+          {
+            "input": "0",
+            "value": "0"
+          },
+          {
+            "input": "1",
+            "value": "2"
+          },
+          {
+            "input": "2",
+            "value": "4"
+          },
+          {
+            "input": "3",
+            "value": "6"
+          },
+          {
+            "input": "4",
+            "value": "8"
+          },
+          {
+            "input": "10",
+            "value": "20"
+          },
+          {
+            "input": "2.5",
+            "value": "5"
+          },
+          {
+            "input": "NaN",
+            "value": "NaN"
+          },
+          {
+            "input": "Infinity",
+            "value": "Infinity"
+          },
+          {
+            "input": "-Infinity",
+            "value": "-Infinity"
+          }
+        ]
+      },
+      "c_status": "refused",
+      "c_reason": "numeric-to-c: side effects within unsequenced C operands are unsupported; use separate statements"
+    }
+  ],
+  "notes": [
+    "Actual interpreters execute shared static AST data. There is no handwritten residual lowering.",
+    "Input is dynamic during specialization. Fresh binding collections are constructed per invocation.",
+    "C input changes only the entry declaration name from entry to main. Refused C is not a failed JS correctness comparison.",
+    "Compile process milliseconds include CLI startup; comparisons use the same invocation/profile.",
+    "No C timing claim: optimized native bodies are compared exactly; affine kernels are below useful isolated timing scale."
+  ]
+}
