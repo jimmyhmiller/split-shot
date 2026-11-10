@@ -2,7 +2,7 @@
 //! interpreter and semantic intrinsics define execution.
 use std::process::ExitCode;
 fn harness(p: &serde_json::Value, guest: Option<usize>, ordinary: bool) -> Result<String, String> {
-    let mut source = format!("function main(input) {{\nvar nodes={};\nvar functions={};\nvar lists={};\nvar constants={};\nvar keyCount={};\n",p["nodes"],p["functions"],p["lists"],p["constants"],p["keys"].as_array().ok_or("keys required")?.len());
+    let mut source = format!("function main(input) {{\nvar nodes={};\nvar functions={};\nvar lists={};\nvar constants={};\nvar keyCount={};\nvar entryShape=-1;\n",p["nodes"],p["functions"],p["lists"],p["constants"],p["keys"].as_array().ok_or("keys required")?.len());
     if ordinary {
         source.push_str("function callGuest(code,parent,receiver,args) {enterGuest();var value=invoke(functions[code],parent,args,receiver,args);leaveGuest();return value;}\nfunction callGuestOneOf(code,parent,receiver,args,first,second,third,fourth) {return callGuest(code,parent,receiver,args);}\nfunction callSpread(code,parent,receiver,list) {return callGuest(code,parent,receiver,arrValues(list));}\nfunction frameArgCount(frame) {return frame.length;}\nfunction frameArg(frame,i) {if(i<frame.length)return frame[i];return vUndef();}\nfunction callRest(code,parent,receiver,frame,skip) {return callGuest(code,parent,receiver,frame.slice(skip));}\nfunction callProtected(code,parent,receiver,args) {return protectedInvoke(function(){return callGuest(code,parent,receiver,args);});}\n");
     } else {
