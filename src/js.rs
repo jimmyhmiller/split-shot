@@ -1730,9 +1730,6 @@ struct EntryWatch {
     weak_added: std::collections::BTreeSet<usize>,
     /// The globals holding objects the load code made, and those objects.
     global_roots: Vec<(String, usize)>,
-    /// What the load code does more: the boundary's objects `main` makes at
-    /// runtime, made by it instead (see `Js::entry_hoist`).
-    load_ops: Vec<Op>,
     written: std::collections::BTreeSet<usize>,
     escaped: std::collections::BTreeSet<usize>,
     globals: std::collections::BTreeSet<String>,
@@ -7452,6 +7449,9 @@ impl Js {
         }).collect();
         ENTRY_WATCH.with(|w| *w.borrow_mut() = Some(EntryWatch { limit: state.next_addr, snapshot: state.heap.clone(), hoisted, global_roots, ..Default::default() }));
         let boundary_heap: std::collections::BTreeSet<usize> = state.heap.keys().copied().collect();
+        if env_flag!("ENTRY_DEBUG") {
+            eprintln!("[ENTRY] main from the boundary: heap {}, globals {}, blocks so far {}", state.heap.len(), state.globals.len(), self.spec_blocks.get());
+        }
         let main = crate::engine::specialize(self, state);
         let watch = ENTRY_WATCH.with(|w| w.borrow_mut().take()).expect("the watch set above");
         self.entry.stable.borrow_mut().clear();
@@ -7465,51 +7465,10 @@ impl Js {
                 watch.globals
             );
         }
-        let mut watch = watch;
-        let mut load = load;
-        let mut exports = exports;
-        // (What the load code does more, at its end: see `entry_hoist`.)
-        if !watch.load_ops.is_empty() {
-            let ends: Vec<usize> = (0..load.blocks.len())
-                .filter(|&b| matches!(load.blocks[b].term, Terminator::Halt) && !matches!(load.blocks[b].ops.last(), Some(Op::Throw(_) | Op::Return(_))))
-                .collect();
-            assert_eq!(ends.len(), 1, "the load code ends in one block, where the top-level code ends (see `entry_boundary`)");
-            load.blocks[ends[0]].ops.append(&mut watch.load_ops);
-            for v in watch.hoisted.values() {
-                if !exports.contains(v) {
-                    exports.push(*v);
-                }
-            }
-        }
         *self.entry.watched.borrow_mut() = Some((watch, boundary_heap));
         *self.entry.load.borrow_mut() = Some(load);
         *self.entry.exports.borrow_mut() = exports;
         main
-    }
-
-    /// The boundary's object `addr` as `main` makes it at runtime (the model
-    /// holding it as `now`), while `main` is specialized: the object the load
-    /// code made (see `entry_hoisted_now`). One it did not yet make, and
-    /// `main` did not change, it makes now (with what it reaches): made once,
-    /// not on each call, and the same object on each.
-    fn entry_hoist(&self, addr: usize, now: Option<&HeapObj>) -> Option<(usize, Vec<(Abs, Option<Abs>)>)> {
-        if let Some(r) = entry_hoisted_now(addr, now) {
-            return Some(r);
-        }
-        let (snapshot, mut seen) = ENTRY_WATCH.with(|w| {
-            let w = w.borrow();
-            let w = w.as_ref()?;
-            (addr < w.limit && !w.written.contains(&addr) && w.snapshot.contains_key(&addr)).then(|| (w.snapshot.clone(), w.hoisted.clone()))
-        })?;
-        let mut ops = Vec::new();
-        entry_watch_paused(|| self.hoist_object(addr, &snapshot, &mut seen, &mut ops));
-        ENTRY_WATCH.with(|w| {
-            if let Some(w) = w.borrow_mut().as_mut() {
-                w.load_ops.extend(ops);
-                w.hoisted.extend(seen);
-            }
-        });
-        entry_hoisted_now(addr, now)
     }
 
     /// The load code's making of the boundary's object `addr` and every
@@ -7655,6 +7614,9 @@ impl Js {
         let mut dynamic = self.entry.dynamic.borrow_mut();
         let before = dynamic.len();
         dynamic.extend(watch.written.intersection(&boundary_heap).copied());
+        // (One `main` makes at runtime, but for those the load code made: a
+        // runtime object made once, at load, not a copy each call.)
+        dynamic.extend(watch.escaped.iter().filter(|a| boundary_heap.contains(a) && !watch.hoisted.contains_key(a)).copied());
         if runtime_writes {
             // (A frozen ordinary object no write changes.)
             let frozen = |a: &usize| {
@@ -18688,7 +18650,7 @@ impl Js {
             self.entry.closed.get() && self.is_lexical_global(g) && !self.entry.all_globals_dynamic.get() && !self.entry.dynamic_globals.borrow().contains(g)
         };
         for (name, _) in s.globals.iter() {
-            if closed_lexical(name) {
+            if closed_lexical(name) && !env_flag!("PE_ENTRY_NO_STABLE") {
                 self.entry.stable.borrow_mut().insert(name.clone());
             }
         }
@@ -18714,12 +18676,20 @@ impl Js {
         }
         s.gc();
         let hoisted: HashMap<usize, usize> = seen.into_iter().filter(|(a, _)| s.heap.contains_key(a)).collect();
-        // (Every variable the state names, but `main`'s parameter.)
+        // (Every variable the state names, but `main`'s parameter: its values',
+        // and its facts', which it keeps.)
+        s.prune_facts();
         let mut vars = s.value_vars();
         for (_, o) in s.heap.iter() {
             if let HeapObj::Closure { ident: Some(v), .. } = o {
                 vars.insert(*v);
             }
+        }
+        for (v, i) in s.facts.iter() {
+            vars.insert(*v);
+            let mut named = Vec::new();
+            i.vars(&mut named);
+            vars.extend(named);
         }
         vars.remove(&self.input_var());
         vars.remove(&ARGUMENTS_VAR_ID);
@@ -18735,7 +18705,15 @@ impl Js {
             exports.push(n);
         }
         s.rename_vars(&rename);
-        s.facts = crate::facts::Facts::new();
+        let to = |v: usize| rename.get(&v).copied().unwrap_or(v);
+        s.facts = s.facts.iter().map(|(v, i)| (to(*v), i.renamed(&to))).collect();
+        // (And what is known of how each was made.)
+        {
+            let mut declared = self.declared_types.borrow_mut();
+            let made: Vec<(usize, (RExpr, Info))> =
+                rename.iter().filter_map(|(v, n)| declared.get(v).map(|(e, i)| (*n, (crate::inline::rename_vars(e, &to), i.renamed(&to))))).collect();
+            declared.extend(made);
+        }
         s.top_mut().pc += 1;
         self.entry.boundary.borrow_mut().push((s.clone(), exports, hoisted));
         Step::Halt
@@ -20780,7 +20758,7 @@ impl Js {
         seen: &mut HashMap<usize, usize>,
     ) {
         // (One the load code made: see `mat_obj`.)
-        if let Some((var, added)) = self.entry_hoist(addr, heap.get(&addr)) {
+        if let Some((var, added)) = entry_hoisted_now(addr, heap.get(&addr)) {
             if var != dst {
                 out.push(Op::Assign { var: dst, expr: RExpr::Var(var) });
             }
@@ -21565,7 +21543,7 @@ impl Js {
         seen: &mut HashMap<usize, usize>,
     ) {
         // (One the load code made: that object, see `EntryWatch::hoisted`.)
-        if let Some((var, added)) = self.entry_hoist(addr, heap.get(&addr)) {
+        if let Some((var, added)) = entry_hoisted_now(addr, heap.get(&addr)) {
             if var != dst {
                 shells.push(Op::Assign { var: dst, expr: RExpr::Var(var) });
             }
