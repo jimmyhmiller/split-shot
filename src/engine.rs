@@ -140,7 +140,19 @@ struct Ctx<C: Client> {
     replaced: HashSet<BlockId>,
 }
 
+/// Stack left before a deep recursion grows it (`stacker`), and how much it
+/// grows by. A specialization nests one inside another (a residual
+/// function's body is specialized when a call or a materialization needs it,
+/// from inside the caller's), and a client may recurse over its values: the
+/// depth follows the program, not a bound of ours.
+pub const STACK_RED_ZONE: usize = 1024 * 1024;
+pub const STACK_GROWTH: usize = 64 * 1024 * 1024;
+
 pub fn specialize<C: Client>(client: &C, init: C::State) -> Program<C::Op, C::Cond> {
+    stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || specialize_here(client, init))
+}
+
+fn specialize_here<C: Client>(client: &C, init: C::State) -> Program<C::Op, C::Cond> {
     let mut cx = Ctx {
         blocks: Vec::new(),
         memo: HashMap::new(),

@@ -19863,6 +19863,20 @@ impl Js {
         fills: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) -> RExpr {
+        // (Materialization follows the object graph, one level a few
+        // frames, and a closure's specializes its body: deep graphs need
+        // more stack than a thread starts with.)
+        stacker::maybe_grow(crate::engine::STACK_RED_ZONE, crate::engine::STACK_GROWTH, || self.mat_value_at(v, heap, shells, fills, seen))
+    }
+
+    fn mat_value_at(
+        &self,
+        v: &Abs,
+        heap: &Heap,
+        shells: &mut Vec<Op>,
+        fills: &mut Vec<Op>,
+        seen: &mut HashMap<usize, usize>,
+    ) -> RExpr {
         match v {
             Abs::Ref(addr) => {
                 if let Some(&var) = seen.get(addr) {
@@ -21292,12 +21306,11 @@ impl Js {
     /// Heap addresses transitively reachable from `addr` (terminates on shared
     /// or cyclic graphs via the visited set).
     fn reachable(heap: &Heap, addr: usize, out: &mut std::collections::HashSet<usize>) {
-        if !out.insert(addr) {
-            return;
-        }
-        let kids: Vec<usize> = heap[&addr].child_refs();
-        for c in kids {
-            Js::reachable(heap, c, out);
+        let mut work = vec![addr];
+        while let Some(a) = work.pop() {
+            if out.insert(a) {
+                work.extend(heap[&a].child_refs());
+            }
         }
     }
 

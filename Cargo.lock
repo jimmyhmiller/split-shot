@@ -540,6 +540,7 @@ version = "0.1.0"
 dependencies = [
  "im",
  "regress",
+ "stacker",
 ]
 
 [[package]]
