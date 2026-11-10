@@ -47,7 +47,20 @@ const GLOBAL_OBJECT_NAMES: &[&str] = &["globalThis", "global", "window", "self"]
 /// (the global object: sloppy code's `this` for none, see `Instr::PushThis`;
 /// its properties are not assumed).
 pub fn tracked(name: &str) -> bool {
-    BUILTIN_GLOBALS.contains(&name) || name == "globalThis"
+    BUILTIN_GLOBALS.contains(&name) || name == "globalThis" || name == ARRAY_INDEXES
+}
+
+/// Not a global: the assumption that no array index (`"0"`, `"1"`, ...) is
+/// a property of `Array.prototype` or `Object.prototype` (and that their
+/// prototypes stay the standard ones). Arrays are modeled on it: a hole or
+/// an index past the end reads `undefined`, `in` is false there, and a write
+/// there defines an own data property. A program writing such a key there
+/// (or a computed one, or setting their prototype) does not get it.
+pub const ARRAY_INDEXES: &str = "%ArrayIndexes%";
+
+/// Is `k` an array index (a canonical numeric string below 2^32 - 1)?
+fn array_index(k: &str) -> bool {
+    k.parse::<u32>().is_ok_and(|n| n < u32::MAX && n.to_string() == k)
 }
 
 /// What a residual program writes that may change built-ins.
@@ -326,10 +339,24 @@ fn write(target: &RExpr, key: Option<&str>, cx: &Ctx, w: &mut Writes) {
             None => w.wild = true,
         },
         Target::Builtin { root, global_object: false } => {
+            if (root == "Array" || root == "Object") && key.is_none_or(array_index) {
+                w.names.insert(ARRAY_INDEXES.to_string());
+            }
             w.names.insert(root);
         }
         // (No evidence it is a built-in: taken to be none.)
         Target::Unknown => {}
+    }
+}
+
+/// A write of a numeric key to `target` (an element of an array, as no
+/// built-in's name is): one to `Array.prototype` or `Object.prototype`
+/// gives arrays an inherited index (see `ARRAY_INDEXES`).
+fn index_write(target: &RExpr, cx: &Ctx, w: &mut Writes) {
+    if let Target::Builtin { root, global_object: false } = classify(target, cx, 0) {
+        if root == "Array" || root == "Object" {
+            w.names.insert(ARRAY_INDEXES.to_string());
+        }
     }
 }
 
@@ -367,6 +394,8 @@ fn scan_program(prog: &Program<Op, Cond>, cx: &Ctx, w: &mut Writes) {
                 Op::SetIndex { arr, index, val } => {
                     if !crate::inline::is_number(index, &cx.num) && !is_symbol(index, cx) {
                         write(arr, static_key(index).as_deref(), cx, w);
+                    } else {
+                        index_write(arr, cx, w);
                     }
                     scan_expr(arr, cx, w);
                     scan_expr(index, cx, w);
@@ -375,6 +404,8 @@ fn scan_program(prog: &Program<Op, Cond>, cx: &Ctx, w: &mut Writes) {
                 Op::DeleteIndex { arr, index } => {
                     if !crate::inline::is_number(index, &cx.num) && !is_symbol(index, cx) {
                         write(arr, static_key(index).as_deref(), cx, w);
+                    } else {
+                        index_write(arr, cx, w);
                     }
                     scan_expr(arr, cx, w);
                     scan_expr(index, cx, w);
@@ -384,6 +415,7 @@ fn scan_program(prog: &Program<Op, Cond>, cx: &Ctx, w: &mut Writes) {
                     // it; on anything else, indices and `length`, never a
                     // built-in's name.)
                     if let Target::Builtin { root, global_object: false } = classify(arr, cx, 0) {
+                        index_write(arr, cx, w);
                         w.names.insert(root);
                     }
                     scan_expr(arr, cx, w);
@@ -436,6 +468,9 @@ fn scan_expr(e: &RExpr, cx: &Ctx, w: &mut Writes) {
             // built-ins are own properties).
             Some("Object.setPrototypeOf") | Some("Reflect.setPrototypeOf") => {
                 if let Some(Target::Builtin { root, global_object: false }) = args.first().map(|t| classify(t, cx, 0)) {
+                    if root == "Array" || root == "Object" {
+                        w.names.insert(ARRAY_INDEXES.to_string());
+                    }
                     w.names.insert(root);
                 }
             }

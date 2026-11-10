@@ -9235,6 +9235,19 @@ impl Client for Js {
             ops.clear();
             ops.extend(s.frames.last().map(|f| f.ostack.iter().filter_map(as_ref_addr).collect::<Vec<_>>()).unwrap_or_default());
         }
+        // (A program that may give arrays inherited indexes: no array is
+        // modeled, each a runtime array before anything uses it; see
+        // `pristine::ARRAY_INDEXES`.)
+        if !self.pristine(crate::pristine::ARRAY_INDEXES) {
+            let arrays: Vec<usize> =
+                s.heap.iter().filter(|(a, o)| matches!(o, HeapObj::Array(_)) && !s.escaped.contains(a)).map(|(a, _)| *a).collect();
+            let mut escaped = std::collections::HashSet::new();
+            for a in arrays {
+                if s.heap.contains_key(&a) && !s.escaped.contains(&a) {
+                    self.escape(s, a, &mut escaped, out);
+                }
+            }
+        }
         let r = self.step_inner(s, out, at_entry);
         if self.straight_probe.get() && matches!(r, Step::Branch { .. }) {
             self.straight_failed.set(true);
