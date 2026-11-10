@@ -12012,7 +12012,8 @@ impl Js {
                             self.forbid_residual_in_try(s, "a may-throw branch condition");
                         }
                         if env_flag!("DYNBR_DEBUG") {
-                            eprintln!("[DYNBR] {} pc={} cond={:?}", self.names[s.top().func], pc, r);
+                            let frames: Vec<&str> = s.frames.iter().map(|f| self.names[f.func].as_str()).collect();
+                            eprintln!("[DYNBR] pc={} cond={:?} in {}", pc, r, frames.join(" > "));
                         }
                         // Every inlined activation on the stack has now branched
                         // dynamically: remember its context (see `do_call`).
@@ -18282,10 +18283,22 @@ impl Js {
     /// decided anything (a parser over a static source: engine262's scope
     /// `with` walks its flags with `forEach`) it ends where the program's
     /// own run would.
+    /// (A runtime value decides this recursion when a dynamic branch was
+    /// taken in this activation, or in some frame from an earlier
+    /// activation of the function up to this one: the same test as a
+    /// recursive call's (see `do_call`). A dynamic branch only in a caller
+    /// of the whole recursion, one taken before it began, decides nothing
+    /// in it: every step from its first activation on is static.)
     fn may_fold_builtins(&self, s: &State, m: &str) -> bool {
         let f = s.top();
-        let recursive = self.is_recursive[f.func] || s.frames[..s.frames.len() - 1].iter().any(|g| g.func == f.func);
-        !recursive || (!f.dyn_ctl && !makes_array(m))
+        let earlier = &s.frames[..s.frames.len() - 1];
+        let recursive = self.is_recursive[f.func] || earlier.iter().any(|g| g.func == f.func);
+        if !recursive {
+            return true;
+        }
+        let steered = f.branched
+            || earlier.iter().enumerate().any(|(i, g)| g.func == f.func && s.frames[i..].iter().any(|h| h.branched));
+        !steered && !makes_array(m)
     }
 
     /// An `Array.prototype` method that runs no user code, on the modeled
