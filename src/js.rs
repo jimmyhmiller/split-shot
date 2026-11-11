@@ -7554,8 +7554,12 @@ impl Js {
             return true;
         }
         // A declared unknown value (`__abstract(type, name)`): reading it
-        // does nothing else.
+        // does nothing else. A fresh symbol of a primitive description: an
+        // unread one is no one's.
         if let RExpr::Global(g) = &**c {
+            if g == "Symbol" && self.pristine("Symbol") && args.len() <= 1 && args.iter().all(|x| matches!(x, RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null)) {
+                return true;
+            }
             return !self.intrinsics.is_empty() && TYPED_INTRINSICS.contains(&g.as_str());
         }
         let RExpr::Get(o, m) = &**c else { return false };
@@ -11331,6 +11335,17 @@ impl Js {
                     }
                     if empty(&b) && self.makes_string(s, &a) {
                         return self.push(s, a);
+                    }
+                }
+                // Two fresh symbols' variables: the same symbol when they are
+                // one variable (read at once), different ones otherwise (each
+                // a `Symbol()`'s own result).
+                if matches!(op, Bop::Eq | Bop::Ne) {
+                    if let (Abs::Dyn(RExpr::Var(x)), Abs::Dyn(RExpr::Var(y))) = (&a, &b) {
+                        let temps = self.symbol_temps.borrow();
+                        if temps.contains(x) && temps.contains(y) {
+                            return self.push(s, Abs::Bool((x == y) == (*op == Bop::Eq)));
+                        }
                     }
                 }
                 // A string with a lone surrogate (`ILL_FORMED_STRING`): `+` of
@@ -18804,6 +18819,19 @@ impl Js {
                     return Step::Continue;
                 }
             }
+            // (A fresh symbol's `toString()`: `Symbol(description)`.)
+            if let (RExpr::Var(v), "toString", true) = (&**obj, method.as_str(), self.pristine("Symbol")) {
+                let desc = self.symbol_temps.borrow().contains(v).then(|| s.facts.get(v).and_then(|i| i.fixed.iter().find(|(k, _)| k == "description").map(|(_, e)| e.clone()))).flatten();
+                if let Some(d) = desc {
+                    let text = match d {
+                        RExpr::Str(t) => t,
+                        _ => String::new(),
+                    };
+                    s.top_mut().pc += 1;
+                    s.top_mut().ostack.push(Abs::Str(format!("Symbol({text})")));
+                    return Step::Continue;
+                }
+            }
             // (A string with a lone surrogate: over its code units.)
             if self.pristine("String") {
                 if let Some(units) = string_units(&Abs::Dyn((**obj).clone())).filter(|_| matches!(&**obj, RExpr::Opaque(op, _) if op == ILL_FORMED_STRING)) {
@@ -18952,6 +18980,28 @@ impl Js {
                     .or_else(|| self.regex_exec_info(s, &callee, &this));
                 let nonthrow = matches!(&callee, Abs::Dyn(e) if self.call_nonthrowing(s, e, &args));
                 let symbol_call = matches!(&callee, Abs::Dyn(e) if self.is_symbol_call(e, &args)) && this == Abs::Undef;
+                // (A fresh symbol's description, `ToString` of a primitive
+                // argument.)
+                let symbol_desc: Option<Option<String>> = match args.first() {
+                    None | Some(Abs::Undef) => Some(None),
+                    Some(Abs::Str(t)) => Some(Some(t.clone())),
+                    Some(Abs::Num(n)) => Some(Some(n.to_js_string())),
+                    Some(Abs::Bool(b)) => Some(Some(b.to_string())),
+                    Some(Abs::Null) => Some(Some("null".into())),
+                    _ => None,
+                };
+                // (What is known of it: a symbol, whose `description` is
+                // fixed. The path knows it, from this definition on: see
+                // `track_defs`.)
+                let assign_info = match (&symbol_desc, symbol_call) {
+                    (Some(d), true) => {
+                        let mut i = Info::of_types(crate::facts::T_SYM);
+                        i.truthy = Some(true);
+                        i.fixed = vec![("description".into(), d.clone().map(RExpr::Str).unwrap_or(RExpr::Undef))];
+                        Some(i)
+                    }
+                    _ => assign_info,
+                };
                 if env_flag!("CALL_DEBUG") && !s.handlers.is_empty() && !nonthrow {
                     eprintln!("[CALL] pc={pc} nonthrow={nonthrow} callee={:?} nargs={}", callee, args.len());
                 }
@@ -20727,6 +20777,7 @@ impl Js {
 
     /// `Instr::GetProp(k)`: read property `k` of the value on top of the stack.
     fn get_prop_step(&self, s: &mut State, k: &String, pc: usize, out: &mut Vec<Op>) -> Step<Js> {
+
         // (A string with a lone surrogate: its length in code units.)
         if k == "length" && self.pristine("String") {
             if let Some(v) = s.top().ostack.last().filter(|v| is_ill_formed_string(v)).and_then(string_units) {

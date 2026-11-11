@@ -181,7 +181,7 @@
  },
  "class_modeled_members.js": {
   "merged": 0,
-  "gap": 15
+  "gap": 3
  },
  "class_observables.js": {
   "merged": 0,
@@ -221,7 +221,7 @@
  },
  "computed_key_names.js": {
   "merged": 0,
-  "gap": 75
+  "gap": 3
  },
  "continue_join.js": {
   "merged": 0,
@@ -384,6 +384,10 @@
   "gap": 0
  },
  "fresh_identity_through_runtime.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "fresh_symbol_description_identity.js": {
   "merged": 0,
   "gap": 0
  },
@@ -857,7 +861,7 @@
  },
  "std_object_group_fallback_selfhosted.js": {
   "merged": 0,
-  "gap": 225
+  "gap": 208
  },
  "std_object_group_selfhosted.js": {
   "merged": 0,
@@ -921,7 +925,7 @@
  },
  "symbol_keys.js": {
   "merged": 0,
-  "gap": 23
+  "gap": 7
  },
  "tagged_templates.js": {
   "merged": 0,
