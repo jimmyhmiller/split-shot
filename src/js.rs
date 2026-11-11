@@ -2448,6 +2448,11 @@ struct Frame {
     /// `PartialEq`/`Hash`): it steers that one decision and must not split
     /// otherwise-equal states.
     dyn_ctl: bool,
+    /// The heads of the loops of this activation it entered as runtime
+    /// loops (see `jump_to`): while its `pc` is in one (`loop_back`), what
+    /// it does may run any number of times at runtime. Not part of the
+    /// frame's identity either.
+    runtime_loops: Vec<usize>,
     /// A dynamic branch was taken in this activation itself (not inherited
     /// from its caller). A recursive call is checked for static progress
     /// against an earlier activation of its function only when some activation
@@ -6840,6 +6845,7 @@ impl Js {
                 locals,
                 ostack: Vec::new(),
                 dyn_ctl: false,
+                runtime_loops: Vec::new(),
                 branched: false,
                 yields: 0,
                 // A residual function's parameters are all dynamic.
@@ -7083,6 +7089,7 @@ impl Js {
                 locals,
                 ostack,
                 dyn_ctl: false,
+                runtime_loops: Vec::new(),
                 branched: false,
                 yields: 0,
                 entry_skel: vec![Skel::Dyn; nslots + nostack].into(),
@@ -7597,6 +7604,7 @@ impl Js {
                 locals,
                 ostack: Vec::new(),
                 dyn_ctl: false,
+                runtime_loops: Vec::new(),
                 branched: false,
                 yields: 0,
                 entry_skel: Vec::new().into(),
@@ -12130,10 +12138,11 @@ impl Js {
                 let base = s.top().ostack.len() - *ncap;
                 let captured: Vec<Abs> = s.top_mut().ostack.split_off(base);
                 let mut obj = HeapObj::closure(*fid, captured);
-                // (Made at most once per run: in `main`, every decision on the
-                // way here static.)
+                // (Made at most once per run: in `main` or the load code, in
+                // no runtime loop. A runtime branch on the way decides only
+                // which path makes it.)
                 if let HeapObj::Closure { once, .. } = &mut obj {
-                    *once = !self.in_residual_body.get() && s.frames.iter().all(|f| !f.dyn_ctl);
+                    *once = !self.in_residual_body.get() && !self.in_runtime_loop(s);
                 }
                 let addr = s.alloc(obj);
                 self.push(s, Abs::Ref(addr))
@@ -19117,6 +19126,7 @@ impl Js {
                 locals,
                 ostack: Vec::new(),
                 dyn_ctl,
+                runtime_loops: Vec::new(),
                 branched: false,
                 yields: 0,
                 entry_skel,
@@ -19138,6 +19148,7 @@ impl Js {
             locals,
             ostack: Vec::new(),
             dyn_ctl,
+            runtime_loops: Vec::new(),
             branched: false,
             yields: 0,
             entry_skel,
@@ -25247,6 +25258,12 @@ impl Js {
         (head, self.in_residual_body.get(), s.top().entry_skel.clone())
     }
 
+    /// Is some activation of `s` in a loop it entered as a runtime loop
+    /// (see `Frame::runtime_loops`)?
+    fn in_runtime_loop(&self, s: &State) -> bool {
+        s.frames.iter().any(|f| f.runtime_loops.iter().any(|&h| h <= f.pc && f.pc <= self.loop_back[h]))
+    }
+
     fn dynamically_controlled(&self, s: &State) -> bool {
         if !self.loop_head[s.top().pc] {
             return false;
@@ -25582,6 +25599,9 @@ impl Js {
         prune_joins(&mut ns);
         self.clear_dead(&mut ns);
         if self.loop_head[target] && self.dynamically_controlled(&ns) {
+            if !ns.top().runtime_loops.contains(&target) {
+                ns.top_mut().runtime_loops.push(target);
+            }
             // Tracked globals become runtime ones across a residual loop.
             self.sync_globals(&mut ns, true, out);
             // Materialize loop-modified primitive slots AND any heap-reference
@@ -27408,6 +27428,7 @@ fn canonicalize_state(s: &State) -> State {
             locals: f.locals.iter().map(&remap).collect(),
             ostack: f.ostack.iter().map(&remap).collect(),
             dyn_ctl: f.dyn_ctl,
+            runtime_loops: f.runtime_loops.clone(),
             branched: f.branched,
             yields: f.yields,
             entry_skel: f.entry_skel.clone(),

@@ -195,6 +195,10 @@
   "merged": 0,
   "gap": 17
  },
+ "closure_after_runtime_branch_made_once.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "closure_counter.js": {
   "merged": 0,
   "gap": 0
@@ -204,6 +208,10 @@
   "gap": 0
  },
  "closure_static_captures.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "closure_tree_compiles.js": {
   "merged": 0,
   "gap": 0
  },
@@ -373,7 +381,7 @@
  },
  "fresh_symbol_key_holders.js": {
   "merged": 0,
-  "gap": 19
+  "gap": 40
  },
  "fresh_symbol_key_read.js": {
   "merged": 0,
@@ -778,6 +786,10 @@
  "replace_function_static.js": {
   "merged": 0,
   "gap": 14
+ },
+ "residual_for_in_native.js": {
+  "merged": 0,
+  "gap": 0
  },
  "script_closures.js": {
   "merged": 0,
