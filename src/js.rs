@@ -17905,7 +17905,12 @@ impl Js {
                     // once per element.)
                     let known_callback = matches!(m, "filter" | "reduce" | "reduceRight" | "forEach" | "map" | "flatMap" | "some" | "every")
                         && matches!(args.first(), Some(Abs::Ref(f)) if matches!(&s.heap[f], HeapObj::Closure { known: true, .. }));
-                    if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), self.may_fold_builtins(s, m), native_only, species) {
+                    // (In an unsteered recursion, a method making an array
+                    // that only calls a known function of the program per
+                    // element: a compiler mapping each node of a static
+                    // tree to its code, `tokens.map(t => compile(t))`.)
+                    let may_fold = self.may_fold_builtins(s, m) || (known_callback && matches!(m, "map" | "filter" | "flatMap") && self.recursion_unsteered(s));
+                    if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), may_fold, native_only, species) {
                       if known_callback || self.prelude_unfolds(s, fid, &args, &this, pc) {
                         let f = s.alloc(HeapObj::closure(fid, vec![]));
                         let n = args.len();
@@ -18884,8 +18889,15 @@ impl Js {
         let recursive = self.is_recursive[fid] || s.frames.iter().any(|f| f.func == fid);
         let context: Vec<Abs> = args.iter().chain(captured.iter()).cloned().collect();
         let now = skeleton_of(&s.heap, &context);
+        // (Every argument dynamic, but a closure whose captures are another
+        // static structure than every active activation's: the same code
+        // over another node of a static tree of closures, a compiled
+        // template's group calling the encoders it closes over. Its depth is
+        // the tree's.)
+        let captures_progress = !captured.is_empty()
+            && s.frames.iter().filter(|f| f.func == fid).all(|f| skel_progress(&f.entry_skel, &now));
         let dynamic_recursion = recursive
-            && ((!args.is_empty() && args.iter().all(|a| a.is_dynamic()))
+            && ((!args.is_empty() && args.iter().all(|a| a.is_dynamic()) && !captures_progress)
                 || (s.top().dyn_ctl
                     && !context.is_empty()
                     && s.frames.iter().enumerate().any(|(i, f)| {
@@ -19771,9 +19783,15 @@ impl Js {
         if !recursive {
             return true;
         }
-        let steered = f.branched
-            || earlier.iter().enumerate().any(|(i, g)| g.func == f.func && s.frames[i..].iter().any(|h| h.branched));
-        !steered && !makes_array(m)
+        self.recursion_unsteered(s) && !makes_array(m)
+    }
+
+    /// Has no runtime value decided the recursion the top activation is
+    /// in (see `may_fold_builtins`)?
+    fn recursion_unsteered(&self, s: &State) -> bool {
+        let f = s.top();
+        let earlier = &s.frames[..s.frames.len() - 1];
+        !(f.branched || earlier.iter().enumerate().any(|(i, g)| g.func == f.func && s.frames[i..].iter().any(|h| h.branched)))
     }
 
     /// An `Array.prototype` method that runs no user code, on the modeled
@@ -20755,7 +20773,11 @@ impl Js {
                     // arrays that multiply the specializer's states
                     // without bound (a specializer running over an
                     // unknown program walks its static tables this way).
-                    if (self.array_prelude.contains_key(k.as_str()) || matches!(k.as_str(), "values" | "keys" | "entries")) && self.may_fold_builtins(s, k) && self.pristine("Array") {
+                    // (In an unsteered recursion, `map`, `filter` and
+                    // `flatMap` too: the call unfolds only with a known
+                    // callback, see `do_call`.)
+                    let fold = self.may_fold_builtins(s, k) || (matches!(k.as_str(), "map" | "filter" | "flatMap") && self.recursion_unsteered(s));
+                    if (self.array_prelude.contains_key(k.as_str()) || matches!(k.as_str(), "values" | "keys" | "entries")) && fold && self.pristine("Array") {
                         let baddr = s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{k}"), data: vec![].into(), ext: None });
                         return self.push(s, Abs::Ref(baddr));
                     }

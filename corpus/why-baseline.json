@@ -333,7 +333,7 @@
  },
  "feature_tests_on_standard_prototypes.js": {
   "merged": 0,
-  "gap": 2
+  "gap": 3
  },
  "final_cells.js": {
   "merged": 0,
@@ -737,7 +737,7 @@
  },
  "recursive_static_builtins.js": {
   "merged": 0,
-  "gap": 8
+  "gap": 4
  },
  "redefine_keeps_attributes.js": {
   "merged": 0,
