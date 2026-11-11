@@ -2371,7 +2371,9 @@ impl Heap {
                 m.remove(a);
                 continue;
             }
-            if o.child_refs().into_iter().any(|c| replace(c).is_some()) {
+            let mut any = false;
+            o.for_each_child_ref(&mut |c| any |= replace(c).is_some());
+            if any {
                 let mut o2 = (**o).clone();
                 for v in o2.children_mut() {
                     if let Abs::Ref(c) = v {
@@ -25888,7 +25890,7 @@ impl Js {
         let mut work = vec![addr];
         while let Some(a) = work.pop() {
             if out.insert(a) {
-                work.extend(heap[&a].child_refs());
+                heap[&a].for_each_child_ref(&mut |c| work.push(c));
             }
         }
     }
@@ -28734,10 +28736,7 @@ fn canonicalize_state(s: &State) -> State {
         let addr = order[i];
         i += 1;
         if let Some(obj) = s.heap.get(&addr) {
-            let kids: Vec<usize> = obj.child_refs();
-            for c in kids {
-                visit(c, &mut mapping, &mut order);
-            }
+            obj.for_each_child_ref(&mut |c| visit(c, &mut mapping, &mut order));
         }
     }
     let remap = |v: &Abs| -> Abs {
@@ -28868,11 +28867,16 @@ fn iso_equal(a: &State, b: &State) -> bool {
         if std::mem::discriminant(x) != std::mem::discriminant(y) {
             return false;
         }
-        let (refs_x, refs_y) = (x.child_refs(), y.child_refs());
-        if refs_x.len() != refs_y.len() {
+        let count = |o: &HeapObj| {
+            let mut n = 0usize;
+            o.for_each_child_ref(&mut |_| n += 1);
+            n
+        };
+        let n = count(x);
+        if n != count(y) {
             return false;
         }
-        if refs_x.is_empty() {
+        if n == 0 {
             if x != y {
                 return false;
             }
@@ -29000,7 +29004,9 @@ fn iso_hash<H: std::hash::Hasher>(s: &State, h: &mut H) {
             h.write_u8(0);
             continue;
         };
-        if o.child_refs().is_empty() {
+        let mut refs = false;
+        o.for_each_child_ref(&mut |_| refs = true);
+        if !refs {
             o.hash(h);
             continue;
         }
