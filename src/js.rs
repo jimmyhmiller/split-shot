@@ -27184,9 +27184,10 @@ impl Js {
     /// left to runtime throws in its `try` then ends the load, as it does
     /// through the handler, and what the handler would have written is
     /// state of a program that did not load. (A `throw` the specializer
-    /// runs itself still goes through the handler.)
+    /// runs itself still goes through the handler.) (`PE_NO_LOAD_RETHROW`:
+    /// every such `try` a runtime one, as before.)
     fn load_rethrow_handler(&self, s: &State, catch_pc: usize, exc_slot: Option<usize>, end: usize) -> bool {
-        if !self.entry.loading.get() || self.probing.get() || !self.halt_at.borrow().is_empty() || self.in_residual_body.get() || !env_flag!("PE_LOAD_RETHROW") {
+        if !self.entry.loading.get() || self.probing.get() || !self.halt_at.borrow().is_empty() || self.in_residual_body.get() || env_flag!("PE_NO_LOAD_RETHROW") {
             return false;
         }
         if s.handlers.iter().any(|h| !h.transparent) {
