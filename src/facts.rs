@@ -915,6 +915,37 @@ impl Info {
             })
     }
 
+    /// Every variable `mentions` is true of (a superset is not needed:
+    /// exactly what it looks at, in no particular order, perhaps repeated).
+    pub fn mention_vars(&self, out: &mut Vec<usize>) {
+        let e = |x: &RExpr, out: &mut Vec<usize>| crate::coalesce::rexpr_vars(x, out);
+        self.eq.iter().chain(self.ne.iter()).for_each(|x| e(x, out));
+        self.fixed.iter().for_each(|(_, x)| e(x, out));
+        for (_, i) in &self.props {
+            i.mention_vars(out);
+        }
+        if let Some(c) = &self.cases {
+            e(&c.0, out);
+            c.1.mention_vars(out);
+            c.2.mention_vars(out);
+        }
+        if let Some(f) = &self.callee {
+            for k in f.caps.iter().map(|c| &c.value).chain(f.methods.iter().map(|(_, m)| m)).chain(f.statics.iter().map(|(_, m)| m)) {
+                k.vars(out);
+            }
+            if let Some(p) = &f.object.parent {
+                e(p, out);
+            }
+            for (_, p) in &f.object.props {
+                match p {
+                    Some(FnObjectValue::Prim(x)) => e(x, out),
+                    Some(FnObjectValue::Record(fields)) => fields.iter().for_each(|(_, x)| e(x, out)),
+                    None => {}
+                }
+            }
+        }
+    }
+
     /// Every variable this names (its cases' conditions, constants, known
     /// and frozen properties, and what it knows of a function: captures,
     /// methods, statics, parent).

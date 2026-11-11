@@ -13693,13 +13693,27 @@ impl Js {
     }
 
     fn track_defs_inner(&self, st: &mut State, ops: &[Op]) {
+        if ops.is_empty() {
+            return;
+        }
+        // (The variables some fact mentions, or once did: a variable
+        // assigned that none does leaves the facts as they are.)
+        let mut mentioned: std::collections::HashSet<usize, FxBuild> = std::collections::HashSet::default();
+        let note = |i: &Info, m: &mut std::collections::HashSet<usize, FxBuild>| {
+            let mut vs = Vec::new();
+            i.mention_vars(&mut vs);
+            m.extend(vs);
+        };
+        for i in st.facts.values() {
+            note(i, &mut mentioned);
+        }
         for op in ops {
             // (A fact whose cases name a variable this assigns no longer
             // holds.)
             let mut defs = Vec::new();
             op_defs_deep(op, &mut defs);
             for d in &defs {
-                if st.facts.values().any(|i| i.mentions(*d)) {
+                if mentioned.contains(d) && st.facts.values().any(|i| i.mentions(*d)) {
                     st.facts = st.facts.iter().filter(|(_, i)| !i.mentions(*d)).map(|(k, i)| (*k, i.clone())).collect();
                 }
             }
@@ -13720,16 +13734,20 @@ impl Js {
                     if info.is_top() {
                         st.facts.remove(var);
                     } else {
+                        note(&info, &mut mentioned);
                         st.facts.insert(*var, info);
                     }
                 }
                 Op::NewObject { dst, .. } | Op::NewArray { dst, .. } if self.pending_info.borrow().contains_key(dst) => {
                     let info = self.pending_info.borrow()[dst].clone();
+                    note(&info, &mut mentioned);
                     st.facts.insert(*dst, info);
                 }
                 Op::NewObject { dst, .. } | Op::NewArray { dst, .. } => match self.pending_fixed.borrow().get(dst) {
                     Some(fixed) => {
-                        st.facts.insert(*dst, Info { types: crate::facts::T_OBJ, truthy: Some(true), fixed: fixed.clone(), ..Info::top() });
+                        let info = Info { types: crate::facts::T_OBJ, truthy: Some(true), fixed: fixed.clone(), ..Info::top() };
+                        note(&info, &mut mentioned);
+                        st.facts.insert(*dst, info);
                     }
                     None => {
                         st.facts.remove(dst);
