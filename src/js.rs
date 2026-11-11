@@ -5832,12 +5832,15 @@ impl Js {
         if env_flag!("PE_NO_CLEANUP") {
             return;
         }
-        let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Main));
+        let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Main, main));
         let map = crate::coalesce::coalesce_vars_named(main, &self.main_keep(), names.as_ref());
         self.coalesced.borrow_mut().insert(ResidualPart::Main, map);
         let n = self.residual_fns.borrow().len();
         for rfid in 0..n {
-            let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Fn(rfid)));
+            let names = self.source_names.get().then(|| {
+                let fns = self.residual_fns.borrow();
+                self.var_source_names(ResidualPart::Fn(rfid), &fns[rfid].body)
+            });
             let mut fns = self.residual_fns.borrow_mut();
             let rf = &mut fns[rfid];
             let keep = Js::residual_fn_keep(rf);
@@ -7720,17 +7723,26 @@ impl Js {
     /// entry's input. (For the residual's text to name them as the source
     /// does: see `codegen::program_to_js`.) A variable `coalesce_vars` made
     /// of several has the one name they have, if it is one.
-    pub fn var_source_names(&self, part: ResidualPart) -> HashMap<usize, String> {
+    pub fn var_source_names(&self, part: ResidualPart, prog: &Program<Op, Cond>) -> HashMap<usize, String> {
         let mut made: HashMap<usize, String> = HashMap::new();
         let name = |func: usize, slot: usize| -> Option<String> {
             let n = self.slot_names.get(func)?.get(slot)?;
             // (A slot two variables share in turn has no one name.)
             (!n.is_empty() && !n.contains('/')).then(|| n.clone())
         };
-        for (id, k) in self.var_ids.borrow().keys.iter() {
-            if let VarKey::Stable(func, slot) = k {
+        // (The variables it names: its program's, and those its cleanup made
+        // into them.)
+        let mut vars: std::collections::HashSet<usize, FxBuild> = Default::default();
+        program_vars(prog, &mut vars);
+        if let Some(m) = self.coalesced.borrow().get(&part) {
+            let into: Vec<usize> = m.iter().filter(|(_, to)| vars.contains(*to)).map(|(from, _)| *from).collect();
+            vars.extend(into);
+        }
+        let ids = self.var_ids.borrow();
+        for v in &vars {
+            if let Some(VarKey::Stable(func, slot)) = ids.keys.get(v) {
                 if let Some(n) = name(*func, *slot) {
-                    made.insert(*id, n);
+                    made.insert(*v, n);
                 }
             }
         }
@@ -7740,15 +7752,14 @@ impl Js {
                 // (Its captures' variables, then its parameters': a capture
                 // by the slot it is in, not one of the values it is given
                 // besides.)
-                if let Some(fid) = fns.get(rfid).and_then(|rf| rf.fid) {
-                    for (id, k) in self.var_ids.borrow().keys.iter() {
-                        let slot = match k {
-                            VarKey::Residual(0, r, i) if *r == rfid && *i < self.ncaptured[fid] => *i,
-                            VarKey::Residual(1, r, j) if *r == rfid => self.ncaptured[fid] + *j,
-                            _ => continue,
-                        };
-                        if let Some(n) = name(fid, slot) {
-                            made.insert(*id, n);
+                if let Some(rf) = fns.get(rfid) {
+                    if let Some(fid) = rf.fid {
+                        let caps = (0..self.ncaptured[fid]).map(|i| (VarKey::Residual(0, rfid, i), i));
+                        let params = (0..rf.nparams).map(|j| (VarKey::Residual(1, rfid, j), self.ncaptured[fid] + j));
+                        for (k, slot) in caps.chain(params) {
+                            if let (Some(id), Some(n)) = (ids.ids.get(&k), name(fid, slot)) {
+                                made.insert(*id, n);
+                            }
                         }
                     }
                 }
@@ -8279,7 +8290,7 @@ impl Js {
         self.clean_load();
         let mut l = self.entry.load.borrow_mut();
         let Some(load) = l.as_mut() else { return };
-        let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Load));
+        let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Load, load));
         let map = crate::coalesce::coalesce_vars_named(load, &self.main_keep(), names.as_ref());
         self.coalesced.borrow_mut().insert(ResidualPart::Load, map);
     }
@@ -29231,6 +29242,32 @@ fn op_defs_deep(op: &Op, out: &mut Vec<usize>) {
         }
         _ => {}
     }
+}
+
+/// Every variable `prog` names: what its operations and conditions read and
+/// write, in its `try`s' programs too.
+fn program_vars(prog: &Program<Op, Cond>, out: &mut std::collections::HashSet<usize, FxBuild>) {
+    let mut vs = Vec::new();
+    for b in &prog.blocks {
+        for op in &b.ops {
+            if let Some(d) = crate::inline::op_def(op) {
+                vs.push(d);
+            }
+            for e in crate::inline::op_exprs(op) {
+                crate::coalesce::rexpr_vars(e, &mut vs);
+            }
+            if let Op::Try { body, catch_slot, catch_body, finally_body } = op {
+                vs.extend(*catch_slot);
+                for p in [Some(body), Some(catch_body), finally_body.as_ref()].into_iter().flatten() {
+                    program_vars(p, out);
+                }
+            }
+        }
+        if let Terminator::Cond { cond: Cond::Falsy(r), .. } = &b.term {
+            crate::coalesce::rexpr_vars(r, &mut vs);
+        }
+    }
+    out.extend(vs);
 }
 
 /// Replace a reference to an escaped object with its residual variable.

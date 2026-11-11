@@ -61,12 +61,12 @@ pub fn program_to_js(
         if SOURCE_NAMES_ON.with(|on| on.get()) {
             use partial::js::ResidualPart;
             let at = |p: &Program<Op, Cond>| p as *const Program<Op, Cond> as usize;
-            m.insert(at(main_prog), vm.var_source_names(ResidualPart::Main));
+            m.insert(at(main_prog), vm.var_source_names(ResidualPart::Main, main_prog));
             if let Some(lp) = load_prog {
-                m.insert(at(lp), vm.var_source_names(ResidualPart::Load));
+                m.insert(at(lp), vm.var_source_names(ResidualPart::Load, lp));
             }
             for (rfid, rf) in vm.residual_fns().iter().enumerate() {
-                m.insert(at(&rf.body), vm.var_source_names(ResidualPart::Fn(rfid)));
+                m.insert(at(&rf.body), vm.var_source_names(ResidualPart::Fn(rfid), &rf.body));
             }
         }
     });

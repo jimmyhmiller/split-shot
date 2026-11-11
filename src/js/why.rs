@@ -41,8 +41,9 @@
 //! invents a cause that is not in the program.
 
 use super::*;
+use crate::residual::Block;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 /// The merge of paths a variable was made by (see `Js::materialize`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -355,7 +356,121 @@ impl Report {
     }
 }
 
-type Roots = BTreeSet<u32>;
+/// A set of roots (their ids, dense from 0): a bitset, as the analysis
+/// unions them at every operation of every round.
+#[derive(Clone, Default, Debug)]
+struct Roots {
+    w: Vec<u64>,
+}
+
+impl Roots {
+    /// The words but trailing empty ones (two equal sets' are equal).
+    fn words(&self) -> &[u64] {
+        let n = self.w.iter().rposition(|w| *w != 0).map_or(0, |i| i + 1);
+        &self.w[..n]
+    }
+}
+
+impl PartialEq for Roots {
+    fn eq(&self, o: &Roots) -> bool {
+        self.words() == o.words()
+    }
+}
+
+impl Eq for Roots {}
+
+impl std::hash::Hash for Roots {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        self.words().hash(h);
+    }
+}
+
+impl Roots {
+    fn new() -> Roots {
+        Roots { w: Vec::new() }
+    }
+    fn insert(&mut self, x: u32) -> bool {
+        let (i, b) = ((x / 64) as usize, 1u64 << (x % 64));
+        if self.w.len() <= i {
+            self.w.resize(i + 1, 0);
+        }
+        let had = self.w[i] & b != 0;
+        self.w[i] |= b;
+        !had
+    }
+    fn contains(&self, x: &u32) -> bool {
+        let (i, b) = ((*x / 64) as usize, 1u64 << (*x % 64));
+        self.w.get(i).is_some_and(|w| w & b != 0)
+    }
+    fn len(&self) -> usize {
+        self.w.iter().map(|w| w.count_ones() as usize).sum()
+    }
+    fn is_empty(&self) -> bool {
+        self.w.iter().all(|w| *w == 0)
+    }
+    fn clear(&mut self) {
+        self.w.clear();
+    }
+    /// Add `o`'s roots; whether any was new.
+    fn union_with(&mut self, o: &Roots) -> bool {
+        if self.w.len() < o.w.len() {
+            self.w.resize(o.w.len(), 0);
+        }
+        let mut grew = false;
+        for (a, b) in self.w.iter_mut().zip(&o.w) {
+            let n = *a | *b;
+            grew |= n != *a;
+            *a = n;
+        }
+        grew
+    }
+    /// The roots, ascending.
+    fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.w.iter().enumerate().flat_map(|(i, w)| {
+            let mut w = *w;
+            std::iter::from_fn(move || {
+                if w == 0 {
+                    return None;
+                }
+                let t = w.trailing_zeros();
+                w &= w - 1;
+                Some(i as u32 * 64 + t)
+            })
+        })
+    }
+}
+
+impl Extend<u32> for Roots {
+    fn extend<I: IntoIterator<Item = u32>>(&mut self, it: I) {
+        for x in it {
+            self.insert(x);
+        }
+    }
+}
+
+impl<'a> Extend<&'a u32> for Roots {
+    fn extend<I: IntoIterator<Item = &'a u32>>(&mut self, it: I) {
+        for x in it {
+            self.insert(*x);
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Roots {
+    type Item = u32;
+    type IntoIter = Box<dyn Iterator<Item = u32> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+impl FromIterator<u32> for Roots {
+    fn from_iter<I: IntoIterator<Item = u32>>(it: I) -> Roots {
+        let mut r = Roots::new();
+        r.extend(it);
+        r
+    }
+}
 
 /// What a residual call calls.
 enum Callee {
@@ -467,6 +582,11 @@ struct Analysis<'a> {
     /// is the run's anyway (set after the first pass).
     varies: HashSet<usize>,
     changed: bool,
+    /// What grew since the round began: variables, globals, residual
+    /// functions' returns (see `fixpoint`).
+    grew_vars: HashSet<usize>,
+    grew_globals: HashSet<String>,
+    grew_rets: HashSet<usize>,
 }
 
 impl<'a> Analysis<'a> {
@@ -492,8 +612,11 @@ impl<'a> Analysis<'a> {
         }
         let e = self.var.entry(v).or_default();
         let n = e.len();
-        e.extend(rs.iter().copied());
-        self.changed |= e.len() != n;
+        e.union_with(&rs);
+        if e.len() != n {
+            self.changed = true;
+            self.grew_vars.insert(v);
+        }
     }
 
     fn fn_name(&self, func: usize) -> &str {
@@ -579,7 +702,7 @@ impl<'a> Analysis<'a> {
     fn var_roots(&mut self, v: usize) -> Roots {
         let mut out = self.var_own(v);
         if let Some(rs) = self.var.get(&v) {
-            out.extend(rs.iter().copied());
+            out.union_with(&rs);
         }
         out
     }
@@ -612,7 +735,7 @@ impl<'a> Analysis<'a> {
             RExpr::Global(g) => self.global_roots(g),
             RExpr::Bin(_, a, b) | RExpr::Index(a, b) => {
                 let mut r = self.expr(a, None);
-                r.extend(self.expr(b, None));
+                r.union_with(&self.expr(b, None));
                 r
             }
             RExpr::Get(o, _) | RExpr::Delete(o) | RExpr::OwnMember { obj: o, .. } => self.expr(o, None),
@@ -626,7 +749,7 @@ impl<'a> Analysis<'a> {
             RExpr::ObjectLit(fs) => {
                 let mut r = Roots::new();
                 for (_, x) in fs {
-                    r.extend(self.expr(x, None));
+                    r.union_with(&self.expr(x, None));
                 }
                 r
             }
@@ -641,14 +764,14 @@ impl<'a> Analysis<'a> {
             }
             RExpr::BoundMethod { func, recv } => {
                 let mut r = self.expr(func, None);
-                r.extend(self.expr(recv, None));
+                r.union_with(&self.expr(recv, None));
                 r
             }
             RExpr::Verbatim(..) => self.one(Root::Verbatim),
             RExpr::ClassSrc { parent, caps, .. } => {
                 let mut r = self.all(caps);
                 if let Some(p) = parent {
-                    r.extend(self.expr(p, None));
+                    r.union_with(&self.expr(p, None));
                 }
                 r.insert(self.id(Root::Verbatim));
                 r
@@ -660,7 +783,7 @@ impl<'a> Analysis<'a> {
     fn all(&mut self, xs: &[RExpr]) -> Roots {
         let mut r = Roots::new();
         for x in xs {
-            r.extend(self.expr(x, None));
+            r.union_with(&self.expr(x, None));
         }
         r
     }
@@ -745,7 +868,7 @@ impl<'a> Analysis<'a> {
                     None if direct => self.bind(*rfid, caps, args, false),
                     None => self.bind(*rfid, &[], &[], true),
                 }
-                r.extend(self.ret.get(*rfid).cloned().unwrap_or_default());
+                r.union_with(&self.ret.get(*rfid).cloned().unwrap_or_default());
                 let why = dst
                     .and_then(|d| match self.js.var_ids.borrow().keys.get(&d) {
                         Some(VarKey::OpaqueCall(pc)) => Some(*pc),
@@ -758,16 +881,18 @@ impl<'a> Analysis<'a> {
                 }
             }
             Callee::Host(name) => {
-                r.extend(self.expr(c, None));
+                r.union_with(&self.expr(c, None));
                 r.insert(self.id(Root::Host(name.clone())));
             }
             Callee::Builtin(name) => {
-                r.extend(self.expr(c, None));
+                r.union_with(&self.expr(c, None));
                 if impure_builtin(name, args.len(), new) {
                     r.insert(self.id(Root::Impure(name.clone())));
                 }
             }
-            Callee::Value => r.extend(self.expr(c, None)),
+            Callee::Value => {
+                r.union_with(&self.expr(c, None));
+            }
         }
         // What the callee may do to an object it is given reaches every later
         // read of the object.
@@ -799,7 +924,7 @@ impl<'a> Analysis<'a> {
     fn store(&mut self, obj: &RExpr, parts: &[&RExpr]) {
         let mut r = Roots::new();
         for p in parts {
-            r.extend(self.expr(p, None));
+            r.union_with(&self.expr(p, None));
         }
         // (What is stored in an object is reachable from it, and what the
         // object is reachable from may change what is stored.)
@@ -826,14 +951,17 @@ impl<'a> Analysis<'a> {
                 let r = self.expr(e, None);
                 if let Some(f) = rfid {
                     let n = self.ret[f].len();
-                    self.ret[f].extend(r);
-                    self.changed |= self.ret[f].len() != n;
+                    self.ret[f].union_with(&r);
+                    if self.ret[f].len() != n {
+                        self.changed = true;
+                        self.grew_rets.insert(f);
+                    }
                 }
             }
             Op::NewObject { dst, fields } => {
                 let mut r = Roots::new();
                 for (_, x) in fields {
-                    r.extend(self.expr(x, None));
+                    r.union_with(&self.expr(x, None));
                 }
                 self.add_var(*dst, &r);
             }
@@ -858,8 +986,11 @@ impl<'a> Analysis<'a> {
                 let r = self.expr(expr, None);
                 let e = self.global.entry(name.clone()).or_default();
                 let n = e.len();
-                e.extend(r);
-                self.changed |= e.len() != n;
+                e.union_with(&r);
+                if e.len() != n {
+                    self.changed = true;
+                    self.grew_globals.insert(name.clone());
+                }
             }
             Op::Try { body, catch_body, finally_body, .. } => {
                 self.flow(body, rfid);
@@ -895,15 +1026,33 @@ impl<'a> Analysis<'a> {
         }
         let globals: Vec<String> = js.entry.dynamic_globals.borrow().iter().cloned().collect();
         for g in globals {
-            self.global.entry(g).or_default().extend(state.iter().copied());
+            self.global.entry(g).or_default().union_with(&state);
         }
     }
 
     fn fixpoint(&mut self, progs: &[(String, Option<usize>, &Program<Op, Cond>)]) {
-        for _ in 0..64 {
+        // (What each program's flow reads: the variables, globals and
+        // residual functions its expressions name. After the first round a
+        // program is flowed again only when one of those grew.)
+        // (By block: each block's operations are flowed again only when
+        // something its own operations read grew.)
+        let deps: Vec<Vec<Deps>> = progs.iter().map(|(_, _, p)| p.blocks.iter().map(Deps::of_block).collect()).collect();
+        for round in 0..64 {
             self.changed = false;
-            for (_, rfid, p) in progs {
-                self.flow(p, *rfid);
+            let (vars, globals, rets) = (std::mem::take(&mut self.grew_vars), std::mem::take(&mut self.grew_globals), std::mem::take(&mut self.grew_rets));
+            for (i, (_, rfid, p)) in progs.iter().enumerate() {
+                for (bi, b) in p.blocks.iter().enumerate() {
+                    let d = &deps[i][bi];
+                    let stale = round == 0
+                        || d.vars.iter().any(|v| vars.contains(v) || self.grew_vars.contains(v))
+                        || d.globals.iter().any(|g| globals.contains(g) || self.grew_globals.contains(g))
+                        || d.rets.iter().any(|f| rets.contains(f) || self.grew_rets.contains(f));
+                    if stale {
+                        for op in &b.ops {
+                            self.flow_op(op, *rfid);
+                        }
+                    }
+                }
             }
             let aliases: Vec<(usize, usize)> = self.aliases.iter().copied().collect();
             for (param, given) in aliases {
@@ -915,6 +1064,65 @@ impl<'a> Analysis<'a> {
                 break;
             }
         }
+    }
+}
+
+/// What a program's flow (`Analysis::flow`) may read: the variables, the
+/// globals and the residual functions (their returns) it names.
+struct Deps {
+    vars: HashSet<usize>,
+    globals: HashSet<String>,
+    rets: HashSet<usize>,
+}
+
+impl Deps {
+    fn of_block(b: &Block<Op, Cond>) -> Deps {
+        let mut d = Deps { vars: HashSet::new(), globals: HashSet::new(), rets: HashSet::new() };
+        d.block(b);
+        d
+    }
+    fn prog(&mut self, p: &Program<Op, Cond>) {
+        for b in &p.blocks {
+            self.block(b);
+        }
+    }
+    fn block(&mut self, b: &Block<Op, Cond>) {
+        {
+            for op in &b.ops {
+                if let Some(v) = crate::inline::op_def(op) {
+                    self.vars.insert(v);
+                }
+                for e in crate::inline::op_exprs(op) {
+                    self.expr(e);
+                }
+                if let Op::AssignGlobal { name, .. } = op {
+                    self.globals.insert(name.clone());
+                }
+                if let Op::Try { body, catch_slot, catch_body, finally_body } = op {
+                    self.vars.extend(*catch_slot);
+                    for q in [Some(body), Some(catch_body), finally_body.as_ref()].into_iter().flatten() {
+                        self.prog(q);
+                    }
+                }
+            }
+            if let Terminator::Cond { cond: Cond::Falsy(r), .. } = &b.term {
+                self.expr(r);
+            }
+        }
+    }
+    fn expr(&mut self, e: &RExpr) {
+        visit_rexpr(e, &mut |x| match x {
+            RExpr::Var(v) => {
+                self.vars.insert(*v);
+            }
+            RExpr::Global(g) => {
+                self.globals.insert(g.clone());
+            }
+            RExpr::FnRef { rfid, .. } | RExpr::NewFn { rfid } => {
+                self.rets.insert(*rfid);
+            }
+            _ => {}
+        });
     }
 }
 
@@ -965,7 +1173,7 @@ impl Units<'_, '_> {
     fn all(&mut self, xs: &[RExpr]) -> Roots {
         let mut r = Roots::new();
         for x in xs {
-            r.extend(self.expr(x, false, None));
+            r.union_with(&self.expr(x, false, None));
         }
         r
     }
@@ -977,7 +1185,7 @@ impl Units<'_, '_> {
         match e {
             RExpr::Bin(_, a, b) => {
                 let mut r = self.expr(a, false, None);
-                r.extend(self.expr(b, false, None));
+                r.union_with(&self.expr(b, false, None));
                 self.work("op", &work_label(e), None, fmt_rexpr(e), r)
             }
             RExpr::Opaque(op, xs) => {
@@ -992,7 +1200,7 @@ impl Units<'_, '_> {
             }
             RExpr::Index(a, b) => {
                 let mut r = self.expr(a, false, None);
-                r.extend(self.expr(b, false, None));
+                r.union_with(&self.expr(b, false, None));
                 if callee {
                     r
                 } else {
@@ -1018,13 +1226,13 @@ impl Units<'_, '_> {
             RExpr::Call(c, args) | RExpr::New(c, args) => {
                 let new = matches!(e, RExpr::New(..));
                 let mut r = self.expr(c, true, None);
-                r.extend(self.all(args));
+                r.union_with(&self.all(args));
                 // (What makes an object or a fresh symbol is an allocation,
                 // whatever its operands: its identity is the run's.)
                 if allocates(e) {
                     return self.alloc(fmt_rexpr(e), dst, r, false);
                 }
-                r.extend(self.an.call(c, args, dst, new));
+                r.union_with(&self.an.call(c, args, dst, new));
                 let own = match self.an.callee(c) {
                     Callee::Builtin(name) => Some(Root::StaticCall(name)),
                     _ => None,
@@ -1033,7 +1241,7 @@ impl Units<'_, '_> {
             }
             RExpr::Yield(o) | RExpr::Await(o) => {
                 let mut r = self.expr(o, false, None);
-                r.extend(self.an.expr(e, None));
+                r.union_with(&self.an.expr(e, None));
                 self.work("suspend", &work_label(e), None, fmt_rexpr(e), r)
             }
             RExpr::Delete(o) => {
@@ -1062,21 +1270,21 @@ impl Units<'_, '_> {
             RExpr::ObjectLit(fs) => {
                 let mut r = Roots::new();
                 for (_, x) in fs {
-                    r.extend(self.expr(x, false, None));
+                    r.union_with(&self.expr(x, false, None));
                 }
                 self.alloc(fmt_rexpr(e), dst, r, false)
             }
             RExpr::ClassSrc { parent, caps, .. } => {
                 let mut r = self.all(caps);
                 if let Some(p) = parent {
-                    r.extend(self.expr(p, false, None));
+                    r.union_with(&self.expr(p, false, None));
                 }
-                r.extend(self.an.expr(e, None));
+                r.union_with(&self.an.expr(e, None));
                 self.alloc(fmt_rexpr(e), dst, r, false)
             }
             RExpr::BoundMethod { func, recv } => {
                 let mut r = self.expr(func, callee, None);
-                r.extend(self.expr(recv, false, None));
+                r.union_with(&self.expr(recv, false, None));
                 r
             }
             RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null | RExpr::This | RExpr::Var(_) | RExpr::Global(_) | RExpr::BigInt(_) | RExpr::Hole => {
@@ -1094,7 +1302,7 @@ impl Units<'_, '_> {
         let mut r = parts;
         if let Some(d) = dst {
             let own = self.an.var_own(d);
-            r.extend(own.into_iter().filter(|&i| !matches!(self.an.roots[i as usize], Root::StaticCall(_) | Root::StaticOp(_))));
+            r.extend(own.iter().filter(|&i| !matches!(self.an.roots[i as usize], Root::StaticCall(_) | Root::StaticOp(_))));
         }
         let value = r.clone();
         if dead || dst.is_some_and(|d| !self.an.used.contains(&d)) {
@@ -1142,7 +1350,7 @@ impl Units<'_, '_> {
                 let parts = match e {
                     RExpr::Call(c, args) | RExpr::New(c, args) => {
                         let mut r = self.expr(c, true, None);
-                        r.extend(self.all(args));
+                        r.union_with(&self.all(args));
                         r
                     }
                     _ => Roots::new(),
@@ -1155,7 +1363,7 @@ impl Units<'_, '_> {
             Op::NewObject { dst, fields } => {
                 let mut r = Roots::new();
                 for (_, x) in fields {
-                    r.extend(self.expr(x, false, None));
+                    r.union_with(&self.expr(x, false, None));
                 }
                 let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
                 self.alloc(format!("{{{}}}", keys.join(", ")), Some(*dst), r, false);
@@ -1166,18 +1374,18 @@ impl Units<'_, '_> {
             }
             Op::PushOp { arr, val } => {
                 let mut r = self.expr(arr, false, None);
-                r.extend(self.expr(val, false, None));
+                r.union_with(&self.expr(val, false, None));
                 self.write(format!("{}.push({})", fmt_rexpr(arr), fmt_rexpr(val)), r);
             }
             Op::SetIndex { arr, index, val } => {
                 let mut r = self.expr(arr, false, None);
-                r.extend(self.expr(index, false, None));
-                r.extend(self.expr(val, false, None));
+                r.union_with(&self.expr(index, false, None));
+                r.union_with(&self.expr(val, false, None));
                 self.write(format!("{}[{}] = {}", fmt_rexpr(arr), fmt_rexpr(index), fmt_rexpr(val)), r);
             }
             Op::SetProp { obj, key, val } => {
                 let mut r = self.expr(obj, false, None);
-                r.extend(self.expr(val, false, None));
+                r.union_with(&self.expr(val, false, None));
                 self.write(format!("{}.{key} = {}", fmt_rexpr(obj), fmt_rexpr(val)), r);
             }
             Op::DeleteProp { obj, key } => {
@@ -1186,7 +1394,7 @@ impl Units<'_, '_> {
             }
             Op::DeleteIndex { arr, index } => {
                 let mut r = self.expr(arr, false, None);
-                r.extend(self.expr(index, false, None));
+                r.union_with(&self.expr(index, false, None));
                 self.write(format!("delete {}[{}]", fmt_rexpr(arr), fmt_rexpr(index)), r);
             }
             Op::Throw(e) => {
@@ -1365,6 +1573,9 @@ impl Js {
             builtins: self.why.builtins.borrow().clone(),
             varies: HashSet::new(),
             changed: false,
+            grew_vars: HashSet::new(),
+            grew_globals: HashSet::new(),
+            grew_rets: HashSet::new(),
         };
         an.seed_call_state();
         an.fixpoint(&progs);
@@ -1449,15 +1660,15 @@ impl Js {
             an.roots.iter().map(|r| Cause { class: r.class(), kind: r.kind(), what: r.what(), units: 0, sole: 0 }).collect();
         let mut units = Vec::with_capacity(raw.len());
         for Raw { section, kind, text, roots, is_static } in raw {
-            let class = roots.iter().map(|&i| causes[i as usize].class).max().expect("a unit has a cause");
-            let blockers: Vec<usize> = roots.iter().map(|&i| i as usize).filter(|&i| causes[i].class != Class::Needed).collect();
-            for &i in &roots {
+            let class = roots.iter().map(|i| causes[i as usize].class).max().expect("a unit has a cause");
+            let blockers: Vec<usize> = roots.iter().map(|i| i as usize).filter(|&i| causes[i].class != Class::Needed).collect();
+            for i in &roots {
                 causes[i as usize].units += 1;
             }
             if let [one] = blockers[..] {
                 causes[one].sole += 1;
             }
-            units.push(Unit { section, kind, text, class, is_static, causes: roots.iter().map(|&i| i as usize).collect() });
+            units.push(Unit { section, kind, text, class, is_static, causes: roots.iter().map(|i| i as usize).collect() });
         }
         Report { units, causes }
     }
