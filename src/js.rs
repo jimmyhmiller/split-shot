@@ -6031,7 +6031,7 @@ impl Js {
     /// runtime value here). `taker`: what it is given so far (`v` among it).
     fn shape_of(&self, v: &Abs, heap: &Heap, budget: &mut usize, path: &mut Vec<usize>, taker: &mut Taker) -> Shape {
         match v {
-            Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null => Shape::Static(v.clone()),
+            Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null | Abs::Dyn(RExpr::BigInt(_)) => Shape::Static(v.clone()),
             // (What `bind` made, to be made at runtime: given as a handle of
             // what `bind` makes, its runtime value what it is made as, see
             // `react_lazy_bound_passed`.)
@@ -11503,7 +11503,9 @@ impl Js {
                         return self.push(s, a);
                     }
                 }
-                // Known BigInts: the result's literal.
+                // Known BigInts: the result's literal. (A variable the path
+                // knows holds one is that one.)
+                let (a, b) = (self.known_bigint(s, a), self.known_bigint(s, b));
                 if (bigint_of(&a).is_some() || bigint_of(&b).is_some()) && self.pristine("BigInt") {
                     if let Some(v) = bigint_bin(*op, &a, &b) {
                         return self.push(s, v);
@@ -12930,6 +12932,7 @@ impl Js {
                 let base = s.top().ostack.len() - *arity;
                 let operands: Vec<Abs> = s.top_mut().ostack.split_off(base);
                 // (Known BigInts: see `bigint_opaque`.)
+                let operands: Vec<Abs> = operands.into_iter().map(|v| self.known_bigint(s, v)).collect();
                 if operands.iter().any(|v| bigint_of(v).is_some()) && self.pristine("BigInt") {
                     if let Some(v) = bigint_opaque(op, &operands) {
                         return self.push(s, v);
@@ -20529,6 +20532,16 @@ impl Js {
     /// read or set, and its ISO text. `None` for the rest (its local time is
     /// the runtime's time zone's), or when the method throws (`toISOString`
     /// of an invalid date): the call is then the runtime's.
+    /// `v`, or the BigInt literal the path knows the variable `v` holds.
+    fn known_bigint(&self, s: &State, v: Abs) -> Abs {
+        if let Abs::Dyn(RExpr::Var(x)) = &v {
+            if let Some(RExpr::BigInt(d)) = s.facts.get(x).and_then(|i| i.eq.clone()) {
+                return Abs::Dyn(RExpr::BigInt(d));
+            }
+        }
+        v
+    }
+
     fn try_date_method(&self, s: &mut State, m: &str, recv: usize, args: &[Abs]) -> Option<Abs> {
         let tv = date_tv(&s.heap, recv)?;
         let num = |i: usize| -> Option<f64> {

@@ -75,6 +75,10 @@
   "merged": 19,
   "gap": 5
  },
+ "bigint_capture_in_residual_function.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "bigint_literals_fold.js": {
   "merged": 0,
   "gap": 21
