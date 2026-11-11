@@ -337,7 +337,7 @@
  },
  "error_objects_modeled.js": {
   "merged": 1,
-  "gap": 17
+  "gap": 16
  },
  "esbuild_cjs_interop.js": {
   "merged": 0,
@@ -361,7 +361,7 @@
  },
  "feature_tests_on_standard_prototypes.js": {
   "merged": 0,
-  "gap": 3
+  "gap": 2
  },
  "final_cells.js": {
   "merged": 0,
@@ -537,7 +537,11 @@
  },
  "intrinsic_fn_props.js": {
   "merged": 0,
-  "gap": 6
+  "gap": 3
+ },
+ "intrinsic_lookup_folds.js": {
+  "merged": 0,
+  "gap": 28
  },
  "intrinsic_method_identity.js": {
   "merged": 0,
@@ -647,6 +651,10 @@
   "merged": 0,
   "gap": 0
  },
+ "null_read_in_try_throws.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "number_wrapper_invalid_date.js": {
   "merged": 0,
   "gap": 0
@@ -657,7 +665,7 @@
  },
  "object_choice_dynamic_key.ts": {
   "merged": 0,
-  "gap": 4
+  "gap": 0
  },
  "object_choice_dynamic_write.ts": {
   "merged": 0,
@@ -665,7 +673,7 @@
  },
  "object_choices.js": {
   "merged": 0,
-  "gap": 9
+  "gap": 0
  },
  "object_choices_mixed.js": {
   "merged": 0,
@@ -881,7 +889,7 @@
  },
  "std_object_group_fallback_selfhosted.js": {
   "merged": 0,
-  "gap": 208
+  "gap": 211
  },
  "std_object_group_selfhosted.js": {
   "merged": 0,
@@ -925,7 +933,7 @@
  },
  "string_wrapper_object.js": {
   "merged": 0,
-  "gap": 9
+  "gap": 8
  },
  "strings_map_join.js": {
   "merged": 0,
@@ -989,7 +997,7 @@
  },
  "try_inlined_nested_rethrow.js": {
   "merged": 0,
-  "gap": 28
+  "gap": 0
  },
  "try_inlined_recursion.js": {
   "merged": 0,

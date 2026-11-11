@@ -3287,6 +3287,10 @@ struct CompileAux {
     max_slot: usize,
     /// The `try` statements being compiled (innermost last): see `TryExits`.
     try_exits: Vec<TryExits>,
+    /// The code (`[start, end)`) of each operand of a `&&`, `||`, `??` or
+    /// `?:` that the program runs only on one side but that is compiled to
+    /// run always (its compact form: see `Expr::Opaque`).
+    eager_arms: Vec<(usize, usize)>,
 }
 
 /// A `try` statement being compiled. A jump out of it (a `return`, or a
@@ -3880,8 +3884,13 @@ fn compile_expr(e: &Expr, code: &mut Vec<Instr>, aux: &mut CompileAux) {
             if needs_branch {
                 compile_short_circuit(op, args, code, aux);
             } else {
-                for a in args {
+                let conditional = matches!(op.as_str(), "&&" | "||" | "??" | "?:");
+                for (i, a) in args.iter().enumerate() {
+                    let start = code.len();
                     compile_expr(a, code, aux);
+                    if conditional && i > 0 {
+                        aux.eager_arms.push((start, code.len()));
+                    }
                 }
                 code.push(Instr::OpaqueOp { op: op.clone(), arity: args.len() });
             }
@@ -4276,6 +4285,10 @@ pub struct Js {
     /// Per `if` branch pc: an arm calls a function (which, run at runtime,
     /// may change what a pending read reads: see `Instr::JmpIfFalsy`).
     if_arm_calls: Vec<bool>,
+    /// Per pc: in an operand the program may not run that is compiled to
+    /// run always (see `CompileAux::eager_arms`): what it does here is only
+    /// a value the operation may not use, no effect of the program's.
+    eager_arm: Vec<bool>,
     /// per `if` branch pc, the slots whose heap object is mutated in an arm;
     /// these escape to residual variables before a dynamic branch so the arms
     /// merge instead of path-splitting.
@@ -5031,6 +5044,10 @@ impl Js {
         let mut if_global_mods: Vec<Vec<String>> = vec![Vec::new(); code.len()];
         let mut if_forward_joins: Vec<Vec<(usize, Vec<usize>, Vec<String>)>> = vec![Vec::new(); code.len()];
         let mut if_arm_calls: Vec<bool> = vec![false; code.len()];
+        let mut eager_arm: Vec<bool> = vec![false; code.len()];
+        for &(start, end) in &aux.eager_arms {
+            eager_arm[start..end].iter_mut().for_each(|b| *b = true);
+        }
         for (jz, end) in aux.ifs {
             if_arm_calls[jz] = code[jz + 1..end].iter().any(|ins| matches!(ins, Instr::Call(_) | Instr::CallMethod(_) | Instr::NewOp(_)));
             let mut m: Vec<usize> = code[jz + 1..end]
@@ -5318,6 +5335,7 @@ impl Js {
             if_join,
             if_global_mods,
             if_arm_calls,
+            eager_arm,
             if_forward_joins,
             if_heap_modified,
             drives_dispatch,
@@ -10087,7 +10105,18 @@ fn symbol_iterator_expr() -> RExpr {
     RExpr::Get(Box::new(RExpr::Global("Symbol".into())), "iterator".into())
 }
 
+/// The suffix of the kind of a standard accessor's getter
+/// (`Map.prototype.size@get`: see `standard_prototype_accessor`).
+const ACCESSOR_GET: &str = "@get";
+
 fn intrinsic_method_expr(kind: &str) -> Option<RExpr> {
+    // (A standard accessor's getter: found by its descriptor.)
+    if let Some(rest) = kind.strip_suffix(ACCESSOR_GET) {
+        let (base, k) = rest.split_once(".prototype.")?;
+        let gopd = RExpr::Get(Box::new(RExpr::Global("Object".into())), "getOwnPropertyDescriptor".into());
+        let proto = RExpr::Get(Box::new(RExpr::Global(base.to_string())), "prototype".into());
+        return Some(RExpr::Get(Box::new(RExpr::Call(Box::new(gopd), vec![proto, RExpr::Str(k.to_string())])), "get".into()));
+    }
     if kind == "%ThrowTypeError%" {
         return Some(throw_type_error_expr());
     }
@@ -10110,6 +10139,17 @@ fn intrinsic_method_expr(kind: &str) -> Option<RExpr> {
         Box::new(RExpr::Get(Box::new(RExpr::Global(base.to_string())), "prototype".to_string())),
         method.to_string(),
     ))
+}
+
+/// Is `e` a path of reads from a global (`Function.prototype.bind`,
+/// `String.prototype[Symbol.iterator]`), making nothing as it runs?
+fn is_global_path(e: &RExpr) -> bool {
+    match e {
+        RExpr::Global(_) => true,
+        RExpr::Get(o, _) => is_global_path(o),
+        RExpr::Index(o, k) => is_global_path(o) && is_global_path(k),
+        _ => false,
+    }
 }
 
 /// Members of `Function.prototype`, plus the `name`/`length` own properties
@@ -10217,6 +10257,19 @@ fn standard_prototype_method(g: &str, m: &str) -> bool {
         _ => &[],
     };
     ms.contains(&m)
+}
+
+/// Is `k` an accessor property `G.prototype` has (itself) in every current
+/// engine, for a standard constructor `G` (`Map.prototype.size`)?
+fn standard_prototype_accessor(g: &str, k: &str) -> bool {
+    let ks: &[&str] = match g {
+        "Object" => &["__proto__"],
+        "Map" | "Set" => &["size"],
+        "RegExp" => &["dotAll", "flags", "global", "hasIndices", "ignoreCase", "multiline", "source", "sticky", "unicode"],
+        "Symbol" => &["description"],
+        _ => &[],
+    };
+    ks.contains(&k)
 }
 
 /// The standard constructors whose prototypes `G.prototype`'s chain passes
@@ -12386,6 +12439,16 @@ impl Js {
                         return self.get_prop_step(s, &k, pc, out);
                     }
                 }
+                // A name known now of a standard object read from a global
+                // (`String["prototype"]`): the read `.k` makes, which knows
+                // the standard members.
+                if let (Abs::Dyn(e), Abs::Str(k)) = (&a, &i) {
+                    if is_global_path(e) && array_index_key(k).is_none() {
+                        let k = k.clone();
+                        s.top_mut().ostack.push(a);
+                        return self.get_prop_step(s, &k, pc, out);
+                    }
+                }
                 let i = object_key(&s.heap, &a, i);
                 // If the abstract heap can't serve this index statically (a
                 // dynamic index, or a type-mismatched key like `arr["x"]` /
@@ -13010,6 +13073,14 @@ impl Js {
                     self.sync_globals(s, false, out);
                 }
                 if op == "in" && operands.len() == 2 {
+                    // A standard member of a standard constructor or
+                    // prototype (`"prototype" in String`, `"indexOf" in
+                    // String.prototype`).
+                    if let (Abs::Str(k), Abs::Dyn(e)) = (&operands[0], &operands[1]) {
+                        if self.standard_has(e, k) {
+                            return self.push(s, Abs::Bool(true));
+                        }
+                    }
                     // An index of a modeled array: an element, not a hole.
                     if let Abs::Ref(addr) = &operands[1] {
                         if let HeapObj::Array(xs) = &s.heap[addr] {
@@ -13039,6 +13110,27 @@ impl Js {
                                         let lacks = matches!(&s.heap[&addr], o @ HeapObj::Array(a) if o.own(k).is_none() && self.subclass_lacks(&s.heap, &a.proto, "Array", k));
                                         (lacks && k.parse::<f64>().is_err()).then_some(false)
                                     }
+                                };
+                                if let Some(p) = present {
+                                    return self.push(s, Abs::Bool(p));
+                                }
+                            }
+                        }
+                    }
+                    // A standard function the program read (`Function.prototype.bind`,
+                    // a standard accessor's getter): its own `name` and `length`,
+                    // what `Function.prototype` and `Object.prototype` have, and
+                    // nothing else (as for a function of known code, see
+                    // `lookup_prop`).
+                    if let (Abs::Str(k), Abs::Ref(addr)) = (&operands[0], &operands[1]) {
+                        if let HeapObj::Builtin { kind, data, ext: None } = &s.heap[addr] {
+                            if data.is_empty() && intrinsic_method_expr(kind).is_some() && builtin_kind_is_function(kind) {
+                                let present = if matches!(k.as_str(), "name" | "length") || is_function_own_or_proto_member(k) || is_object_proto_member(k) {
+                                    Some(true)
+                                } else if self.intrinsic_protos_pristine(true) && !standard_prototype_method("Function", k) {
+                                    Some(false)
+                                } else {
+                                    None
                                 };
                                 if let Some(p) = present {
                                     return self.push(s, Abs::Bool(p));
@@ -13668,6 +13760,56 @@ impl Js {
         // (The nearest prototype on the chain that has it; each up to it as
         // the standard one.)
         chain.iter().position(|c| standard_prototype_method(c, m)).is_some_and(|k| chain[..=k].iter().all(|c| self.pristine(c)))
+    }
+
+    /// Has the standard object `e` names (a standard constructor `G`, or
+    /// `G.prototype`, that the program does not change) property `k` of its
+    /// own? Only presence is answered (see `standard_has`).
+    fn standard_own(&self, e: &RExpr, k: &str) -> bool {
+        match e {
+            RExpr::Global(g) => {
+                !standard_prototype_chain(g).is_empty()
+                    && self.pristine(g)
+                    && (matches!(k, "prototype" | "length" | "name") || standard_static_method(g, k))
+            }
+            RExpr::Get(c, p) if p == "prototype" => {
+                matches!(&**c, RExpr::Global(g) if self.pristine(g) && (standard_prototype_method(g, k) || standard_prototype_accessor(g, k)))
+            }
+            _ => false,
+        }
+    }
+
+    /// Has the standard object `e` names (a standard constructor `G`, or
+    /// `G.prototype`, that the program does not change) property `k`, its
+    /// own or inherited? Only presence is answered: an engine may have more
+    /// members than the standard ones listed here.
+    fn standard_has(&self, e: &RExpr, k: &str) -> bool {
+        let on_chain = |chain: &[&str]| {
+            chain
+                .iter()
+                .position(|c| standard_prototype_method(c, k) || standard_prototype_accessor(c, k))
+                .is_some_and(|i| chain[..=i].iter().all(|c| self.pristine(c)))
+        };
+        match e {
+            RExpr::Global(g) => {
+                if standard_prototype_chain(g).is_empty() || !self.pristine(g) {
+                    return false;
+                }
+                // A constructor's own `prototype`, `length` and `name`, its
+                // static methods, then what a function inherits.
+                matches!(k, "prototype" | "length" | "name")
+                    || standard_static_method(g, k)
+                    || on_chain(standard_prototype_chain("Function"))
+            }
+            RExpr::Get(c, p) if p == "prototype" => match &**c {
+                RExpr::Global(g) if self.pristine(g) => {
+                    let chain = standard_prototype_chain(g);
+                    !chain.is_empty() && on_chain(chain)
+                }
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     fn info_abs(&self, s: &State, v: &Abs) -> Option<crate::facts::Info> {
@@ -18803,7 +18945,15 @@ impl Js {
                         }
                     }
                 }
-                if method == "apply" && args.len() == 3 && matches!(&args[0], Abs::Ref(a) if matches!(&s.heap[a], HeapObj::Closure { .. })) {
+                // (Of a function of known code, a bound function, or a
+                // standard method the program read: `callBind`'s
+                // `Reflect.apply(bind, call, [f])`.)
+                let callable = |o: &HeapObj| match o {
+                    HeapObj::Closure { .. } => true,
+                    HeapObj::Builtin { kind, .. } => kind == BOUND_FUNCTION || intrinsic_method_expr(kind).is_some(),
+                    _ => false,
+                };
+                if method == "apply" && args.len() == 3 && matches!(&args[0], Abs::Ref(a) if callable(&s.heap[a])) {
                     if let Some(list) = arr_of(s, args.get(2)) {
                         let n = list.len();
                         s.top_mut().ostack.push(args[0].clone());
@@ -19334,7 +19484,7 @@ impl Js {
                     Abs::Ref(a) => match &s.heap[a] {
                         // (One read by name: `String.prototype[@@iterator]`
                         // is called as the value it is.)
-                        HeapObj::Builtin { kind, .. } if intrinsic_method_expr(kind).is_some() && kind != STRING_ITERATOR_METHOD && this != Abs::Undef => {
+                        HeapObj::Builtin { kind, .. } if intrinsic_method_expr(kind).is_some() && kind != STRING_ITERATOR_METHOD && !kind.ends_with(ACCESSOR_GET) && this != Abs::Undef => {
                             kind.split_once(".prototype.").map(|(_, m)| m.to_string())
                         }
                         _ => None,
@@ -19993,6 +20143,49 @@ impl Js {
             // `length`, unmodeled, nor an arguments object's mapped
             // element): a fresh descriptor, or `undefined`.
             ("Object", "getOwnPropertyDescriptor") if args.len() == 2 => {
+                // A standard method of a standard prototype, or a static one
+                // or the `prototype` of a standard constructor, that the
+                // program does not change: what the standard defines it as.
+                if let (Abs::Dyn(e), Abs::Str(k)) = (arg(0), arg(1)) {
+                    let own = match &e {
+                        RExpr::Global(g) if self.pristine(g) && !standard_prototype_chain(g).is_empty() => {
+                            if k == "prototype" {
+                                Some(false)
+                            } else {
+                                standard_static_method(g, &k).then_some(true)
+                            }
+                        }
+                        RExpr::Get(c, p) if p == "prototype" => match &**c {
+                            RExpr::Global(g) if self.pristine(g) && standard_prototype_method(g, &k) => Some(true),
+                            // (A getter-only accessor, `Map.prototype.size`:
+                            // its getter, a standard function.)
+                            RExpr::Global(g) if self.pristine(g) && self.pristine("Function") && standard_prototype_accessor(g, &k) && !(g == "Object" && k == "__proto__") => {
+                                let get = s.alloc(HeapObj::Builtin { kind: format!("{g}.prototype.{k}{ACCESSOR_GET}"), data: vec![].into(), ext: None });
+                                let d = s.alloc(HeapObj::object(vec![
+                                    Prop::data("get", Abs::Ref(get)),
+                                    Prop::data("set", Abs::Undef),
+                                    Prop::data("enumerable", Abs::Bool(false)),
+                                    Prop::data("configurable", Abs::Bool(true)),
+                                ]));
+                                self.creation_pc.borrow_mut().insert(get, pc);
+                                self.creation_pc.borrow_mut().insert(d, pc);
+                                return Some(Abs::Ref(d));
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let Some(w) = own else { return None };
+                    let v = Abs::Dyn(RExpr::Get(Box::new(e), k));
+                    let d = s.alloc(HeapObj::object(vec![
+                        Prop::data("value", v),
+                        Prop::data("writable", Abs::Bool(w)),
+                        Prop::data("enumerable", Abs::Bool(false)),
+                        Prop::data("configurable", Abs::Bool(w)),
+                    ]));
+                    self.creation_pc.borrow_mut().insert(d, pc);
+                    return Some(Abs::Ref(d));
+                }
                 let Abs::Ref(o) = arg(0) else { return None };
                 let k = self.prop_key(s, &arg(1))?;
                 match &s.heap[&o] {
@@ -21056,7 +21249,8 @@ impl Js {
         // variable the locals' assignment below gives a new value.)
         for (&addr, (m, idxs)) in &keep.objects {
             for &idx in idxs {
-                let var = self.aux_var(121, *m, idx);
+                // (Tag 123: 121 is the receiver-throw read's.)
+                let var = self.aux_var(123, *m, idx);
                 let cell: Option<&mut Abs> = match s.heap.get_mut_quiet(&addr) {
                     Some(o) if liftable_field(o, idx) => o.children_mut().into_iter().nth(idx),
                     _ => None,
@@ -21146,6 +21340,26 @@ impl Js {
             self.escape_choice_at(s, 0, out);
         }
         let o = s.top_mut().ostack.pop().unwrap();
+        // A property of `null` or `undefined`, read in a `try`: a TypeError,
+        // worded as the engine words it, that the handler catches now.
+        // (Not in an operand compiled to run always that the program may
+        // not run, `t == null ? undefined : t.k` of `t?.k`.)
+        if matches!(o, Abs::Null | Abs::Undef) && !s.handlers.is_empty() && !self.eager_arm[pc] && self.pristine("TypeError") {
+            let what = if o == Abs::Null { "null" } else { "undefined" };
+            let msg = format!("Cannot read properties of {what} (reading '{k}')");
+            let e = match self.try_builtin_new("TypeError", &[Abs::Str(msg.clone())], s) {
+                Some(e) => e,
+                None => {
+                    let e = self.aux_var(124, pc, 0);
+                    self.emit_temp(s, e, RExpr::New(Box::new(RExpr::Global("TypeError".into())), vec![RExpr::Str(msg)]), pc, out);
+                    Abs::Dyn(RExpr::Var(e))
+                }
+            };
+            if let Abs::Ref(a) = &e {
+                self.creation_pc.borrow_mut().insert(*a, pc);
+            }
+            return self.do_throw(s, e, out);
+        }
         // A member of the standard `Symbol` it does not have
         // (`Symbol.metadata`, a proposal's): `undefined`.
         if matches!(&o, Abs::Dyn(RExpr::Global(g)) if g == "Symbol") && self.pristine("Symbol") && !is_symbol_ctor_member(k) {
@@ -22063,6 +22277,15 @@ impl Js {
                 return Some(Abs::Str(format!("[object {tag}]")));
             }
         }
+        // A standard member of a standard constructor or prototype, its own
+        // (`String` has `prototype`, `String.prototype` has `indexOf`).
+        if method == "hasOwnProperty" {
+            if let (Abs::Dyn(e), Some(k)) = (this, key()) {
+                if self.standard_own(e, &k) {
+                    return Some(Abs::Bool(true));
+                }
+            }
+        }
         let addr = match this {
             Abs::Ref(a) => *a,
             _ => return None,
@@ -22809,6 +23032,10 @@ impl Js {
     /// collection of its kind), as when read from the receiver?
     fn intrinsic_serves(&self, s: &State, f: &usize, this: Option<&Abs>) -> bool {
         let HeapObj::Builtin { kind, .. } = &s.heap[f] else { return false };
+        // (A standard accessor's getter: called at runtime.)
+        if kind.ends_with(ACCESSOR_GET) {
+            return false;
+        }
         // (The methods that make or step an iterator: a string's on a known
         // string, an iterator's on a modeled iterator of its kind.)
         let iterator = |t: &Abs, of: Option<&str>| match t {
@@ -25489,6 +25716,12 @@ impl Js {
             HeapObj::Closure { ident: Some(v), .. } => Some(RExpr::Var(*v)),
             HeapObj::Builtin { kind, data, .. } if react::is_handle(kind) => Some(react::handle_value(data)),
             HeapObj::Object { class: ObjClass::FinalCell { made: Some(v) }, .. } => Some(RExpr::Var(*v)),
+            // A standard method (`Function.prototype.bind`) the program reads
+            // from a prototype it does not change: that method at runtime too,
+            // which runtime code it reaches cannot make another (see
+            // `pristine`). (Not one whose expression makes a value to find it,
+            // `%ThrowTypeError%`.)
+            HeapObj::Builtin { kind, data, ext: None } if data.is_empty() => intrinsic_method_expr(kind).filter(is_global_path),
             _ => None,
         }
     }
