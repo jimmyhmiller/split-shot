@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use crate::js::{Cond, Op, RExpr};
 use crate::residual::{Program, Terminator};
 
-pub(crate) fn rexpr_vars(e: &RExpr, out: &mut Vec<usize>) {
+pub fn rexpr_vars(e: &RExpr, out: &mut Vec<usize>) {
     match e {
         RExpr::Var(v) => out.push(*v),
         RExpr::Bin(_, a, b) | RExpr::Index(a, b) => {

@@ -174,7 +174,7 @@ pub(crate) fn children(e: &RExpr) -> Vec<&RExpr> {
 
 /// The variable an op assigns (`None` for a `try`, whose catch binding is
 /// counted separately).
-fn op_def(op: &Op) -> Option<usize> {
+pub fn op_def(op: &Op) -> Option<usize> {
     match op {
         Op::Assign { var, .. } => Some(*var),
         Op::Eval { dst, .. } | Op::NewObject { dst, .. } | Op::NewArray { dst, .. } => Some(*dst),

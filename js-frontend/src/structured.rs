@@ -26,7 +26,7 @@ use std::fmt::Write as _;
 use partial::js::{may_throw, Bop, Cond, Op, RExpr};
 use partial::residual::{Program, Terminator};
 
-use crate::codegen::{label_js, op_to_js, rexpr_to_js};
+use crate::codegen::{label_js, op_to_js, rexpr_to_js, var_js};
 
 /// A structured statement. Labels are strings unique within the output.
 enum Stmt<'a> {
@@ -35,8 +35,10 @@ enum Stmt<'a> {
     Exit(String),
     If { cond: CondExpr, then: Vec<Stmt<'a>>, els: Vec<Stmt<'a>> },
     Block { label: String, body: Vec<Stmt<'a>> },
-    /// `while (cond) { body }`; `cond: None` is `while (true)`.
-    Loop { label: String, cond: Option<CondExpr>, body: Vec<Stmt<'a>> },
+    /// `while (cond) { body }`; `cond: None` is `while (true)`. With
+    /// `for_in` (a variable and an object), `for (var in obj) { body }`
+    /// instead (`cond` then unused: see `native_for_in`).
+    Loop { label: String, cond: Option<CondExpr>, body: Vec<Stmt<'a>>, for_in: Option<(usize, RExpr)> },
     Break(String),
     Continue(String),
     /// An expression evaluated for its effect (an `if` with empty arms).
@@ -255,7 +257,7 @@ impl<'a> Graph<'a> {
         ys.sort_by_key(|&y| std::cmp::Reverse(self.rpo[y]));
         let body = self.node_within(x, &ys, halt);
         if self.loop_header[x] {
-            vec![Stmt::Loop { label: self.loop_label(x), cond: None, body }]
+            vec![Stmt::Loop { label: self.loop_label(x), cond: None, body, for_in: None }]
         } else {
             body
         }
@@ -307,6 +309,217 @@ fn clone_halt<'a>(h: &Stmt<'a>) -> Stmt<'a> {
     }
 }
 
+// ───────────── native for..in ─────────────
+
+/// The front end lowers `for (k in o) body` to a snapshot of the keys and a
+/// loop over it that skips a key `o` no longer has (`__pe_forInKeys`, see
+/// the lowering): what the engine's own `for..in` does. A residual loop of
+/// that shape over a runtime object is written as that `for..in` again,
+/// which is the original's code and much faster:
+///
+/// ```text
+/// d = __pe_forInKeys(o);  a = 0;  while (a < d.length) { k = d[a]; ...; a += 1; ... }
+/// ```
+///
+/// becomes `for (k in o) { ... }`, when the snapshot `d` and the index `a`
+/// are read nowhere else and only `a += 1` writes `a` in the loop (the
+/// variables are the lowering's own, dead after the loop), `o` is a
+/// variable the loop does not assign, and what stands between the snapshot
+/// and the loop can change no object. (The test that skips a key `o` no
+/// longer has stays where the specializer left it: the engine skips those
+/// too, so it is never taken.)
+fn native_for_in<'a>(stmts: Vec<Stmt<'a>>) -> Vec<Stmt<'a>> {
+    let mut stmts: Vec<Stmt<'a>> = stmts
+        .into_iter()
+        .map(|s| match s {
+            Stmt::If { cond, then, els } => Stmt::If { cond, then: native_for_in(then), els: native_for_in(els) },
+            Stmt::Block { label, body } => Stmt::Block { label, body: native_for_in(body) },
+            Stmt::Loop { label, cond, body, for_in } => Stmt::Loop { label, cond, body: native_for_in(body), for_in },
+            other => other,
+        })
+        .collect();
+    let mut j = 0;
+    while j < stmts.len() {
+        if let Some((d, o)) = for_in_keys_def(&stmts[j]) {
+            if let Some((k_at, a)) = for_in_loop_after(&stmts, j, d, o) {
+                // (The loop, or the block it is all of.)
+                let (outer, the_loop) = match stmts.remove(k_at) {
+                    Stmt::Block { label, mut body } => (Some(label), body.pop().expect("a block of one loop")),
+                    l => (None, l),
+                };
+                let Stmt::Loop { label, body, .. } = the_loop else { unreachable!() };
+                let Some(Stmt::Op(Op::Assign { var: key, .. } | Op::Eval { dst: key, .. })) = body.first() else { unreachable!() };
+                let key = *key;
+                let mut body = strip_increments(body.into_iter().skip(1).collect(), a);
+                // (The test that skips a key `o` no longer has, the engine's
+                // own now: run again, it would ask a proxy twice.)
+                if body.first().is_some_and(|s| is_key_still_there_test(s, key, o, &label)) {
+                    body.remove(0);
+                }
+                // (The index's start, between the snapshot and the loop.)
+                let zero = (j + 1..k_at).find(|&i| matches!(&stmts[i], Stmt::Op(Op::Assign { var, expr: RExpr::Num(n) }) if *var == a && n.f() == 0.0)).expect("checked by for_in_loop_after");
+                let l = Stmt::Loop { label, cond: None, body, for_in: Some((key, RExpr::Var(o))) };
+                stmts.insert(k_at, match outer {
+                    Some(label) => Stmt::Block { label, body: vec![l] },
+                    None => l,
+                });
+                stmts.remove(zero);
+                stmts.remove(j);
+                continue;
+            }
+        }
+        j += 1;
+    }
+    stmts
+}
+
+/// `if (o != null && !(key in o)) continue;` (or without the `null` test),
+/// the lowering's skip of a key `o` no longer has, `continue` of `label`.
+fn is_key_still_there_test(s: &Stmt, key: usize, o: usize, label: &str) -> bool {
+    let Stmt::If { cond, then, els } = s else { return false };
+    if cond.negated || !els.is_empty() || !matches!(then.as_slice(), [Stmt::Continue(l)] if l == label) {
+        return false;
+    }
+    let var = |e: &RExpr, v: usize| matches!(e, RExpr::Var(x) if *x == v);
+    let not_in = |e: &RExpr| matches!(e, RExpr::Opaque(op, xs) if op == "!" && matches!(xs.as_slice(), [RExpr::Opaque(i, ys)] if i == "in" && matches!(ys.as_slice(), [k, ob] if var(k, key) && var(ob, o))));
+    match &cond.expr {
+        RExpr::Opaque(op, xs) if op == "&&" => match xs.as_slice() {
+            [RExpr::Opaque(ne, ys), t] => ne == "!=" && matches!(ys.as_slice(), [ob, RExpr::Null] if var(ob, o)) && not_in(t),
+            _ => false,
+        },
+        e => not_in(e),
+    }
+}
+
+/// `d = __pe_forInKeys(o)`, `o` a variable: `(d, o)`.
+fn for_in_keys_def(s: &Stmt) -> Option<(usize, usize)> {
+    let Stmt::Op(Op::Assign { var: d, expr } | Op::Eval { dst: d, expr }) = s else { return None };
+    match expr {
+        RExpr::Call(f, args) => match (&**f, args.as_slice()) {
+            (RExpr::Global(g), [RExpr::Var(o)]) if g == "__pe_forInKeys" => Some((*d, *o)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The loop over the snapshot `d` of `o`'s keys after `stmts[j]`, and its
+/// index variable, when it may be a native `for..in` (see `native_for_in`).
+fn for_in_loop_after(stmts: &[Stmt], j: usize, d: usize, o: usize) -> Option<(usize, usize)> {
+    let mut zero: Option<usize> = None;
+    for i in j + 1..stmts.len() {
+        match &stmts[i] {
+            Stmt::Op(Op::Assign { var, expr: RExpr::Num(n) }) if n.f() == 0.0 && zero.is_none() && *var != o && *var != d => zero = Some(*var),
+            Stmt::Block { body: inner, .. } if inner.len() == 1 && matches!(inner[0], Stmt::Loop { .. }) => {
+                let a = zero?;
+                return for_in_loop_check(&inner[0], a, d, o).then_some((i, a));
+            }
+            Stmt::Loop { .. } => {
+                let a = zero?;
+                return for_in_loop_check(&stmts[i], a, d, o).then_some((i, a));
+            }
+            // (Between them: assignments that change no object and leave
+            // `o`, `d` and the index alone.)
+            Stmt::Op(Op::Assign { var, expr }) if *var != o && *var != d && Some(*var) != zero && changes_nothing(expr) => {}
+            // (A new array or object of such values: no object there was.)
+            Stmt::Op(Op::NewArray { dst, elems }) if *dst != o && *dst != d && Some(*dst) != zero && elems.iter().all(changes_nothing) => {}
+            Stmt::Op(Op::NewObject { dst, fields }) if *dst != o && *dst != d && Some(*dst) != zero && fields.iter().all(|(_, e)| changes_nothing(e)) => {}
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Is `l` the loop `while (a < d.length) { k = d[a]; ... }` that may be a
+/// native `for..in` over `o` (see `native_for_in`)?
+fn for_in_loop_check(l: &Stmt, a: usize, d: usize, o: usize) -> bool {
+    match l {
+            Stmt::Loop { cond: Some(CondExpr { expr: RExpr::Bin(Bop::Lt, x, len), negated: false }), body, for_in: None, .. } => {
+                if !matches!((&**x, &**len), (RExpr::Var(xa), RExpr::Get(arr, l)) if *xa == a && l == "length" && matches!(&**arr, RExpr::Var(da) if *da == d)) {
+                    return false;
+                }
+                // (The key, read first.)
+                let Some(Stmt::Op(Op::Assign { var: key, expr } | Op::Eval { dst: key, expr })) = body.first() else { return false };
+                let key_read = matches!(expr, RExpr::Index(arr, ix) if matches!(&**arr, RExpr::Var(v) if *v == d) && matches!(&**ix, RExpr::Var(v) if *v == a));
+                if !key_read || *key == a || *key == d || *key == o {
+                    return false;
+                }
+                let rest = &body[1..];
+                only_increments(rest, a, d) && !assigns(rest, o)
+            }
+            _ => false,
+    }
+}
+
+/// Does `e` neither call anything nor write anything (a literal, a variable,
+/// an operator on such: no getter or conversion of an object runs)?
+fn changes_nothing(e: &RExpr) -> bool {
+    match e {
+        // (Not a global's read: a property of the global object may be a
+        // getter.)
+        RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null | RExpr::Var(_) => true,
+        _ => false,
+    }
+}
+
+/// Is `a += 1` the only mention of the index `a` in `stmts`, and is the
+/// snapshot `d` mentioned nowhere?
+fn only_increments(stmts: &[Stmt], a: usize, d: usize) -> bool {
+    let named = |e: &RExpr| {
+        let mut vs = Vec::new();
+        partial::coalesce::rexpr_vars(e, &mut vs);
+        vs.contains(&a) || vs.contains(&d)
+    };
+    stmts.iter().all(|s| match s {
+        Stmt::Op(op) if is_increment(op, a) => true,
+        // (A `try`'s sub-programs are not looked into: none, then.)
+        Stmt::Op(Op::Try { .. }) => false,
+        Stmt::Op(op) => {
+            let def = partial::inline::op_def(op);
+            def != Some(a) && def != Some(d) && partial::inline::op_exprs(op).into_iter().all(|e| !named(e))
+        }
+        Stmt::If { cond, then, els } => !named(&cond.expr) && only_increments(then, a, d) && only_increments(els, a, d),
+        Stmt::Block { body, .. } => only_increments(body, a, d),
+        Stmt::Loop { cond, body, for_in, .. } => {
+            cond.as_ref().is_none_or(|c| !named(&c.expr)) && for_in.as_ref().is_none_or(|(v, o)| *v != a && *v != d && !named(o)) && only_increments(body, a, d)
+        }
+        Stmt::Eval(e) => !named(e),
+        Stmt::Exit(_) | Stmt::Break(_) | Stmt::Continue(_) => true,
+    })
+}
+
+/// `a = a + 1`.
+fn is_increment(op: &Op, a: usize) -> bool {
+    matches!(op, Op::Assign { var, expr: RExpr::Bin(Bop::Add, x, one) } if *var == a && matches!(&**x, RExpr::Var(v) if *v == a) && matches!(&**one, RExpr::Num(n) if n.f() == 1.0))
+}
+
+/// Does some operation in `stmts` assign variable `o`?
+fn assigns(stmts: &[Stmt], o: usize) -> bool {
+    stmts.iter().any(|s| match s {
+        // (A `try`'s sub-programs are not looked into: it may.)
+        Stmt::Op(Op::Try { .. }) => true,
+        Stmt::Op(op) => partial::inline::op_def(op) == Some(o),
+        Stmt::If { then, els, .. } => assigns(then, o) || assigns(els, o),
+        Stmt::Block { body, .. } => assigns(body, o),
+        Stmt::Loop { body, for_in, .. } => for_in.as_ref().is_some_and(|(v, _)| *v == o) || assigns(body, o),
+        _ => false,
+    })
+}
+
+/// `stmts` without the index's increments.
+fn strip_increments<'a>(stmts: Vec<Stmt<'a>>, a: usize) -> Vec<Stmt<'a>> {
+    stmts
+        .into_iter()
+        .filter(|s| !matches!(s, Stmt::Op(op) if is_increment(op, a)))
+        .map(|s| match s {
+            Stmt::If { cond, then, els } => Stmt::If { cond, then: strip_increments(then, a), els: strip_increments(els, a) },
+            Stmt::Block { label, body } => Stmt::Block { label, body: strip_increments(body, a) },
+            Stmt::Loop { label, cond, body, for_in } => Stmt::Loop { label, cond, body: strip_increments(body, a), for_in },
+            other => other,
+        })
+        .collect()
+}
+
 // ───────────── cleanup ─────────────
 
 /// Does control never fall out of the end of `stmts`?
@@ -317,7 +530,7 @@ fn never_falls_through(stmts: &[Stmt]) -> bool {
         Some(Stmt::If { then, els, .. }) => never_falls_through(then) && never_falls_through(els),
         // `while (true)` only exits through a `break` of its own label, and this
         // construction never breaks a loop label.
-        Some(Stmt::Loop { cond: None, .. }) => true,
+        Some(Stmt::Loop { cond: None, for_in: None, .. }) => true,
         _ => false,
     }
 }
@@ -367,7 +580,7 @@ fn cleanup<'a>(stmts: Vec<Stmt<'a>>, changed: &mut bool) -> Vec<Stmt<'a>> {
                     out.extend(body);
                 }
             }
-            Stmt::Loop { label, cond, body } => {
+            Stmt::Loop { label, cond, body, for_in } => {
                 let mut body = cleanup(body, changed);
                 // Falling off the end of the loop body starts the next iteration.
                 let l = label.clone();
@@ -377,12 +590,12 @@ fn cleanup<'a>(stmts: Vec<Stmt<'a>>, changed: &mut bool) -> Vec<Stmt<'a>> {
                 // `while (true) { if (c) { exit } rest }` is `while (!c) { rest } exit`
                 // when `exit` leaves the loop: it never falls through, and it has
                 // no `continue` of this loop (it is moved outside the loop).
-                if cond.is_none() {
+                if cond.is_none() && for_in.is_none() {
                     if let Some(Stmt::If { then, els, .. }) = body.first() {
                         if els.is_empty() && never_falls_through(then.as_slice()) && !mentions_label(then.as_slice(), &label) {
                             let Stmt::If { cond: c, then, .. } = body.remove(0) else { unreachable!() };
                             *changed = true;
-                            out.push(Stmt::Loop { label, cond: Some(c.not()), body });
+                            out.push(Stmt::Loop { label, cond: Some(c.not()), body, for_in: None });
                             out.extend(then);
                             continue;
                         }
@@ -391,7 +604,7 @@ fn cleanup<'a>(stmts: Vec<Stmt<'a>>, changed: &mut bool) -> Vec<Stmt<'a>> {
                 // `while (true) { if (c) { B } E }`, where `B` never falls through
                 // and `E` leaves the loop (never falls through, no `continue` of
                 // this loop), is `while (c) { B } E`.
-                if cond.is_none() && body.len() >= 2 {
+                if cond.is_none() && for_in.is_none() && body.len() >= 2 {
                     if let Some(Stmt::If { then, els, .. }) = body.first() {
                         let rest = &body[1..];
                         if els.is_empty()
@@ -403,13 +616,34 @@ fn cleanup<'a>(stmts: Vec<Stmt<'a>>, changed: &mut bool) -> Vec<Stmt<'a>> {
                             let rest: Vec<Stmt<'a>> = body.split_off(1);
                             let Stmt::If { cond: c, then, .. } = body.remove(0) else { unreachable!() };
                             *changed = true;
-                            out.push(Stmt::Loop { label, cond: Some(c), body: then });
+                            out.push(Stmt::Loop { label, cond: Some(c), body: then, for_in: None });
                             out.extend(rest);
                             continue;
                         }
                     }
                 }
-                out.push(Stmt::Loop { label, cond, body });
+                // `while (true) { A: { if (c) { T } } R }`, where `T` never
+                // falls through and `R` leaves the loop (never falls
+                // through, no `continue` of it), is `A: { while (c) { T } } R`:
+                // a loop whose body breaks out of it to code after it.
+                if cond.is_none() && for_in.is_none() && body.len() >= 2 {
+                    if let Some(Stmt::Block { body: inner, label: a }) = body.first() {
+                        let rest = &body[1..];
+                        if let [Stmt::If { then, els, .. }] = inner.as_slice() {
+                            if els.is_empty() && never_falls_through(then) && never_falls_through(rest) && !mentions_label(rest, &label) && !mentions_label(rest, a) {
+                                let mut body = body;
+                                let rest: Vec<Stmt<'a>> = body.split_off(1);
+                                let Some(Stmt::Block { label: a, body: mut inner }) = body.pop() else { unreachable!() };
+                                let Some(Stmt::If { cond: c, then, .. }) = inner.pop() else { unreachable!() };
+                                *changed = true;
+                                out.push(Stmt::Block { label: a, body: vec![Stmt::Loop { label, cond: Some(c), body: then, for_in: None }] });
+                                out.extend(rest);
+                                continue;
+                            }
+                        }
+                    }
+                }
+                out.push(Stmt::Loop { label, cond, body, for_in });
             }
             Stmt::If { cond, then, els } => {
                 let then = cleanup(then, changed);
@@ -535,10 +769,11 @@ fn print(stmts: &[Stmt], ind: &str, loops: &mut Vec<String>, need: &HashSet<Stri
                 print(body, &inner, loops, need, out);
                 let _ = writeln!(out, "{ind}}}");
             }
-            Stmt::Loop { label, cond, body } => {
-                let head = match cond {
-                    Some(c) => format!("while ({})", c.render()),
-                    None => "while (true)".to_string(),
+            Stmt::Loop { label, cond, body, for_in } => {
+                let head = match (for_in, cond) {
+                    (Some((v, o)), _) => format!("for ({} in {})", var_js(*v), rexpr_to_js(o)),
+                    (None, Some(c)) => format!("while ({})", c.render()),
+                    (None, None) => "while (true)".to_string(),
                 };
                 if need.contains(label) {
                     let _ = writeln!(out, "{ind}{}: {head} {{", label_js(label));
@@ -583,6 +818,16 @@ pub(crate) fn render_structured(prog: &Program<Op, Cond>, ind: &str, in_try: boo
         stmts = cleanup(stmts, &mut changed);
         if !changed {
             break;
+        }
+    }
+    if std::env::var_os("PE_NO_NATIVE_FOR_IN").is_none() {
+        stmts = native_for_in(stmts);
+        loop {
+            let mut changed = false;
+            stmts = cleanup(stmts, &mut changed);
+            if !changed {
+                break;
+            }
         }
     }
     // A very large graph can nest thousands of blocks deep (one labeled block
