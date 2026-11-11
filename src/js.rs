@@ -20003,6 +20003,30 @@ impl Js {
                         }
                     }
                     // (Its `name` or `length` as made: see the read of one.)
+                    // An array: its `length` (writable but when frozen,
+                    // neither enumerable nor configurable), an element it
+                    // has (a hole is none), a named property of its own.
+                    HeapObj::Array(a) => {
+                        let flags = |w: bool, e: bool, c: bool| (Abs::Bool(w), Abs::Bool(e), Abs::Bool(c));
+                        let (v, (w, e, c)) = match k.as_str() {
+                            Some("length") => (Abs::Num(JsNum::int(a.len() as i64)), flags(!a.frozen, false, false)),
+                            Some(t) if JsNum::parse(t).as_index().is_some_and(|i| JsNum::int(i as i64).to_js_string() == t) => {
+                                let i = JsNum::parse(t).as_index().unwrap();
+                                if i >= a.len() || a.holes.contains(&i) {
+                                    return Some(Abs::Undef);
+                                }
+                                (a.elems[i].clone(), flags(!a.frozen, true, !a.frozen))
+                            }
+                            _ => match a.props.iter().find(|p| p.key == k) {
+                                Some(Prop { val: PVal::Data(v), attrs, .. }) => (v.clone(), flags(attrs & WRITABLE != 0, attrs & ENUMERABLE != 0, attrs & CONFIGURABLE != 0)),
+                                Some(_) => return None,
+                                None => return Some(Abs::Undef),
+                            },
+                        };
+                        let d = s.alloc(HeapObj::object(vec![Prop::data("value", v), Prop::data("writable", w), Prop::data("enumerable", e), Prop::data("configurable", c)]));
+                        self.creation_pc.borrow_mut().insert(d, pc);
+                        return Some(Abs::Ref(d));
+                    }
                     HeapObj::Closure { fid, known: true, ident: None, props, .. } if !props.iter().any(|p| p.key == "name" || p.key == "length") => {
                         let v = if k == "name" { Abs::Str(self.names[*fid].clone()) } else { Abs::Num(JsNum::int(self.lengths[*fid] as i64)) };
                         let d = s.alloc(HeapObj::object(vec![

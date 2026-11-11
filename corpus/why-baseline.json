@@ -35,6 +35,10 @@
   "merged": 0,
   "gap": 0
  },
+ "array_own_property_descriptors.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "array_register_vm.js": {
   "merged": 0,
   "gap": 0
