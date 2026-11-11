@@ -22873,10 +22873,10 @@ impl Js {
         let pc = g.top().pc;
         self.consume_pending_joins(&mut g, pc, out);
         let addrs: Vec<usize> = seen.escaped.iter().filter(|a| !g.escaped.contains(a) && g.heap.contains_key(a)).copied().collect();
-        for a in Js::holders_first(&g.heap, &addrs, 3) {
-            if g.heap.contains_key(&a) && !g.escaped.contains(&a) {
-                self.escape(&mut g, a, &mut std::collections::HashSet::new(), out);
-            }
+        // (Holders first, as one escape: see `escape_all`.)
+        let order: Vec<usize> = Js::holders_first(&g.heap, &addrs, 3).into_iter().filter(|a| g.heap.contains_key(a) && !g.escaped.contains(a)).collect();
+        if !order.is_empty() {
+            self.escape_all(&mut g, &order, &mut std::collections::HashSet::new(), out);
         }
         let known = |st: &State, fid: usize| match st.fns.get(&fid) {
             Some(Abs::Ref(a)) => matches!(st.heap.get(a), Some(HeapObj::Closure { known: true, .. })),
@@ -23793,6 +23793,13 @@ impl Js {
     /// `materialize_value`, and the objects it made (by address).
     fn materialize_value_made(&self, v: &Abs, heap: &Heap, out: &mut Vec<Op>) -> (RExpr, HashMap<usize, usize>) {
         let mut seen = HashMap::new();
+        let r = self.materialize_value_seen(v, heap, out, &mut seen);
+        (r, seen)
+    }
+
+    /// `materialize_value_made`, the objects already made (`seen`, which it
+    /// extends) referred to by their variables.
+    fn materialize_value_seen(&self, v: &Abs, heap: &Heap, out: &mut Vec<Op>, seen: &mut HashMap<usize, usize>) -> RExpr {
         // Acyclic graphs use the compact inline form (`{a: 1}`, `[1, 2]`); only a
         // genuinely cyclic graph needs the verbose two-phase shell+fill form.
         let cyclic_root = match v {
@@ -23802,14 +23809,14 @@ impl Js {
         let r = if let Some(a) = cyclic_root {
             let mut shells = Vec::new();
             let mut fills = Vec::new();
-            let r = self.with_cycle_reach(heap, a, || self.mat_value(v, heap, &mut shells, &mut fills, &mut seen));
+            let r = self.with_cycle_reach(heap, a, || self.mat_value(v, heap, &mut shells, &mut fills, seen));
             out.append(&mut shells);
             out.append(&mut fills);
             r
         } else {
-            self.mat_inline(v, heap, out, &mut seen)
+            self.mat_inline(v, heap, out, seen)
         };
-        (r, seen)
+        r
     }
 
     /// Materialize `v` into the residual variable `dst`, reusing an external
@@ -25526,6 +25533,20 @@ impl Js {
         escaped: &mut std::collections::HashSet<usize>,
         out: &mut Vec<Op>,
     ) -> RExpr {
+        self.escape_all(s, &[addr], escaped, out).pop().expect("one root, one value")
+    }
+
+    /// `escape` of each of `addrs`, in order, as one: each made as it would
+    /// be after those before it (what they made is referred to by its
+    /// variable), and the state redirected to what was made once, at the
+    /// end. The runtime value of each.
+    fn escape_all(
+        &self,
+        s: &mut State,
+        addrs: &[usize],
+        escaped: &mut std::collections::HashSet<usize>,
+        out: &mut Vec<Op>,
+    ) -> Vec<RExpr> {
         self.forbid_residual_in_try(s, "an object escaping into unmodeled code");
         // (Weak entries whose keys nothing live reaches: a local no longer
         // live is no root; what this step operates on is, though it popped
@@ -25533,7 +25554,7 @@ impl Js {
         if s.heap.iter().any(|(_, o)| matches!(o, HeapObj::Builtin { kind, .. } if is_weak(kind))) {
             let mut probe = s.clone();
             self.clear_dead(&mut probe);
-            let mut extra: Vec<Abs> = vec![Abs::Ref(addr)];
+            let mut extra: Vec<Abs> = addrs.iter().map(|a| Abs::Ref(*a)).collect();
             extra.extend(escaped.iter().map(|a| Abs::Ref(*a)));
             extra.extend(self.step_operands.borrow().iter().map(|a| Abs::Ref(*a)));
             let extra: Vec<Abs> = extra.into_iter().filter(|v| matches!(v, Abs::Ref(a) if probe.heap.get(a).is_some())).collect();
@@ -25545,84 +25566,102 @@ impl Js {
                 }
             }
         }
-        if escaped.contains(&addr) || s.escaped.contains(&addr) {
-            return RExpr::Var(self.escape_var(addr));
-        }
-        // (What `bind` made of a function this escape reaches, not yet made
-        // (`react::LAZY_BOUND`): made first, while what it copies of its
-        // function is as it was bound.)
-        let lazy: Vec<(usize, usize)> = if self.react.is_some() {
-            s.heap
-                .iter()
-                .filter_map(|(b, o)| match o {
-                    HeapObj::Builtin { kind, data, .. } if kind == react::LAZY_BOUND && !escaped.contains(b) && !s.escaped.contains(b) => match &data[0] {
-                        Abs::Ref(f) => Some((*b, *f)),
+        let mut todo: Vec<usize> = Vec::new();
+        for &addr in addrs {
+            if escaped.contains(&addr) || s.escaped.contains(&addr) || todo.contains(&addr) {
+                continue;
+            }
+            // (What `bind` made of a function this escape reaches, not yet made
+            // (`react::LAZY_BOUND`): made first, while what it copies of its
+            // function is as it was bound.)
+            let lazy: Vec<(usize, usize)> = if self.react.is_some() {
+                s.heap
+                    .iter()
+                    .filter_map(|(b, o)| match o {
+                        HeapObj::Builtin { kind, data, .. } if kind == react::LAZY_BOUND && !escaped.contains(b) && !s.escaped.contains(b) => match &data[0] {
+                            Abs::Ref(f) => Some((*b, *f)),
+                            _ => None,
+                        },
                         _ => None,
-                    },
-                    _ => None,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        if !lazy.is_empty() {
-            let mut reach = std::collections::HashSet::new();
-            Js::reachable(&s.heap, addr, &mut reach);
-            let bounds: Vec<usize> = lazy.iter().filter(|(b, f)| !reach.contains(b) && reach.contains(f)).map(|(b, _)| *b).collect();
-            for b in bounds {
-                self.escape(s, b, escaped, out);
-            }
-            if escaped.contains(&addr) || s.escaped.contains(&addr) {
-                return RExpr::Var(self.escape_var(addr));
-            }
-        }
-        if env_flag!("ESCAPE_DEBUG") {
-            let pc = s.top().pc;
-            let mut reach = std::collections::HashSet::new();
-            Js::reachable(&s.heap, addr, &mut reach);
-            let maxlen = reach
-                .iter()
-                .filter_map(|a| match &s.heap[a] {
-                    HeapObj::Array(e) => Some(e.len()),
-                    _ => None,
-                })
-                .max()
-                .unwrap_or(0);
-            let _ = maxlen;
-            let kind = match &s.heap[&addr] {
-                HeapObj::Object { props, .. } => format!("Object{:?}", props.iter().map(|p| p.key.clone()).collect::<Vec<_>>()),
-                HeapObj::Array(e) => format!("Array[{}]", e.len()),
-                HeapObj::Closure { fid, .. } => format!("Closure(fid={fid})"),
-                HeapObj::Generator { .. } => "Generator".to_string(),
-                HeapObj::Builtin { kind, .. } => format!("Builtin({kind})"),
-                HeapObj::Choice { .. } => "Choice".to_string(),
-                HeapObj::Log { .. } => "Log".to_string(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
             };
-            let frames: Vec<String> = s.frames.iter().map(|f| self.names[f.func].to_string()).collect();
-            // (The instructions before it, whose names and strings place it
-            // in the source.)
-            let ctx: Vec<String> = self.code[pc.saturating_sub(10)..pc.min(self.code.len())]
-                .iter()
-                .filter_map(|i| match i {
-                    Instr::GetProp(k) | Instr::SetPropOp(k) => Some(format!(".{k}")),
-                    Instr::PushStr(t) => Some(format!("{t:?}")),
-                    Instr::PushGlobal(g) => Some(g.clone()),
-                    Instr::PushFunc(f) | Instr::MakeClosure(f, _) => Some(format!("fn {}", self.names[*f])),
-                    _ => None,
-                })
-                .collect();
-            eprintln!(
-                "[ESC] pc={pc} instr={:?} addr={addr} kind={kind} reach={} in {} (callee: {}) ctx [{}]",
-                self.code.get(pc),
-                reach.len(),
-                frames.join(" > "),
-                self.debug_callee.borrow().as_deref().unwrap_or("-"),
-                ctx.join(" ")
-            );
+            if !lazy.is_empty() {
+                let mut reach = std::collections::HashSet::new();
+                Js::reachable(&s.heap, addr, &mut reach);
+                let bounds: Vec<usize> = lazy.iter().filter(|(b, f)| !reach.contains(b) && reach.contains(f)).map(|(b, _)| *b).collect();
+                for b in bounds {
+                    self.escape(s, b, escaped, out);
+                }
+                if escaped.contains(&addr) || s.escaped.contains(&addr) {
+                    continue;
+                }
+            }
+            if env_flag!("ESCAPE_DEBUG") {
+                let pc = s.top().pc;
+                let mut reach = std::collections::HashSet::new();
+                Js::reachable(&s.heap, addr, &mut reach);
+                let maxlen = reach
+                    .iter()
+                    .filter_map(|a| match &s.heap[a] {
+                        HeapObj::Array(e) => Some(e.len()),
+                        _ => None,
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let _ = maxlen;
+                let kind = match &s.heap[&addr] {
+                    HeapObj::Object { props, .. } => format!("Object{:?}", props.iter().map(|p| p.key.clone()).collect::<Vec<_>>()),
+                    HeapObj::Array(e) => format!("Array[{}]", e.len()),
+                    HeapObj::Closure { fid, .. } => format!("Closure(fid={fid})"),
+                    HeapObj::Generator { .. } => "Generator".to_string(),
+                    HeapObj::Builtin { kind, .. } => format!("Builtin({kind})"),
+                    HeapObj::Choice { .. } => "Choice".to_string(),
+                    HeapObj::Log { .. } => "Log".to_string(),
+                };
+                let frames: Vec<String> = s.frames.iter().map(|f| self.names[f.func].to_string()).collect();
+                // (The instructions before it, whose names and strings place it
+                // in the source.)
+                let ctx: Vec<String> = self.code[pc.saturating_sub(10)..pc.min(self.code.len())]
+                    .iter()
+                    .filter_map(|i| match i {
+                        Instr::GetProp(k) | Instr::SetPropOp(k) => Some(format!(".{k}")),
+                        Instr::PushStr(t) => Some(format!("{t:?}")),
+                        Instr::PushGlobal(g) => Some(g.clone()),
+                        Instr::PushFunc(f) | Instr::MakeClosure(f, _) => Some(format!("fn {}", self.names[*f])),
+                        _ => None,
+                    })
+                    .collect();
+                eprintln!(
+                    "[ESC] pc={pc} instr={:?} addr={addr} kind={kind} reach={} in {} (callee: {}) ctx [{}]",
+                    self.code.get(pc),
+                    reach.len(),
+                    frames.join(" > "),
+                    self.debug_callee.borrow().as_deref().unwrap_or("-"),
+                    ctx.join(" ")
+                );
+            }
+            todo.push(addr);
         }
-        let detached = self.detach_private_entries(s, addr);
+        let mut detached = Vec::new();
+        for &addr in &todo {
+            detached.extend(self.detach_private_entries(s, addr));
+        }
         let heap = s.heap.clone();
-        let (root, made) = self.materialize_value_made(&Abs::Ref(addr), &heap, out);
+        let mut made: HashMap<usize, usize> = HashMap::new();
+        let mut values = Vec::with_capacity(addrs.len());
+        for &addr in addrs {
+            let v = if let Some(&var) = made.get(&addr) {
+                RExpr::Var(var)
+            } else if !todo.contains(&addr) {
+                RExpr::Var(self.escape_var(addr))
+            } else {
+                self.materialize_value_seen(&Abs::Ref(addr), &heap, out, &mut made)
+            };
+            values.push(v);
+        }
         for var in made.values() {
             self.why.made(*var, s.top().pc, s.top().func);
         }
@@ -25637,8 +25676,10 @@ impl Js {
         // `react::handle_forgets_on_escape`.)
         if self.react.is_some() {
             let mut reach = std::collections::HashSet::new();
-            Js::reachable(&heap, addr, &mut reach);
-            reach.insert(addr);
+            for &addr in &todo {
+                Js::reachable(&heap, addr, &mut reach);
+                reach.insert(addr);
+            }
             let forget: HashMap<usize, RExpr> = reach
                 .iter()
                 .filter_map(|a| match heap.get(a) {
@@ -25801,7 +25842,7 @@ impl Js {
         }
         s.escaped.extend(made.keys().copied());
         escaped.extend(made.keys().copied());
-        root
+        values
     }
 
     /// A runtime write (`op`) the code of the top activation makes, in the
