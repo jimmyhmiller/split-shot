@@ -25198,7 +25198,9 @@ impl Js {
                 break;
             }
         }
-        let stores: Vec<usize> = reach.iter().copied().filter(|p| private_store(s.heap.get(p)) && !s.escaped.contains(p)).collect();
+        // (In address order: each is made into a variable, named in turn.)
+        let mut stores: Vec<usize> = reach.iter().copied().filter(|p| private_store(s.heap.get(p)) && !s.escaped.contains(p)).collect();
+        stores.sort_unstable();
         let mut detached = Vec::new();
         for p in stores {
             let Some(HeapObj::Builtin { kind, data, .. }) = s.heap.get(&p).cloned() else { continue };
