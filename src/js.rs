@@ -5997,12 +5997,29 @@ impl Js {
         // function is a model body knowing the closure itself, which does
         // not run its code.)
         let mut budget = if plain || (self.arguments_slot[fid].is_some() && !with_self) { 0 } else { MAX_TAKEN.saturating_sub(captured.len()) };
+        // (Whether `v` reaches the closure or an object being made: a search
+        // that stops at one; what a search that found none met reaches none,
+        // and is not searched again.)
+        let clean: std::cell::RefCell<std::collections::HashSet<usize, FxBuild>> = Default::default();
         let reaches_made = |v: &Abs| match v {
             Abs::Ref(r) => {
-                let mut reach = std::collections::HashSet::new();
-                Js::reachable(heap, *r, &mut reach);
                 let making = self.mat_in_progress.borrow();
-                reach.contains(&addr) || reach.iter().any(|x| making.contains(x))
+                let mut clean = clean.borrow_mut();
+                let mut seen: std::collections::HashSet<usize, FxBuild> = Default::default();
+                let mut work = vec![*r];
+                while let Some(a) = work.pop() {
+                    if clean.contains(&a) || !seen.insert(a) {
+                        continue;
+                    }
+                    if a == addr || making.contains(&a) {
+                        return true;
+                    }
+                    if let Some(o) = heap.get(&a) {
+                        o.for_each_child_ref(&mut |c| work.push(c));
+                    }
+                }
+                clean.extend(seen);
+                false
             }
             _ => false,
         };
