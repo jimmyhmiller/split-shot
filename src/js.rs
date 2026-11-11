@@ -16903,6 +16903,7 @@ impl Js {
             "Date" if self.pristine("Object") => {
                 let tv = match args {
                     [Abs::Ref(r)] => date_tv(&s.heap, *r)?,
+                    [Abs::Str(t)] => parse_iso_date(t)?,
                     [v @ (Abs::Num(_) | Abs::Bool(_) | Abs::Null | Abs::Undef)] => time_clip(prim_to_number(v)?.f()),
                     _ => return None,
                 };
@@ -18641,6 +18642,10 @@ impl Js {
                     ("Number", "isNaN") => is_num(|f| f.is_nan()),
                     ("Number", "isFinite") => is_num(|f| f.is_finite()),
                     ("Number", "isInteger") => is_num(|f| f.is_finite() && f.trunc() == f),
+                    ("Date", "parse") => match a0 {
+                        Abs::Str(t) => parse_iso_date(t).map(|v| Abs::Num(JsNum(v))),
+                        _ => None,
+                    },
                     ("Number", "isSafeInteger") => {
                         is_num(|f| f.is_finite() && f.trunc() == f && f.abs() <= 9007199254740991.0)
                     }
@@ -27545,6 +27550,112 @@ fn make_time(h: f64, m: f64, s: f64, ms: f64) -> f64 {
         return f64::NAN;
     }
     h.trunc() * 3_600_000.0 + m.trunc() * 60_000.0 + s.trunc() * 1000.0 + ms.trunc()
+}
+
+/// The time value of `text` in the ECMAScript date time string format
+/// that it fixes (`Date.parse`): a date alone (`YYYY`, `YYYY-MM`,
+/// `YYYY-MM-DD`, UTC), or with a time and a `Z` or `±HH:mm` offset; an
+/// extended year `±YYYYYY`. `None` for anything else: a date-time without
+/// an offset is local time, any other text is the implementation's, and so
+/// is an invalid date in that format (V8 reads `2020-02-30` as March 1st,
+/// with its fallback parser, where the standard says NaN).
+fn parse_iso_date(text: &str) -> Option<f64> {
+    let b = text.as_bytes();
+    let mut i = 0;
+    let digits = |i: &mut usize, n: usize| -> Option<i64> {
+        let s = b.get(*i..*i + n)?;
+        if !s.iter().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        *i += n;
+        Some(s.iter().fold(0i64, |a, c| a * 10 + (c - b'0') as i64))
+    };
+    let year = match b.first()? {
+        b'+' | b'-' => {
+            let neg = b[0] == b'-';
+            i = 1;
+            let y = digits(&mut i, 6)?;
+            if neg && y == 0 {
+                return None;
+            }
+            if neg { -y } else { y }
+        }
+        _ => digits(&mut i, 4)?,
+    };
+    let (mut month, mut day) = (1, 1);
+    if b.get(i) == Some(&b'-') {
+        i += 1;
+        month = digits(&mut i, 2)?;
+        if b.get(i) == Some(&b'-') {
+            i += 1;
+            day = digits(&mut i, 2)?;
+        }
+    }
+    let (mut h, mut mi, mut se, mut ms) = (0, 0, 0, 0);
+    let mut offset_min: i64 = 0;
+    if i < b.len() {
+        if b[i] != b'T' {
+            return None;
+        }
+        i += 1;
+        h = digits(&mut i, 2)?;
+        if b.get(i) != Some(&b':') {
+            return None;
+        }
+        i += 1;
+        mi = digits(&mut i, 2)?;
+        if b.get(i) == Some(&b':') {
+            i += 1;
+            se = digits(&mut i, 2)?;
+            if b.get(i) == Some(&b'.') {
+                i += 1;
+                let start = i;
+                while i < b.len() && b[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i == start {
+                    return None;
+                }
+                // (Milliseconds: the first three digits.)
+                let frac = &text[start..i];
+                ms = format!("{:0<3}", &frac[..frac.len().min(3)]).parse().ok()?;
+            }
+        }
+        match b.get(i) {
+            Some(b'Z') => i += 1,
+            Some(&c @ (b'+' | b'-')) => {
+                i += 1;
+                let oh = digits(&mut i, 2)?;
+                if b.get(i) != Some(&b':') {
+                    return None;
+                }
+                i += 1;
+                let om = digits(&mut i, 2)?;
+                if oh > 23 || om > 59 {
+                    return None;
+                }
+                offset_min = (oh * 60 + om) * if c == b'+' { 1 } else { -1 };
+            }
+            // (No offset: local time, the runtime's.)
+            _ => return None,
+        }
+        if i != b.len() {
+            return None;
+        }
+    }
+    let days_in = |y: i64, m: i64| match m {
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    let valid = (1..=12).contains(&month) && day >= 1 && day <= days_in(year, month) && (h < 24 || (h == 24 && mi == 0 && se == 0 && ms == 0)) && mi < 60 && se < 60;
+    if !valid {
+        return None;
+    }
+    let t = make_day(year as f64, (month - 1) as f64, day as f64) * MS_PER_DAY + make_time(h as f64, mi as f64, se as f64, ms as f64) - (offset_min * 60_000) as f64;
+    let t = time_clip(t);
+    (!t.is_nan()).then_some(t)
 }
 
 /// `Date.prototype.toISOString`'s text of a finite time value.
