@@ -243,6 +243,10 @@
   "merged": 0,
   "gap": 0
  },
+ "date_utc_modeled.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "dead_write_only_variables.js": {
   "merged": 0,
   "gap": 0
@@ -833,7 +837,7 @@
  },
  "std_date_utc_selfhosted.js": {
   "merged": 0,
-  "gap": 2
+  "gap": 0
  },
  "std_json_stringify_selfhosted.js": {
   "merged": 0,

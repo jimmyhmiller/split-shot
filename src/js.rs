@@ -9843,7 +9843,7 @@ fn intrinsic_method_expr(kind: &str) -> Option<RExpr> {
         let i8proto = RExpr::Get(Box::new(RExpr::Global("Int8Array".into())), "prototype".into());
         return Some(RExpr::Get(Box::new(RExpr::Call(Box::new(get_proto), vec![i8proto])), method.to_string()));
     }
-    if !matches!(base, "Object" | "Function" | "Array" | "String" | "Map" | "Set" | "WeakMap" | "WeakSet" | "RegExp" | "Error") {
+    if !matches!(base, "Object" | "Function" | "Array" | "String" | "Map" | "Set" | "WeakMap" | "WeakSet" | "RegExp" | "Error" | "Date") {
         return None;
     }
     Some(RExpr::Get(
@@ -16698,6 +16698,9 @@ impl Js {
 
     fn to_number_static(&self, s: &State, v: &Abs) -> Option<JsNum> {
         match v {
+            // (A Date's number is its time value: `ToPrimitive` with the
+            // number hint calls its `valueOf`.)
+            Abs::Ref(a) if self.pristine("Date") && self.pristine("Object") && date_tv(&s.heap, *a).is_some() => date_tv(&s.heap, *a).map(JsNum),
             Abs::Ref(_) => Some(JsNum::parse(&self.to_string_static(s, v)?)),
             other => prim_to_number(other),
         }
@@ -16707,6 +16710,9 @@ impl Js {
     /// its string form; a primitive is itself. `None` if dynamic / a function.
     fn to_primitive_static(&self, s: &State, v: &Abs) -> Option<Abs> {
         match v {
+            // (A Date's default hint is a string: of its local time, the
+            // runtime's time zone's.)
+            Abs::Ref(a) if date_tv(&s.heap, *a).is_some() => None,
             Abs::Ref(_) => Some(Abs::Str(self.to_string_static(s, v)?)),
             Abs::Dyn(_) => None,
             prim => Some(prim.clone()),
@@ -16746,8 +16752,13 @@ impl Js {
                 self.to_number_static(s, a)?.f() * self.to_number_static(s, b)?.f(),
             ))),
             Lt | Le | Gt | Ge => {
-                let pa = self.to_primitive_static(s, a)?;
-                let pb = self.to_primitive_static(s, b)?;
+                // (The number hint: a Date is its time value.)
+                let date = |v: &Abs| match v {
+                    Abs::Ref(x) if self.pristine("Date") && self.pristine("Object") => date_tv(&s.heap, *x).map(|t| Abs::Num(JsNum(t))),
+                    _ => None,
+                };
+                let pa = match date(a) { Some(v) => v, None => self.to_primitive_static(s, a)? };
+                let pb = match date(b) { Some(v) => v, None => self.to_primitive_static(s, b)? };
                 if let (Abs::Str(sa), Abs::Str(sb)) = (&pa, &pb) {
                     Some(Abs::Bool(str_rel(op, sa, sb)))
                 } else {
@@ -16819,6 +16830,7 @@ impl Js {
             "Array" if matches!(callee, Abs::Dyn(_)) => Some("Array"),
             "Map" if matches!(callee, Abs::Dyn(_)) => Some("Map"),
             "RegExp" if matches!(callee, Abs::Dyn(_)) => Some("RegExp"),
+            "Date" if matches!(callee, Abs::Dyn(_)) => Some("Date"),
             "Set" if matches!(callee, Abs::Dyn(_)) => Some("Set"),
             "WeakMap" if matches!(callee, Abs::Dyn(_)) => Some("WeakMap"),
             "WeakSet" if matches!(callee, Abs::Dyn(_)) => Some("WeakSet"),
@@ -16884,6 +16896,17 @@ impl Js {
                     _ => return None,
                 };
                 Some(Abs::Ref(s.alloc(HeapObj::Builtin { kind: "StringObject".into(), data: vec![Abs::Str(text)].into(), ext: None })))
+            }
+            // `new Date(ms)` of a known time value, or a copy of a modeled
+            // Date (`new Date()` is the clock's, and a string or the local
+            // fields `new Date(y, m, ...)` the runtime's time zone's).
+            "Date" if self.pristine("Object") => {
+                let tv = match args {
+                    [Abs::Ref(r)] => date_tv(&s.heap, *r)?,
+                    [v @ (Abs::Num(_) | Abs::Bool(_) | Abs::Null | Abs::Undef)] => time_clip(prim_to_number(v)?.f()),
+                    _ => return None,
+                };
+                Some(Abs::Ref(s.alloc(HeapObj::Builtin { kind: "Date".into(), data: vec![Abs::Num(JsNum(tv))].into(), ext: None })))
             }
             "TextDecoder" => {
                 let addr = s.alloc(HeapObj::Builtin { kind: "TextDecoder".into(), data: vec![].into(), ext: None });
@@ -18017,6 +18040,21 @@ impl Js {
                             if resume_with {
                                 s.top_mut().ostack.push(arg);
                             }
+                            return Step::Continue;
+                        }
+                    }
+                }
+            }
+        }
+        // A method of a modeled Date.
+        if let (Abs::Ref(addr), Abs::Ref(recv)) = (&callee, &this) {
+            if let (HeapObj::Builtin { kind: mk, .. }, HeapObj::Builtin { kind: dk, ext: None, .. }) = (&s.heap[addr], &s.heap[recv]) {
+                if dk == "Date" && self.pristine("Date") {
+                    if let Some(m) = mk.strip_prefix("Date.prototype.") {
+                        let (m, recv) = (m.to_string(), *recv);
+                        if let Some(v) = self.try_date_method(s, &m, recv, &args) {
+                            s.top_mut().pc += 1;
+                            self.finish_call(s, v, Abs::Undef, ret, pc, out);
                             return Step::Continue;
                         }
                     }
@@ -19268,7 +19306,7 @@ impl Js {
             Abs::Dyn(RExpr::Global(g)) if builtin_typeof(g) == Some("function") && self.pristine(g) && self.pristine("Function") => match o {
                 Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null => Some(false),
                 Abs::Ref(a) => match &s.heap[a] {
-                    HeapObj::Builtin { kind, ext: None, .. } if kind == "RegExp" || is_collection(kind) => Some(kind == g),
+                    HeapObj::Builtin { kind, ext: None, .. } if kind == "RegExp" || kind == "Date" || is_collection(kind) => Some(kind == g),
                     HeapObj::Builtin { .. } | HeapObj::Choice { .. } | HeapObj::Log { .. } | HeapObj::Generator { .. } => None,
                     _ => match chain(s, o)? {
                         // (Every standard error's prototype inherits
@@ -20043,6 +20081,71 @@ impl Js {
 
     /// A `Map`/`Set` method on the modeled collection at `recv`: the result,
     /// or `None` when a key is dynamic (then the call happens at runtime).
+    /// A method of the modeled Date at `recv` on static arguments (numbers,
+    /// or primitives that convert to one): its UTC fields and time value,
+    /// read or set, and its ISO text. `None` for the rest (its local time is
+    /// the runtime's time zone's), or when the method throws (`toISOString`
+    /// of an invalid date): the call is then the runtime's.
+    fn try_date_method(&self, s: &mut State, m: &str, recv: usize, args: &[Abs]) -> Option<Abs> {
+        let tv = date_tv(&s.heap, recv)?;
+        let num = |i: usize| -> Option<f64> {
+            match args.get(i) {
+                None => Some(f64::NAN),
+                Some(v @ (Abs::Num(_) | Abs::Bool(_) | Abs::Null | Abs::Undef | Abs::Str(_))) => prim_to_number(v).map(|n| n.f()),
+                _ => None,
+            }
+        };
+        let f = |i: usize| if tv.is_nan() { f64::NAN } else { utc_fields(tv)[i] };
+        let n = |x: f64| Some(Abs::Num(JsNum(x)));
+        match m {
+            "getTime" | "valueOf" => n(tv),
+            "getUTCFullYear" => n(f(0)),
+            "getUTCMonth" => n(f(1)),
+            "getUTCDate" => n(f(2)),
+            "getUTCDay" => n(f(3)),
+            "getUTCHours" => n(f(4)),
+            "getUTCMinutes" => n(f(5)),
+            "getUTCSeconds" => n(f(6)),
+            "getUTCMilliseconds" => n(f(7)),
+            "toISOString" if tv.is_finite() => Some(Abs::Str(iso_string(tv))),
+            "toJSON" if self.pristine("Object") => Some(if tv.is_finite() { Abs::Str(iso_string(tv)) } else { Abs::Null }),
+            "setTime" | "setUTCMilliseconds" | "setUTCSeconds" | "setUTCMinutes" | "setUTCHours" | "setUTCDate" | "setUTCMonth" | "setUTCFullYear" => {
+                // (Each argument given, converted in order; a missing
+                // optional one is the date's own field.)
+                let given = args.len();
+                let mut xs = Vec::with_capacity(4);
+                for i in 0..given.max(1) {
+                    xs.push(num(i)?);
+                }
+                let arg = |i: usize, own: f64| if i < given { xs[i] } else { own };
+                let t = if m == "setUTCFullYear" && tv.is_nan() { 0.0 } else { tv };
+                let fl = if t.is_nan() { [f64::NAN; 8] } else { utc_fields(t) };
+                let day = |y: f64, mo: f64, d: f64| make_day(y, mo, d);
+                let time = |h: f64, mi: f64, se: f64, ms: f64| make_time(h, mi, se, ms);
+                let new = match m {
+                    "setTime" => xs[0],
+                    "setUTCMilliseconds" => day(fl[0], fl[1], fl[2]) * MS_PER_DAY + time(fl[4], fl[5], fl[6], xs[0]),
+                    "setUTCSeconds" => day(fl[0], fl[1], fl[2]) * MS_PER_DAY + time(fl[4], fl[5], xs[0], arg(1, fl[7])),
+                    "setUTCMinutes" => day(fl[0], fl[1], fl[2]) * MS_PER_DAY + time(fl[4], xs[0], arg(1, fl[6]), arg(2, fl[7])),
+                    "setUTCHours" => day(fl[0], fl[1], fl[2]) * MS_PER_DAY + time(xs[0], arg(1, fl[5]), arg(2, fl[6]), arg(3, fl[7])),
+                    "setUTCDate" => day(fl[0], fl[1], xs[0]) * MS_PER_DAY + time(fl[4], fl[5], fl[6], fl[7]),
+                    "setUTCMonth" => day(fl[0], xs[0], arg(1, fl[2])) * MS_PER_DAY + time(fl[4], fl[5], fl[6], fl[7]),
+                    _ => day(xs[0], arg(1, fl[1]), arg(2, fl[2])) * MS_PER_DAY + time(fl[4], fl[5], fl[6], fl[7]),
+                };
+                // (A date already invalid stays so, but for `setTime` and
+                // `setUTCFullYear`.)
+                let new = if tv.is_nan() && !matches!(m, "setTime" | "setUTCFullYear") { f64::NAN } else { time_clip(new) };
+                if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&recv) {
+                    let mut d = data.to_vec();
+                    d[0] = Abs::Num(JsNum(new));
+                    *data = d.into();
+                }
+                n(new)
+            }
+            _ => None,
+        }
+    }
+
     fn try_collection_method(&self, s: &mut State, kind: &str, m: &str, recv: usize, args: &[Abs], pc: usize) -> Option<Abs> {
         let HeapObj::Builtin { data, .. } = s.heap[&recv].clone() else { return None };
         let stride = collection_stride(kind);
@@ -20835,6 +20938,22 @@ impl Js {
                     }
                     true
                 }
+                // A modeled Date: its methods (`Date.prototype`'s), as
+                // built-in values; a key neither it nor `Object.prototype`
+                // has is `undefined` (it has no own properties).
+                HeapObj::Builtin { kind, ext: None, .. } if kind == "Date" && self.pristine("Date") && self.pristine("Object") => {
+                    if standard_prototype_method("Date", k) && k != "constructor" {
+                        let b = s.alloc(HeapObj::Builtin { kind: format!("Date.prototype.{k}"), data: vec![].into(), ext: None });
+                        return self.push(s, Abs::Ref(b));
+                    }
+                    if k == "constructor" {
+                        return self.push(s, Abs::Dyn(RExpr::Global("Date".into())));
+                    }
+                    if !is_object_proto_member(k) && JsNum::parse(k).as_index().is_none() {
+                        return self.push(s, Abs::Undef);
+                    }
+                    true
+                }
                 HeapObj::Builtin { kind, data, .. } if kind == "RegExp" => {
                     let (Abs::Str(src), Abs::Str(flags)) = (&data[0], &data[1]) else { unreachable!() };
                     let flag = |c: char| Abs::Bool(flags.contains(c));
@@ -21473,6 +21592,7 @@ impl Js {
                 HeapObj::Object { class: ObjClass::Arguments { .. }, .. } => Some(Abs::Str("[object Arguments]".into())),
                 HeapObj::Object { class: ObjClass::Error { .. }, .. } => Some(Abs::Str("[object Error]".into())),
                 HeapObj::Object { .. } => Some(Abs::Str("[object Object]".into())),
+                HeapObj::Builtin { kind, ext: None, .. } if kind == "Date" && self.pristine("Date") => Some(Abs::Str("[object Date]".into())),
                 HeapObj::Builtin { .. } | HeapObj::Choice { .. } | HeapObj::Log { .. } => None,
             },
             "valueOf" => Some(this.clone()),
@@ -22160,7 +22280,7 @@ impl Js {
         let Some((base, _)) = kind.split_once(".prototype.") else { return false };
         match &s.heap[t] {
             HeapObj::Array(_) => base == "Array",
-            HeapObj::Builtin { kind: ck, .. } => is_collection(ck) && base == ck,
+            HeapObj::Builtin { kind: ck, .. } => (is_collection(ck) || ck == "Date") && base == ck,
             _ => false,
         }
     }
@@ -23106,6 +23226,9 @@ impl Js {
             HeapObj::Builtin { kind, data, .. } if kind == "StringObject" => {
                 out.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("String".into())), vec![data[0].to_rexpr()]) });
             }
+            HeapObj::Builtin { kind, data, .. } if kind == "Date" => {
+                out.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Date".into())), vec![data[0].to_rexpr()]) });
+            }
             HeapObj::Builtin { kind, data, .. } if kind == "RegExp" => {
                 let data = data.clone();
                 // A literal: a fresh intrinsic RegExp whatever `RegExp` names.
@@ -24003,6 +24126,9 @@ impl Js {
             }
             HeapObj::Builtin { kind, data, .. } if kind == "StringObject" => {
                 shells.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("String".into())), vec![data[0].to_rexpr()]) });
+            }
+            HeapObj::Builtin { kind, data, .. } if kind == "Date" => {
+                shells.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Date".into())), vec![data[0].to_rexpr()]) });
             }
             HeapObj::Builtin { kind, data, .. } if kind == "TypedArray" => {
                 let data = data.clone();
@@ -27340,6 +27466,95 @@ fn as_ref_addr(v: &Abs) -> Option<usize> {
 /// share a residual block. Without this a loop that allocates fresh objects each
 /// iteration never memo-ties (the addresses always differ). `next_addr`,
 /// `pending_joins`, and `handlers` carry no heap addresses to renumber.
+/// The time value of the modeled Date at `a`, if it is one.
+fn date_tv(heap: &Heap, a: usize) -> Option<f64> {
+    match heap.get(&a) {
+        Some(HeapObj::Builtin { kind, data, ext: None }) if kind == "Date" => match data.first() {
+            Some(Abs::Num(n)) => Some(n.f()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+const MS_PER_DAY: f64 = 86_400_000.0;
+
+/// TimeClip: a time value, or NaN past ±8.64e15 ms.
+fn time_clip(t: f64) -> f64 {
+    if !t.is_finite() || t.abs() > 8.64e15 {
+        f64::NAN
+    } else {
+        t.trunc() + 0.0
+    }
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (`m` 1..=12).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The proleptic Gregorian date (`m` 1..=12) of a day number.
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// The UTC fields of a (finite) time value: year, month (0-based), date,
+/// weekday, hours, minutes, seconds, milliseconds.
+fn utc_fields(tv: f64) -> [f64; 8] {
+    let day = (tv / MS_PER_DAY).floor();
+    let in_day = tv - day * MS_PER_DAY;
+    let (y, m, d) = civil_from_days(day as i64);
+    let wd = (day as i64 + 4).rem_euclid(7);
+    let ms = in_day as i64;
+    [y as f64, (m - 1) as f64, d as f64, wd as f64, (ms / 3_600_000) as f64, (ms / 60_000 % 60) as f64, (ms / 1000 % 60) as f64, (ms % 1000) as f64]
+}
+
+/// MakeDay: the day number of year, month (0-based, any integer) and date,
+/// or NaN.
+fn make_day(year: f64, month: f64, date: f64) -> f64 {
+    if !(year.is_finite() && month.is_finite() && date.is_finite()) {
+        return f64::NAN;
+    }
+    let (y, m, dt) = (year.trunc(), month.trunc(), date.trunc());
+    let ym = y + (m / 12.0).floor();
+    if ym.abs() > 400_000.0 {
+        return f64::NAN;
+    }
+    let mn = m.rem_euclid(12.0);
+    days_from_civil(ym as i64, mn as i64 + 1, 1) as f64 + dt - 1.0
+}
+
+/// MakeTime: the milliseconds of hours, minutes, seconds and ms, or NaN.
+fn make_time(h: f64, m: f64, s: f64, ms: f64) -> f64 {
+    if !(h.is_finite() && m.is_finite() && s.is_finite() && ms.is_finite()) {
+        return f64::NAN;
+    }
+    h.trunc() * 3_600_000.0 + m.trunc() * 60_000.0 + s.trunc() * 1000.0 + ms.trunc()
+}
+
+/// `Date.prototype.toISOString`'s text of a finite time value.
+fn iso_string(tv: f64) -> String {
+    let f = utc_fields(tv);
+    let y = f[0] as i64;
+    let year = if (0..=9999).contains(&y) { format!("{y:04}") } else if y < 0 { format!("-{:06}", -y) } else { format!("+{y:06}") };
+    format!("{year}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", f[1] as i64 + 1, f[2] as i64, f[4] as i64, f[5] as i64, f[6] as i64, f[7] as i64)
+}
+
 /// The load code's mark of where end state `k` of the top-level code is to
 /// be made runtime state (see `Js::finish_agreeing_boundaries`).
 fn boundary_placeholder(k: usize) -> String {
