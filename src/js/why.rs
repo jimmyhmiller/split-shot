@@ -398,10 +398,6 @@ impl Roots {
         self.w[i] |= b;
         !had
     }
-    fn contains(&self, x: &u32) -> bool {
-        let (i, b) = ((*x / 64) as usize, 1u64 << (*x % 64));
-        self.w.get(i).is_some_and(|w| w & b != 0)
-    }
     fn len(&self) -> usize {
         self.w.iter().map(|w| w.count_ones() as usize).sum()
     }
