@@ -2311,12 +2311,56 @@ impl std::hash::Hash for Heap {
     }
 }
 
+thread_local! {
+    /// While on (`with_heap_reads`): every object a heap is asked for, by
+    /// address, with the identity of what it found (0: none). An address of
+    /// `usize::MAX`: the heap was iterated (everything read).
+    static HEAP_READS: std::cell::RefCell<Vec<(usize, Option<std::rc::Rc<HeapObj>>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static HEAP_LOGGING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn log_heap_read(k: usize, found: Option<&std::rc::Rc<HeapObj>>) {
+    if HEAP_LOGGING.with(|l| l.get()) {
+        // (The object itself, kept: an address of memory freed and used
+        // again is no identity.)
+        HEAP_READS.with(|r| r.borrow_mut().push((k, found.cloned())));
+    }
+}
+
+/// `f`'s result and the heap objects it read (see `HEAP_READS`).
+fn with_heap_reads<R>(f: impl FnOnce() -> R) -> (R, Vec<(usize, Option<std::rc::Rc<HeapObj>>)>) {
+    let was = HEAP_LOGGING.with(|l| l.replace(true));
+    let outer = HEAP_READS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+    let out = f();
+    let reads = HEAP_READS.with(|r| std::mem::replace(&mut *r.borrow_mut(), outer));
+    HEAP_LOGGING.with(|l| l.set(was));
+    // (What it read, an enclosing log read too.)
+    if was {
+        HEAP_READS.with(|r| r.borrow_mut().extend(reads.iter().cloned()));
+    }
+    (out, reads)
+}
+
 impl Heap {
     fn new() -> Heap {
         Heap::default()
     }
     fn get(&self, k: &usize) -> Option<&HeapObj> {
-        self.m.get(k).map(|r| &**r)
+        let r = self.m.get(k);
+        log_heap_read(*k, r);
+        r.map(|r| &**r)
+    }
+    /// Is every object `reads` names (see `HEAP_READS`) the one this heap
+    /// holds there?
+    fn reads_unchanged(&self, reads: &[(usize, Option<std::rc::Rc<HeapObj>>)]) -> bool {
+        reads.iter().all(|(k, p)| {
+            *k != usize::MAX
+                && match (self.m.get(k), p) {
+                    (Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        })
     }
     /// The object at `k`, to change: a write of it (see `EntryWatch`).
     #[track_caller]
@@ -2353,7 +2397,9 @@ impl Heap {
     }
     /// The shared object at `k`.
     fn get_shared(&self, k: &usize) -> Option<&std::rc::Rc<HeapObj>> {
-        self.m.get(k)
+        let r = self.m.get(k);
+        log_heap_read(*k, r);
+        r
     }
     fn len(&self) -> usize {
         self.m.len()
@@ -2397,15 +2443,20 @@ impl Heap {
         }
     }
     fn contains_key(&self, k: &usize) -> bool {
-        self.m.contains_key(k)
+        let r = self.m.get(k);
+        log_heap_read(*k, r);
+        r.is_some()
     }
     fn iter(&self) -> impl Iterator<Item = (&usize, &HeapObj)> + '_ {
+        log_heap_read(usize::MAX, None);
         self.m.iter().map(|(k, v)| (k, &**v))
     }
     fn keys(&self) -> impl Iterator<Item = &usize> + '_ {
+        log_heap_read(usize::MAX, None);
         self.m.keys()
     }
     fn values(&self) -> impl Iterator<Item = &HeapObj> + '_ {
+        log_heap_read(usize::MAX, None);
         self.m.values().map(|v| &**v)
     }
 }
@@ -2413,7 +2464,9 @@ impl Heap {
 impl std::ops::Index<&usize> for Heap {
     type Output = HeapObj;
     fn index(&self, k: &usize) -> &HeapObj {
-        &self.m[k]
+        let r = &self.m[k];
+        log_heap_read(*k, Some(r));
+        r
     }
 }
 
@@ -4481,6 +4534,17 @@ pub struct Js {
     /// and the objects of it that reach a cycle (see `cycle_reach`). Any
     /// other is made as a literal of what it holds (see `mat_value`).
     mat_cyclic: std::cell::RefCell<Option<(usize, std::collections::HashSet<usize>)>>,
+    /// `cap_forms_and`'s results, by closure (function, address, the object
+    /// given with it), and what each was computed from (see `CapMemo`).
+    cap_memo: std::cell::RefCell<HashMap<(usize, usize, Option<usize>), CapMemo>>,
+    /// `passed_values`' results, by captures (and the object given with
+    /// them): the forms, the heap objects read, and the values.
+    #[allow(clippy::type_complexity)]
+    passed_memo: std::cell::RefCell<HashMap<(Vec<Abs>, Option<Abs>), (Vec<CapForm>, Vec<(usize, Option<std::rc::Rc<HeapObj>>)>, Vec<Abs>)>>,
+    /// The keys of `cap_memo` and `passed_memo` computed once so far (only
+    /// a second computation is logged and kept).
+    cap_memo_seen: std::cell::RefCell<std::collections::HashSet<(usize, usize, Option<usize>)>>,
+    passed_memo_seen: std::cell::RefCell<std::collections::HashSet<(Vec<Abs>, Option<Abs>)>>,
     /// (`ESCAPE_DEBUG`: the callee of the call being made.)
     debug_callee: std::cell::RefCell<Option<String>>,
     /// The objects of each class just defined (by its constructor's address:
@@ -4742,6 +4806,17 @@ const TYPED_INTRINSICS: &[&str] = &["__abstract", "__abstractOrNull", "__abstrac
 enum CapForm {
     Value(Shape),
     FinalCell(Shape),
+}
+
+/// A closure's capture forms (`Js::cap_forms_and`) and what they were
+/// computed from: its captures, the objects being made, the versions of the
+/// tables consulted, and the heap objects read (see `HEAP_READS`).
+struct CapMemo {
+    captured: Vec<Abs>,
+    making: Vec<usize>,
+    versions: (usize, usize),
+    reads: Vec<(usize, Option<std::rc::Rc<HeapObj>>)>,
+    forms: Vec<CapForm>,
 }
 
 /// What the body of a closure's residual function knows of a value it is
@@ -5433,6 +5508,10 @@ impl Js {
             mat_in_progress: std::cell::RefCell::new(std::collections::HashSet::new()),
             mat_pending: std::cell::RefCell::new(std::collections::HashSet::new()),
             mat_cyclic: std::cell::RefCell::new(None),
+            cap_memo: std::cell::RefCell::new(HashMap::new()),
+            passed_memo: std::cell::RefCell::new(HashMap::new()),
+            cap_memo_seen: std::cell::RefCell::new(std::collections::HashSet::new()),
+            passed_memo_seen: std::cell::RefCell::new(std::collections::HashSet::new()),
             debug_callee: std::cell::RefCell::new(None),
             class_snapshots: std::cell::RefCell::new(HashMap::new()),
             shared_fn_objects: std::cell::RefCell::new(HashMap::new()),
@@ -5986,6 +6065,41 @@ impl Js {
     /// `render` it is: see `react_method_root_fn`), as a form after its
     /// captures'.
     pub(super) fn cap_forms_and(&self, fid: usize, addr: usize, captured: &[Abs], once: bool, heap: &Heap, with: Option<usize>) -> Vec<CapForm> {
+        // (What it gave for these captures before, if nothing it read since
+        // differs: the heap's objects it read, the objects being made, and
+        // the tables it consults that grow. Not with a host model.)
+        if self.react.is_some() || !once || env_flag!("PE_NO_CAPMEMO") {
+            return self.cap_forms_compute(fid, addr, captured, once, heap, with);
+        }
+        let making: Vec<usize> = {
+            let mut m: Vec<usize> = self.mat_in_progress.borrow().iter().copied().collect();
+            m.sort_unstable();
+            m
+        };
+        let versions = (self.no_unbox_fids.borrow().len(), self.declared_types.borrow().len());
+        let key = (fid, addr, with);
+        let hit = self.cap_memo.borrow().get(&key).and_then(|m| {
+            (m.captured.as_slice() == captured && m.making == making && m.versions == versions && heap.reads_unchanged(&m.reads)).then(|| m.forms.clone())
+        });
+        if let Some(forms) = hit {
+            if env_flag!("PE_CHECK_CAPMEMO") {
+                let fresh = self.cap_forms_compute(fid, addr, captured, once, heap, with);
+                assert_eq!(fresh, forms, "cap_forms memo disagrees for {}", self.names[fid]);
+            }
+            return forms;
+        }
+        // (A closure made once is not worth the log: only one made again.)
+        if self.cap_memo_seen.borrow_mut().insert((key.0, key.1, key.2)) {
+            return self.cap_forms_compute(fid, addr, captured, once, heap, with);
+        }
+        let (forms, reads) = with_heap_reads(|| self.cap_forms_compute(fid, addr, captured, once, heap, with));
+        if !reads.iter().any(|(k, _)| *k == usize::MAX) {
+            self.cap_memo.borrow_mut().insert(key, CapMemo { captured: captured.to_vec(), making, versions, reads, forms: forms.clone() });
+        }
+        forms
+    }
+
+    fn cap_forms_compute(&self, fid: usize, addr: usize, captured: &[Abs], once: bool, heap: &Heap, with: Option<usize>) -> Vec<CapForm> {
         let with_self = with.is_some();
         if env_flag!("CAP_DEBUG") {
             eprintln!("[CAP] {} once={once} captured={:?}", self.names[fid], captured.iter().map(|c| match c { Abs::Ref(a) => format!("{:?}", heap.get(a)), v => format!("{v:?}") }).collect::<Vec<_>>());
@@ -6586,7 +6700,27 @@ impl Js {
         if !unboxed && imports == 0 {
             return captured.to_vec();
         }
-        self.passed_values(captured, me, forms, heap)
+        // (What it gave for these captures and forms before, if the heap's
+        // objects it read are as they were: see `cap_forms_and`.)
+        if self.react.is_some() || env_flag!("PE_NO_CAPMEMO") {
+            return self.passed_values(captured, me, forms, heap);
+        }
+        let key = (captured.to_vec(), me.cloned());
+        let hit = self.passed_memo.borrow().get(&key).and_then(|(f, reads, out)| (f.as_slice() == forms && heap.reads_unchanged(reads)).then(|| out.clone()));
+        if let Some(out) = hit {
+            if env_flag!("PE_CHECK_CAPMEMO") {
+                assert_eq!(self.passed_values(captured, me, forms, heap), out, "passed_values memo disagrees");
+            }
+            return out;
+        }
+        if self.passed_memo_seen.borrow_mut().insert(key.clone()) {
+            return self.passed_values(captured, me, forms, heap);
+        }
+        let (out, reads) = with_heap_reads(|| self.passed_values(captured, me, forms, heap));
+        if !reads.iter().any(|(k, _)| *k == usize::MAX) {
+            self.passed_memo.borrow_mut().insert(key, (forms.to_vec(), reads, out.clone()));
+        }
+        out
     }
 
     /// Make residual function `rfid` for source `fid`, the captures as
