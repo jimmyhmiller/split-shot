@@ -21225,6 +21225,24 @@ impl Js {
                             }
                             Found::Unknown => true,
                         }
+                    } else if let (Some(Some(trap)), HeapObj::Builtin { data, .. }) = (proxy_trap(&s.heap, &s.heap[&addr], "get"), &s.heap[&addr]) {
+                        // A `get` trap of known code: its call, with the
+                        // handler as `this` (the target, the key and the
+                        // proxy as the receiver). (Not where the target has
+                        // the key as a non-configurable property: the result
+                        // is checked against it then, at runtime.)
+                        let (target, handler) = (data[0].clone(), data[1].clone());
+                        let plain_target = match &target {
+                            Abs::Ref(t) => matches!(&s.heap[t], HeapObj::Object { class: ObjClass::Ordinary, extensible: true, .. })
+                                && s.heap[t].own(k).is_none_or(|p| p.attrs & CONFIGURABLE != 0),
+                            _ => false,
+                        };
+                        if plain_target {
+                            s.top_mut().ostack.push(trap);
+                            s.top_mut().ostack.extend([target, Abs::Str(k.clone()), Abs::Ref(addr)]);
+                            return self.do_call(s, 3, pc, out, handler, RetMode::Value, Abs::Undef);
+                        }
+                        true
                     } else {
                         true
                     }

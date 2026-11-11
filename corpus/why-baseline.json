@@ -743,6 +743,10 @@
   "merged": 0,
   "gap": 2
  },
+ "proxy_get_trap_inlined.js": {
+  "merged": 0,
+  "gap": 7
+ },
  "proxy_parent_cell_fill.js": {
   "merged": 0,
   "gap": 6
