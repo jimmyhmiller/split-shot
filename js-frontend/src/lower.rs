@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use partial::js::{
     Bop, Clause, Expr, FnKind, FuncDef, PropDef, PropKey, Stmt, ATTR_CONFIGURABLE, ATTR_ENUMERABLE, ATTR_WRITABLE,
-    PRIVATE_MAP_HELPER, PRIVATE_SET_HELPER, SUPER_GET_HELPER, TEMPLATE_TO_STRING,
+    ILL_FORMED_STRING, PRIVATE_MAP_HELPER, PRIVATE_SET_HELPER, SUPER_GET_HELPER, TEMPLATE_TO_STRING,
 };
 use partial::jsnum::JsNum;
 
@@ -91,6 +91,9 @@ pub struct LowerOpts {
     /// Rely on React's contract: the program gets React's model
     /// (`react_model.js`; see the engine's `js/react.rs`).
     pub react: bool,
+    /// The residual names each variable that stands for one of the
+    /// program's as the source does (see `codegen::set_source_names`).
+    pub source_names: bool,
 }
 
 /// `compile_full`, with the lowering options.
@@ -773,6 +776,9 @@ const SCRIPT_INPUT: &str = "%input";
 
 #[derive(Default)]
 struct Compiler {
+    /// How many tagged templates have been lowered: each is a site of its
+    /// own (see `lower_tagged_template`).
+    template_sites: usize,
     /// See `LowerOpts`.
     closed_script: bool,
     /// See `LowerOpts`.
@@ -868,8 +874,18 @@ struct FnCtx {
     /// initializer's effects, and it needs no cell.
     dead: HashSet<String>,
     scopes: Vec<HashMap<String, Binding>>,
+    /// Per scope: the `let`/`const`/`class` names its block declares
+    /// further on, not yet declared (see `Compiler::block_prologue`): a
+    /// reference to one from here is in its temporal dead zone.
+    tdz: Vec<HashSet<String>>,
     next_slot: usize,
     max_slot: usize,
+    /// Lowering an object literal whose home-object cell is bound already
+    /// (see the `super` properties of an object literal's methods).
+    object_home: bool,
+    /// The source names of the slots that have one (for diagnostics: see
+    /// `FuncDef::slot_names`).
+    names: Vec<(usize, String)>,
     /// nesting depth of enclosing `switch`/loop, to validate `break`.
     break_depth: usize,
     /// nesting depth of enclosing *loops*, to validate `continue` (which, unlike
@@ -1062,7 +1078,10 @@ impl FnCtx {
             script_top: false,
             dead: HashSet::new(),
             scopes: vec![HashMap::new()],
+            tdz: vec![HashSet::new()],
             next_slot: 0,
+            object_home: false,
+            names: Vec::new(),
             max_slot: 0,
             break_depth: 0,
             loop_depth: 0,
@@ -1107,6 +1126,22 @@ impl FnCtx {
     }
     fn push(&mut self) {
         self.scopes.push(HashMap::new());
+        self.tdz.push(HashSet::new());
+    }
+    /// Is a reference to `name` here to a `let`/`const`/`class` binding of an
+    /// enclosing block whose declaration has not run (it is declared
+    /// further on in that block, and no nearer scope declares the name)?
+    /// Reading or assigning it throws a ReferenceError.
+    fn in_tdz(&self, name: &str) -> bool {
+        for (scope, pending) in self.scopes.iter().zip(&self.tdz).rev() {
+            if scope.contains_key(name) {
+                return false;
+            }
+            if pending.contains(name) {
+                return true;
+            }
+        }
+        false
     }
     /// A fresh unnamed local (a lowering temporary).
     fn fresh_slot(&mut self) -> usize {
@@ -1134,6 +1169,7 @@ impl FnCtx {
     }
     fn pop(&mut self) {
         self.scopes.pop();
+        self.tdz.pop();
     }
     fn declare(&mut self, name: &str) -> usize {
         self.declare_boxed(name, self.boxed_set.contains(name))
@@ -1143,6 +1179,8 @@ impl FnCtx {
         self.next_slot += 1;
         self.max_slot = self.max_slot.max(self.next_slot);
         self.scopes.last_mut().unwrap().insert(name.to_string(), Binding { slot, boxed, mapped: None });
+        self.tdz.last_mut().unwrap().remove(name);
+        self.names.push((slot, name.to_string()));
         slot
     }
     /// Declare (or reuse) a `var` in the *function* scope. `var` is
@@ -1157,7 +1195,19 @@ impl FnCtx {
         self.next_slot += 1;
         self.max_slot = self.max_slot.max(self.next_slot);
         self.scopes[0].insert(name.to_string(), Binding { slot, boxed, mapped: None });
+        self.names.push((slot, name.to_string()));
         slot
+    }
+    /// Each slot's source name (`""` for a lowering temporary; the names
+    /// joined by `/` for a slot several bindings share).
+    fn slot_names(&self) -> Vec<&'static str> {
+        let mut by_slot: Vec<Vec<&str>> = vec![Vec::new(); self.max_slot];
+        for (slot, name) in &self.names {
+            if *slot < by_slot.len() && !by_slot[*slot].contains(&name.as_str()) {
+                by_slot[*slot].push(name);
+            }
+        }
+        by_slot.into_iter().map(|n| leak(n.join("/"))).collect()
     }
     /// `var name = value` (or a `var` pattern's name): a write of the
     /// function-scoped binding, or of the global for a script's top level.
@@ -1248,7 +1298,7 @@ impl Compiler {
     /// the prelude, React's) as top-level functions of strict code: the
     /// program's names refer to them, the residual's globals they are not.
     fn add_model(&mut self, src: &str) -> R<()> {
-        let module = crate::parse(src)?;
+        let module = crate::parse_model(src)?;
         for item in module.body {
             if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(f))) = item {
                 let name = f.ident.sym.to_string();
@@ -1273,7 +1323,7 @@ impl Compiler {
             let is_async = self.decls[i].function.as_ref().is_some_and(|f| f.is_async);
             let is_main = self.decls[i].module_body.is_some();
             let source_text = self.decls[i].function.as_ref().and_then(|f| span_text(f.span));
-            let (nslots, nparams, (arguments_slot, mapped_arguments), body) = match self.decls[i].function.take() {
+            let (nslots, nparams, (arguments_slot, mapped_arguments), body, slot_names) = match self.decls[i].function.take() {
                 Some(func) => {
                     // (A direct `eval` that reruns the call at runtime: the
                     // function is then emitted as its source, which may
@@ -1318,7 +1368,7 @@ impl Compiler {
                 ncaptured: 0,
                 nparams,
                 length,
-                slot_names: vec![],
+                slot_names,
                 arguments_slot,
                 mapped_arguments,
                 script_globals: if is_main { std::mem::take(&mut self.script_decls) } else { vec![] },
@@ -1342,7 +1392,7 @@ impl Compiler {
     /// Lower the program's top-level statements as the body of a synthetic
     /// `main(input)` (the engine entry). `input` is the one dynamic value; the
     /// top-level `var`s and code run in order.
-    fn lower_module_main(&mut self, stmts: &[ast::Stmt]) -> R<(usize, usize, (Option<usize>, bool), Vec<Stmt>)> {
+    fn lower_module_main(&mut self, stmts: &[ast::Stmt]) -> R<(usize, usize, (Option<usize>, bool), Vec<Stmt>, Vec<&'static str>)> {
         let mut ctx = FnCtx::new(HashSet::new());
         ctx.script_top = true;
         ctx.strict = self.strict_now;
@@ -1384,7 +1434,7 @@ impl Compiler {
         let pname = if self.script_input { SCRIPT_INPUT } else { "input" };
         let input = ast::Pat::Ident(ast::BindingIdent::from(ast::Ident::new_no_ctxt(pname.into(), Default::default())));
         let body = self.lower_function_body(&mut ctx, &[&input], stmts, false)?;
-        Ok((ctx.max_slot.max(1), 1, (ctx.arguments_slot, ctx.mapped_arguments), body))
+        Ok((ctx.max_slot.max(1), 1, (ctx.arguments_slot, ctx.mapped_arguments), body, ctx.slot_names()))
     }
 
     /// Set up a function's scope and lower its body: parameters (after any
@@ -1631,6 +1681,7 @@ impl Compiler {
                 }
             }
         }
+        Compiler::note_tdz(stmts, ctx);
         body.extend(self.lower_fn_decls(stmts, ctx)?);
         // (Initialized from here on: the parameters and the function
         // declarations.)
@@ -1712,6 +1763,14 @@ impl Compiler {
     /// Assign `value` to the name `name` (a local, a boxed cell, or an
     /// implicit global).
     fn assign_name(&mut self, name: &str, value: Expr, ctx: &mut FnCtx, out: &mut Vec<Stmt>) {
+        // (In its temporal dead zone: the value is computed, and the
+        // assignment throws.)
+        if ctx.in_tdz(name) {
+            out.push(Stmt::ExprStmt(value));
+            let thrown = self.tdz_error(name).unwrap_or_else(|e| panic!("{e}"));
+            out.push(Stmt::ExprStmt(thrown));
+            return;
+        }
         match ctx.resolve_binding(name) {
             Some(b) => out.push(b.write(value)),
             None => out.push(Stmt::SetGlobal(name.to_string(), value)),
@@ -2077,6 +2136,9 @@ impl Compiler {
     /// (for a destructuring assignment, the right-hand side). The target's
     /// object and key are evaluated once, before the right-hand side.
     fn lower_assign_expr(&mut self, a: &ast::AssignExpr, ctx: &mut FnCtx) -> R<Expr> {
+        if let Some(thrown) = self.tdz_assign(a, ctx)? {
+            return Ok(thrown);
+        }
         let mut stmts = Vec::new();
         // The target as a reader and a writer, with its base evaluated once.
         enum Target {
@@ -3206,6 +3268,50 @@ impl Compiler {
         Ok(Expr::Closure(fid, caps))
     }
 
+    /// The `let`/`const`/`class` names the block of `stmts` (its scope the
+    /// current one) declares, not yet declared: until its declaration runs,
+    /// a reference to one is in its temporal dead zone (`FnCtx::in_tdz`).
+    /// (One a closure captures is a cell made as the block is entered, read
+    /// as `undefined` until then: that zone is not modeled.)
+    fn note_tdz(stmts: &[ast::Stmt], ctx: &mut FnCtx) {
+        for st in stmts {
+            let names: Vec<String> = match st {
+                ast::Stmt::Decl(ast::Decl::Var(v)) if !matches!(v.kind, ast::VarDeclKind::Var) => v.decls.iter().flat_map(|d| scope::pat_names(&d.name)).collect(),
+                ast::Stmt::Decl(ast::Decl::Class(c)) => vec![c.ident.sym.to_string()],
+                _ => continue,
+            };
+            for name in names {
+                if !ctx.boxed_set.contains(&name) && !ctx.scopes.last().unwrap().contains_key(&name) {
+                    ctx.tdz.last_mut().unwrap().insert(name);
+                }
+            }
+        }
+    }
+
+    /// An assignment to a name in its temporal dead zone, as the expression
+    /// that throws its ReferenceError: after the value is computed for
+    /// `name = value`; at once for a compound one, which reads the name
+    /// first.
+    fn tdz_assign(&mut self, a: &ast::AssignExpr, ctx: &mut FnCtx) -> R<Option<Expr>> {
+        let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(bi)) = &a.left else { return Ok(None) };
+        let name = bi.id.sym.as_str();
+        if !ctx.in_tdz(name) {
+            return Ok(None);
+        }
+        let Expr::Call(thrower, mut args) = self.tdz_error(name)? else { unreachable!("`tdz_error` is a call") };
+        if matches!(a.op, ast::AssignOp::Assign) {
+            args.push(self.lower_expr(&a.right, ctx)?);
+        }
+        Ok(Some(Expr::Call(thrower, args)))
+    }
+
+    /// `name` referenced in its temporal dead zone: the ReferenceError the
+    /// reference throws, as an expression (the prelude's `__pe_tdz`).
+    fn tdz_error(&self, name: &str) -> R<Expr> {
+        let fid = *self.name_to_fid.get("__pe_tdz").ok_or("internal: the prelude's `__pe_tdz` is missing")?;
+        Ok(Expr::Call(Box::new(Expr::Func(fid)), vec![Expr::Str(name.to_string())]))
+    }
+
     /// Entering a block whose statements are `stmts` (its scope just pushed):
     /// a fresh `{value}` cell for each boxed lexical name it declares (closures
     /// capture the binding of this entry of the block, and a function
@@ -3226,6 +3332,7 @@ impl Compiler {
                 _ => {}
             }
         }
+        Compiler::note_tdz(stmts, ctx);
         for name in names {
             if ctx.boxed_set.contains(&name) && !ctx.scopes.last().unwrap().contains_key(&name) {
                 let slot = ctx.declare_boxed(&name, true);
@@ -3251,7 +3358,7 @@ impl Compiler {
 
     /// Lower a function (declaration or lifted expression). Returns
     /// (nslots, nparams, (arguments_slot, mapped_arguments), body).
-    fn lower_fn(&mut self, function: &ast::Function) -> R<(usize, usize, (Option<usize>, bool), Vec<Stmt>)> {
+    fn lower_fn(&mut self, function: &ast::Function) -> R<(usize, usize, (Option<usize>, bool), Vec<Stmt>, Vec<&'static str>)> {
         let block = match &function.body {
             Some(b) => b,
             None => return Err("function without a body".into()),
@@ -3264,7 +3371,7 @@ impl Compiler {
         let params: Vec<&ast::Pat> = function.params.iter().map(|p| &p.pat).collect();
         let nparams = params.len();
         let body = self.lower_function_body(&mut ctx, &params, &block.stmts, false)?;
-        Ok((ctx.max_slot.max(nparams), nparams, (ctx.arguments_slot, ctx.mapped_arguments), body))
+        Ok((ctx.max_slot.max(nparams), nparams, (ctx.arguments_slot, ctx.mapped_arguments), body, ctx.slot_names()))
     }
 
     /// Lift an arrow / function expression to a top-level function via closure
@@ -3422,7 +3529,7 @@ impl Compiler {
             ncaptured,
             nparams,
             length: expected_argument_count(params),
-            slot_names: vec![],
+            slot_names: ctx.slot_names(),
             arguments_slot: ctx.arguments_slot,
             mapped_arguments: ctx.mapped_arguments,
             script_globals: vec![],
@@ -3491,7 +3598,19 @@ impl Compiler {
 
     fn lower_stmt(&mut self, s: &ast::Stmt, ctx: &mut FnCtx, out: &mut Vec<Stmt>) -> R<()> {
         match s {
-            ast::Stmt::Decl(ast::Decl::Var(v)) => self.lower_var_decl(v, ctx, out)?,
+            ast::Stmt::Decl(ast::Decl::Var(v)) => {
+                self.lower_var_decl(v, ctx, out)?;
+                // (Its names are declared from here on, however each is
+                // bound: a local, a cell, a script's global, or nothing for
+                // one nothing reads. See `FnCtx::in_tdz`.)
+                if !matches!(v.kind, ast::VarDeclKind::Var) {
+                    for d in &v.decls {
+                        for name in scope::pat_names(&d.name) {
+                            ctx.tdz.last_mut().unwrap().remove(&name);
+                        }
+                    }
+                }
+            }
             ast::Stmt::Decl(ast::Decl::Fn(f)) => {
                 // Function declarations were created where they are hoisted
                 // to: the top of the body (see `lower_fn_decls`) or of their
@@ -3519,6 +3638,7 @@ impl Compiler {
                 let name = c.ident.sym.to_string();
                 let value = self.lower_class(&c.class, Some(&name), ctx)?;
                 self.bind_lexical(&name, value, ctx, out)?;
+                ctx.tdz.last_mut().unwrap().remove(&name);
                 if let Some(b) = ctx.resolve_binding(&name) {
                     ctx.initialized.insert(b.slot);
                 }
@@ -4030,6 +4150,12 @@ impl Compiler {
     /// Lower an expression used in statement position (assignments, calls, the
     /// `arr.push(x)` form).
     fn lower_expr_stmt(&mut self, e: &ast::Expr, ctx: &mut FnCtx, out: &mut Vec<Stmt>) -> R<()> {
+        if let ast::Expr::Assign(a) = e {
+            if let Some(thrown) = self.tdz_assign(a, ctx)? {
+                out.push(Stmt::ExprStmt(thrown));
+                return Ok(());
+            }
+        }
         match e {
             // `i++` / `--i` etc. in statement position (e.g. a `for` update): the
             // result value is discarded, so pre/post doesn't matter — it's just
@@ -4378,6 +4504,36 @@ impl Compiler {
                 // Leading plain `key: value` properties build the object;
                 // anything else (methods, accessors, computed keys, spread,
                 // `__proto__`), and everything after it, is defined in order.
+                // A method, getter or setter of it that reads a `super`
+                // property reads it from this object's prototype: the object
+                // is its home object, which its functions capture as a cell
+                // filled once the object is made (as a constructor's is).
+                let reads_super = o.props.iter().any(|p| match p {
+                    ast::PropOrSpread::Prop(prop) => match &**prop {
+                        ast::Prop::Method(m) => m.function.body.as_ref().is_some_and(|b| super_prop_in(&b.stmts)),
+                        ast::Prop::Getter(g) => g.body.as_ref().is_some_and(|b| super_prop_in(&b.stmts)),
+                        ast::Prop::Setter(st) => st.body.as_ref().is_some_and(|b| super_prop_in(&b.stmts)),
+                        _ => false,
+                    },
+                    _ => false,
+                });
+                if reads_super && !ctx.object_home {
+                    ctx.push();
+                    let cell = ctx.declare_boxed("%objhome", true);
+                    ctx.scopes.last_mut().unwrap().insert("%home".into(), Binding { slot: cell, boxed: true, mapped: None });
+                    ctx.object_home = true;
+                    let made = self.lower_expr(e, ctx);
+                    ctx.object_home = false;
+                    let object = ctx.fresh_slot();
+                    ctx.pop();
+                    let stmts = vec![
+                        Stmt::Let(cell, Expr::Object(vec![("value".into(), Expr::Undefined)])),
+                        Stmt::Let(object, made?),
+                        Stmt::SetProp(Expr::Var(cell), "value".into(), Expr::Var(object)),
+                    ];
+                    return Ok(Expr::Seq(stmts, Box::new(Expr::Var(object))));
+                }
+                ctx.object_home = false;
                 let mut fields = Vec::with_capacity(o.props.len());
                 let mut defs: Vec<PropDef> = Vec::new();
                 for p in &o.props {
@@ -4542,19 +4698,16 @@ impl Compiler {
             }
             // `a${x}b`: the cooked strings and each substitution's `ToString`.
             ast::Expr::Tpl(t) => {
-                let cooked = |q: &ast::TplElement| -> R<String> {
-                    q.cooked
-                        .as_ref()
-                        .map(|c| c.to_string_lossy().into_owned())
-                        .ok_or_else(|| "a template with an invalid escape".to_string())
+                let cooked = |q: &ast::TplElement| -> R<Expr> {
+                    q.cooked.as_ref().map(string_value).ok_or_else(|| "a template with an invalid escape".to_string())
                 };
-                let mut acc = Expr::Str(cooked(&t.quasis[0])?);
+                let mut acc = cooked(&t.quasis[0])?;
                 for (i, e) in t.exprs.iter().enumerate() {
                     let v = Expr::Opaque(TEMPLATE_TO_STRING.into(), vec![self.lower_expr(e, ctx)?]);
                     acc = Expr::Bin(Bop::Add, Box::new(acc), Box::new(v));
                     let q = cooked(&t.quasis[i + 1])?;
-                    if !q.is_empty() {
-                        acc = Expr::Bin(Bop::Add, Box::new(acc), Box::new(Expr::Str(q)));
+                    if !matches!(&q, Expr::Str(t) if t.is_empty()) {
+                        acc = Expr::Bin(Bop::Add, Box::new(acc), Box::new(q));
                     }
                 }
                 Ok(acc)
@@ -4659,11 +4812,37 @@ impl Compiler {
                 let last = self.lower_expr(sq.exprs.last().ok_or("empty sequence expression")?, ctx)?;
                 Ok(Expr::Seq(stmts, Box::new(last)))
             }
+            ast::Expr::TaggedTpl(t) => self.lower_tagged_template(t, ctx),
             other => Err(format!("unsupported expression: {:?}", other)),
         }
     }
 
+    /// A tagged template, ``tag`a${x}b` ``: `tag(strings, x)`, a method call
+    /// when the tag is a member. `strings` is the site's template object:
+    /// the cooked strings (`undefined` for one with an invalid escape),
+    /// frozen, with the frozen raw strings as `raw`; one object for the
+    /// site, however often it is evaluated (the prelude's `__pe_template`
+    /// keeps it).
+    fn lower_tagged_template(&mut self, t: &ast::TaggedTpl, ctx: &mut FnCtx) -> R<Expr> {
+        let site = self.template_sites;
+        self.template_sites += 1;
+        let tag = self.lower_expr(&t.tag, ctx)?;
+        let cooked: Vec<Expr> = t.tpl.quasis.iter().map(|q| q.cooked.as_ref().map_or(Expr::Undefined, string_value)).collect();
+        // (A line end in the source is a line feed in the raw string.)
+        let raw: Vec<Expr> = t.tpl.quasis.iter().map(|q| Expr::Str(q.raw.replace("\r\n", "\n").replace('\r', "\n"))).collect();
+        let keeper = *self.name_to_fid.get("__pe_template").ok_or("internal: the prelude's `__pe_template` is missing")?;
+        let strings = Expr::Call(Box::new(Expr::Func(keeper)), vec![Expr::Num(JsNum(site as f64)), Expr::Array(cooked), Expr::Array(raw)]);
+        let mut args = vec![strings];
+        for e in &t.tpl.exprs {
+            args.push(self.lower_expr(e, ctx)?);
+        }
+        Ok(Expr::Call(Box::new(tag), args))
+    }
+
     fn lower_ident(&self, name: &str, ctx: &mut FnCtx) -> R<Expr> {
+        if ctx.in_tdz(name) {
+            return self.tdz_error(name);
+        }
         if let Some(b) = ctx.resolve_binding(name) {
             // A boxed variable lives in a cell; read through it.
             Ok(b.read())
@@ -4934,6 +5113,10 @@ impl Compiler {
             Index(usize, usize),
         }
         let place = match unparen(&u.arg) {
+            // (In its temporal dead zone: reading it throws.)
+            ast::Expr::Ident(id) if ctx.in_tdz(id.sym.as_str()) => {
+                return Ok((vec![Stmt::ExprStmt(self.tdz_error(id.sym.as_str())?)], Expr::Undefined));
+            }
             ast::Expr::Ident(id) => match ctx.resolve_binding(id.sym.as_str()) {
                 Some(b) => Place::Binding(b),
                 None => Place::Global(id.sym.to_string()),
@@ -6115,12 +6298,26 @@ fn collect_vars(s: &ast::Stmt, out: &mut Vec<String>) {
     }
 }
 
+/// A string a literal names: the string, or, when it is not well-formed
+/// Unicode (a surrogate without its pair, which the specializer's strings
+/// cannot hold), a runtime value over its code units (see
+/// `ILL_FORMED_STRING`).
+fn string_value(value: &swc_atoms::Wtf8Atom) -> Expr {
+    match value.as_str() {
+        Some(text) => Expr::Str(text.to_string()),
+        None => {
+            let hex: String = value.to_ill_formed_utf16().map(|unit| format!("{unit:04x}")).collect();
+            Expr::Opaque(ILL_FORMED_STRING.into(), vec![Expr::Str(hex)])
+        }
+    }
+}
+
 fn lower_lit(lit: &ast::Lit) -> R<Expr> {
     match lit {
         ast::Lit::Num(n) => {
             Ok(Expr::Num(JsNum(n.value)))
         }
-        ast::Lit::Str(s) => Ok(Expr::Str(s.value.to_string_lossy().into_owned())),
+        ast::Lit::Str(s) => Ok(string_value(&s.value)),
         ast::Lit::Bool(b) => Ok(Expr::Bool(b.value)),
         ast::Lit::Null(_) => Ok(Expr::Null),
         ast::Lit::BigInt(b) => Ok(Expr::BigInt(b.value.to_string())),
@@ -6132,7 +6329,12 @@ fn lower_lit(lit: &ast::Lit) -> R<Expr> {
 fn prop_name(p: &ast::PropName) -> R<String> {
     match p {
         ast::PropName::Ident(id) => Ok(id.sym.to_string()),
-        ast::PropName::Str(s) => Ok(s.value.to_string_lossy().into_owned()),
+        // (A property's name is a string of the model: one that is not
+        // well-formed Unicode has no such string.)
+        ast::PropName::Str(s) => match s.value.as_str() {
+            Some(name) => Ok(name.to_string()),
+            None => Err("a property name that is not well-formed Unicode (a surrogate without its pair) is not supported".into()),
+        },
         ast::PropName::Num(n) => Ok((n.value as i64).to_string()),
         _ => Err("computed / BigInt object keys are not supported".into()),
     }

@@ -53,7 +53,23 @@ pub fn program_to_js(
             m.insert(*v, format!("__x{v}"));
         }
     });
+    SCRIPT_DECLS.with(|d| *d.borrow_mut() = vm.script_decls().iter().map(|(n, _)| n.clone()).collect());
     let roots: Vec<&Program<Op, Cond>> = std::iter::once(main_prog).chain(load_prog).collect();
+    SOURCE_NAMES.with(|m| {
+        let mut m = m.borrow_mut();
+        m.clear();
+        if SOURCE_NAMES_ON.with(|on| on.get()) {
+            use partial::js::ResidualPart;
+            let at = |p: &Program<Op, Cond>| p as *const Program<Op, Cond> as usize;
+            m.insert(at(main_prog), vm.var_source_names(ResidualPart::Main));
+            if let Some(lp) = load_prog {
+                m.insert(at(lp), vm.var_source_names(ResidualPart::Load));
+            }
+            for (rfid, rf) in vm.residual_fns().iter().enumerate() {
+                m.insert(at(&rf.body), vm.var_source_names(ResidualPart::Fn(rfid)));
+            }
+        }
+    });
     // Residual functions some code calls directly (`__rf<id>(captures...,
     // args...)`), as opposed to only through closure values.
     let mut flat_refs: HashSet<usize> = HashSet::new();
@@ -264,10 +280,13 @@ pub fn program_to_js(
         let asy = if rf.is_async { "async " } else { "" };
         let flat = format!("{asy}function{star} __rf{rfid}");
         // A closure used only as a value: the factory holds the body itself.
+        // (A class's constructor too: a function that constructs as its
+        // body does, and throws called without `new`.)
         let nested = rf.used_as_value
             && rf.ncaptured > 0
             && !flat_refs.contains(&rfid)
-            && matches!(rf.kind, FnKind::Normal | FnKind::Arrow | FnKind::Method | FnKind::Generator);
+            && (matches!(rf.kind, FnKind::Normal | FnKind::Arrow | FnKind::Method | FnKind::Generator)
+                || (matches!(rf.kind, FnKind::ClassCtor { .. }) && std::env::var_os("PE_NO_NESTED_CTOR").is_none()));
         // (`PE_NO_SOURCE_MODE` always emits the specialized form, to debug it.)
         // (A class's source is the class's, made by `RExpr::ClassSrc`, not
         // its constructor's.)
@@ -596,6 +615,14 @@ fn nested_factory(rfid: usize, rf: &ResidualFn, short_names: bool) -> String {
     }
     if let Some(a) = rf.args_var.filter(|a| program_reads_var(&rf.body, *a)) {
         let _ = writeln!(body, "    const {} = arguments;", var_js(a));
+    }
+    // (A class's constructor called without `new` throws, as a class does.)
+    if matches!(rf.kind, FnKind::ClassCtor { .. }) {
+        let _ = writeln!(
+            body,
+            "    if (new.target === void 0) {{\n      throw new TypeError({});\n    }}",
+            js_string(&format!("Class constructor {name} cannot be invoked without 'new'"))
+        );
     }
     body.push_str(&render_blocks(&rf.body, "    ", false));
     SHORT.with(|n| *n.borrow_mut() = None);
@@ -1253,8 +1280,19 @@ thread_local! {
     /// The variables the load code gives `main` (see `Js::entry_load`), with
     /// the name every function knows each by.
     static EXPORTED: RefCell<HashMap<usize, String>> = RefCell::new(HashMap::new());
+    /// The source name of each variable that stands for one of the
+    /// program's (see `Js::var_source_names`), when the residual is to name
+    /// them so.
+    static SOURCE_NAMES_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Those names, for each part of the residual being rendered: by the
+    /// address of its program (which `program_to_js` holds borrowed
+    /// throughout).
+    static SOURCE_NAMES: RefCell<HashMap<usize, HashMap<usize, String>>> = RefCell::new(HashMap::new());
     /// The short names of the function being rendered, when enabled.
     static SHORT: RefCell<Option<ShortNames>> = const { RefCell::new(None) };
+    /// The names the residual script declares at its top level (see
+    /// `Js::script_decls`).
+    static SCRIPT_DECLS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// The function being rendered is strict code.
     static STRICT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The fresh capture-free closures rendered inline where they are made:
@@ -1279,6 +1317,12 @@ thread_local! {
     /// The source of each class the residual makes from it (by its
     /// constructor's fid).
     static CLASS_TEXT: RefCell<HashMap<usize, ClassText>> = RefCell::new(HashMap::new());
+}
+
+/// Whether `program_to_js` names the residual's variables as the program
+/// does (see `Js::var_source_names`). With short names only.
+pub fn set_source_names(on: bool) {
+    SOURCE_NAMES_ON.with(|n| n.set(on));
 }
 
 /// A class the residual makes from its source (see `RExpr::ClassSrc`): its
@@ -1350,12 +1394,29 @@ impl ShortNames {
         // Most used first; ties by id, for a deterministic result.
         order.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let mut vars = HashMap::new();
+        // (With source names: each variable that stands for one of the
+        // program's takes its name, the first to ask when two would.)
+        let mut taken: HashSet<String> = HashSet::new();
+        SOURCE_NAMES.with(|names| {
+            let names = names.borrow();
+            let Some(names) = names.get(&(prog as *const Program<Op, Cond> as usize)) else { return };
+            for (v, _) in &order {
+                let Some(n) = names.get(v) else { continue };
+                let free = binding_name_ok(n) && n != "main" && n != "arguments" && n != "eval" && !globals.contains(n) && !also_reserved.contains(&n.as_str());
+                if free && taken.insert(n.clone()) {
+                    vars.insert(*v, n.clone());
+                }
+            }
+        });
         let mut k = 0;
         for (v, _) in order {
+            if vars.contains_key(&v) {
+                continue;
+            }
             let name = loop {
                 let n = nth_ident(k);
                 k += 1;
-                if !RESERVED.contains(&n.as_str()) && !globals.contains(&n) && !also_reserved.contains(&n.as_str()) {
+                if !RESERVED.contains(&n.as_str()) && !globals.contains(&n) && !also_reserved.contains(&n.as_str()) && !taken.contains(&n) {
                     break n;
                 }
             };
@@ -1663,7 +1724,9 @@ pub(crate) fn op_to_js(op: &Op, ind: &str) -> String {
         }
         // (In strict code an assignment to an undeclared name throws: the
         // write is the global object's property, which is what it models.)
-        Op::AssignGlobal { name, expr } if STRICT.with(|c| c.get()) => {
+        // (One the residual script declares is assigned as it is: a `let`
+        // is no property of the global object.)
+        Op::AssignGlobal { name, expr } if STRICT.with(|c| c.get()) && !SCRIPT_DECLS.with(|d| d.borrow().contains(name)) => {
             format!("globalThis{} = {};", member_suffix(name), js_assign(expr))
         }
         Op::AssignGlobal { name, expr } => inc_dec_into(name, expr).unwrap_or_else(|| match compound(&RExpr::Global(name.clone()), None, expr) {
@@ -1779,6 +1842,8 @@ fn js(e: &RExpr, min: u8) -> String {
         RExpr::Index(a, i) => format!("{}[{}]", js(a, P_MEMBER), js(i, 0)),
         RExpr::Opaque(op, args) => match args.as_slice() {
             [a] if op == partial::js::TEMPLATE_TO_STRING => format!("`${{{}}}`", js(a, 0)),
+            // (A string that is not well-formed Unicode: its literal.)
+            [RExpr::Str(hex)] if op == partial::js::ILL_FORMED_STRING => partial::js::ill_formed_string_literal(hex),
             // ToNumeric (a Number or a BigInt): negated twice.
             [a] if op == "tonumeric" => {
                 // (A space keeps `- -x` from reading as the decrement `--x`.)

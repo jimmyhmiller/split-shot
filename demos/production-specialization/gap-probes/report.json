@@ -1,0 +1,648 @@
+{
+  "compilerSha256": "bffa6939dd1ceadac0692812c34b7d14b71ce7d6dc2bfee4aa10138233ee3d98",
+  "evaluatorSourceSha256": "af76c329e3c002a117620a4dafd21eac214b23992dc58cdb7cb61ddf802bdda5",
+  "gitCommit": "91cbe19fdbd3d8761ee772559b4435fa21960af3",
+  "node": "v26.5.0",
+  "measuredAt": "2026-11-10T04:56:36.627Z",
+  "probes": [
+    {
+      "name": "entries-fixed-shape",
+      "sourceSha256": "8bffdd2d9b0593c72fc695e98ca5529d36501d5e85c21b54fcce1f82a08d8ccb",
+      "residualSha256": "c41655931c66e97560ea64e462d70692e39a33a91d73e9c4b45b9db9fc99c753",
+      "bytes": 515,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 4
+    },
+    {
+      "name": "entries-conditional-shape",
+      "sourceSha256": "9b311956ffcf41f86994aea30bfb246d8d967fe3781ebcd81c5fb4a1a90363be",
+      "residualSha256": "b9b8d168b46af27633d63649f5585c4e320d1ec721c04fe580c7fe758ed83c37",
+      "bytes": 960,
+      "retains": {
+        "entries": true,
+        "iterator": true,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 4
+    },
+    {
+      "name": "entries-after-decode",
+      "sourceSha256": "6eb8a40aad273e8b2321946aeebe18dca28b079c9da00a44caf79db971999cad",
+      "residualSha256": "e8f869cd2d94eb49e3ab24288eca0e03649bffc91f2e04efd6c02756d8bcb30c",
+      "bytes": 555,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 4
+    },
+    {
+      "name": "regex-dynamic-result",
+      "sourceSha256": "fb582f63e2f2b79d92afe6066755e17598ddf803aef81c450c2a004ef57cb56c",
+      "residualSha256": "44e47228fdba87e73c69535e0cc5ca922b5495768e5c4917f7a6d5949edb3604",
+      "bytes": 204,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 3
+    },
+    {
+      "name": "callback-const-capture",
+      "sourceSha256": "604b503e035754f6621a81e8e73f1155e5cb032cff9f44407e1f5f2a9f47ed3b",
+      "residualSha256": "eb7b1fec03e6f83729cb26a076cc9b7eec397a512ffca75ddd2b2b84b028a45e",
+      "bytes": 187,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 3
+    },
+    {
+      "name": "callback-literal-control",
+      "sourceSha256": "514a5d3ff08c784791c50a66dfb5e3a4a84a1dc794a032cdfa699d717c171cc7",
+      "residualSha256": "eb7b1fec03e6f83729cb26a076cc9b7eec397a512ffca75ddd2b2b84b028a45e",
+      "bytes": 187,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 3
+    },
+    {
+      "name": "callback-through-helper",
+      "sourceSha256": "85b3f22de76d626a5e18c43865aa6a4626d4614eade9f5c60dd7a01ee524c0f3",
+      "residualSha256": "eb7b1fec03e6f83729cb26a076cc9b7eec397a512ffca75ddd2b2b84b028a45e",
+      "bytes": 187,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 3
+    },
+    {
+      "name": "callback-inside-loop",
+      "sourceSha256": "0be87652a258a38a236096f3cec630b6a00bae82a642672ad7dd2eee61ed3b4a",
+      "residualSha256": "dfa3127b0cae7b3e6e017014cdaac837b07ac4eaf277e476b6c36bfed280d0cc",
+      "bytes": 408,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": true,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 2
+    },
+    {
+      "name": "next-cleanup-loop",
+      "sourceSha256": "8f362359fb20a48072ae182c88f60c0e9175600122ea9caeda58d2af5285ee88",
+      "residualSha256": "826332d0e9d017b06c03ea0eec5e52e6577ccab1639469358c15b20ee23668c8",
+      "bytes": 1144,
+      "retains": {
+        "entries": true,
+        "iterator": true,
+        "captureBox": true,
+        "startsWith": false,
+        "regexpConstruction": true,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 4
+    },
+    {
+      "name": "uri-extra-token",
+      "sourceSha256": "167e68584efb588d78ef52c41c0ef9e5b817ded792bca20621d5bd2e4b55e59f",
+      "residualSha256": "8dc356eda855a78b056f94ab2327dd34aab7db4d672608d4b57dddd916fbeaa6",
+      "bytes": 140,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 5
+    },
+    {
+      "name": "uri-no-extra-token-control",
+      "sourceSha256": "6426d53fa2d6b180cbe3377aced0fe5714ac6ab2864275626478b1acae50bcca",
+      "residualSha256": "f35408d1d8fca1d7ff8db21dbbde506d6e042e68f7498b23c97ca08f2787435b",
+      "bytes": 85,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 5
+    },
+    {
+      "name": "dead-string-call",
+      "sourceSha256": "42bca84045bc67ba6f2d76b370a81a89ef05ee7c94f4c8d0704422496fe5a8bd",
+      "residualSha256": "bda5a470357fd654c72990c38fc65428e55adeeebeb4612d381417f6a66d2028",
+      "bytes": 94,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": true,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 5
+    },
+    {
+      "name": "dead-string-call-typed",
+      "sourceSha256": "9dbec32ce5a360b364ca3ad996335afd84b89b91a0fc9810ab170ae843e1236e",
+      "residualSha256": "49872e60c4f1b0fa5b2803e8509230b3b937a04e565283db2c168b2ae1ab6b35",
+      "bytes": 68,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": true,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 4
+    },
+    {
+      "name": "primitive-instanceof",
+      "sourceSha256": "e12e13b66c6c404d37cec3861d8abb3d3eba898ee1f5b78cfa2bd36c0135acfe",
+      "residualSha256": "0a7f890030d48fefead673164591e3bbbe02ec38febf20e3093a3921d531b6f1",
+      "bytes": 77,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": true
+      },
+      "verified": 3
+    },
+    {
+      "name": "p2r-static-parse",
+      "sourceSha256": "7e01a706b66e6ec1f593d51b6ce70072c7babfec4e4cfb164e67b971934ded74",
+      "residualSha256": "5e085db86d39271400c27fe323c97a62544a006af241090296a315f540e17cf4",
+      "bytes": 141,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 3
+    },
+    {
+      "name": "p2r-static-matcher",
+      "sourceSha256": "8d9c032c1dd0115cf504912686f9ccbfbd4d8508e2723b04be81dd76f6ea455a",
+      "residualSha256": "3cd0fe4a308602b8a632fd9005974fdb7aa137460fdbc3cf9b2fada42c5d6b5c",
+      "bytes": 657,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": true
+      },
+      "verified": 5
+    },
+    {
+      "name": "p2r-static-destination",
+      "sourceSha256": "c39b89231dfb832b685e83a4a1fbb3946d34d1a42c9b21f77a046b568b7e4dac",
+      "residualSha256": "655adc2f9358334a525d9e9fa669182cc9e3eaf7e1ddf478c8f1e21c58930591",
+      "bytes": 754,
+      "retains": {
+        "entries": false,
+        "iterator": false,
+        "captureBox": false,
+        "startsWith": false,
+        "regexpConstruction": false,
+        "parseFunction": false,
+        "instanceof": false
+      },
+      "verified": 8
+    }
+  ],
+  "dependencyCalls": [
+    {
+      "request": "/unmatched/7",
+      "result": {
+        "value": null
+      },
+      "calls": [
+        {
+          "helper": "slasher",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/unmatched/7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/unmatched/7"
+        }
+      ]
+    },
+    {
+      "request": "/legacy/post-7",
+      "result": {
+        "value": "/content/post-7.html"
+      },
+      "calls": [
+        {
+          "helper": "slasher",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/legacy/post-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "url.parse",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "pathToRegExp.compile",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/articles/post-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "url.parse",
+          "firstArg": "/content/:slug.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/content/:slug.html"
+        },
+        {
+          "helper": "pathToRegExp.compile",
+          "firstArg": "/content/:slug.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/content/post-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/content/post-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/content/post-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/content/post-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/content/post-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/content/post-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/content/post-7.html"
+        }
+      ]
+    },
+    {
+      "request": "/docs/api/page-7",
+      "result": {
+        "value": "/manual/api/page-7.html"
+      },
+      "calls": [
+        {
+          "helper": "slasher",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/docs/api/page-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/docs/api/page-7"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/docs/api/page-7"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/docs/:section/:page"
+        },
+        {
+          "helper": "url.parse",
+          "firstArg": "/manual/:section/:page.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/manual/:section/:page.html"
+        },
+        {
+          "helper": "pathToRegExp.compile",
+          "firstArg": "/manual/:section/:page.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/legacy/:slug"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/user/:id"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/download/:file"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "slasher",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "path.posix.resolve",
+          "firstArg": "/manual/api/page-7.html"
+        },
+        {
+          "helper": "pathToRegExp",
+          "firstArg": "/articles/:slug"
+        },
+        {
+          "helper": "minimatch",
+          "firstArg": "/manual/api/page-7.html"
+        }
+      ]
+    }
+  ],
+  "pathToRegexpSourceSha256": "8d7555d398ffcd950da241377532c7ebf4144880f45531671082c805cac58e8f"
+}

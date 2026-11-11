@@ -40,6 +40,8 @@ use std::cell::RefCell;
 
 /// React as a model the specializer relies on (`Js::set_react`, `--react`).
 mod react;
+mod why;
+pub use why::{Cause as WhyCause, Class as WhyClass, Report as WhyReport, Unit as WhyUnit};
 
 // ---------------------------------------------------------------------------
 // Operators
@@ -714,6 +716,13 @@ impl Abs {
     fn is_dynamic(&self) -> bool {
         matches!(self, Abs::Dyn(_))
     }
+    /// The expression of a runtime value; `undefined` for any other.
+    fn to_rexpr_or_undef(&self) -> RExpr {
+        match self {
+            Abs::Dyn(e) => e.clone(),
+            _ => RExpr::Undef,
+        }
+    }
     /// Convert a *primitive* abstract value to a residual expression. Panics on
     /// a heap reference; use `Js::materialize_value` for escape points.
     fn to_rexpr(&self) -> RExpr {
@@ -1366,6 +1375,26 @@ enum ObjClass {
     /// it as, once it escaped (it stays modeled: no code writes it, see
     /// `Js::escape`), which every later reference is.
     FinalCell { made: Option<usize> },
+    /// An Error object (it has `[[ErrorData]]`): one `new E(message)` made,
+    /// `E` the standard error constructor `STANDARD_ERRORS[ctor]`, or a
+    /// subclass's `super(message)` (see `Js::builtin_super`). Its `message`
+    /// is its own property, as the constructor defines it; `name`,
+    /// `constructor` and the rest it inherits from `E.prototype`, which a
+    /// plain one has as its prototype (see `lookup_prop`). Its `stack` is
+    /// the runtime's: reading it makes the object at runtime, by `new E`.
+    /// Otherwise an ordinary object.
+    Error { ctor: u8 },
+}
+
+/// The prototype of a standard error constructor, as the expression
+/// `E.prototype`: the standard error's name when `e` is that.
+fn error_proto_name(e: &RExpr) -> Option<&'static str> {
+    let RExpr::Get(g, k) = e else { return None };
+    let RExpr::Global(n) = &**g else { return None };
+    if k != "prototype" {
+        return None;
+    }
+    STANDARD_ERRORS.iter().copied().find(|x| x == n)
 }
 
 /// A dynamic `if` whose arms assign primitive slots differently: on reaching
@@ -1381,6 +1410,27 @@ struct PendingJoin {
     depth: usize,
     mods: Vec<usize>,
     globals: Vec<String>,
+    /// For the join of the whole `if`: the state it branched from (see
+    /// `BeforeBranch`).
+    before: Option<BeforeBranch>,
+}
+
+/// What an `if`'s join needs of the state the `if` branched from, to tell
+/// an arm that did nothing but assign the slots the join merges: the heap,
+/// what runtime code had reached, the functions and globals known, and
+/// whether the activation had branched before. Both arms hold the same: it
+/// tells no two states apart.
+#[derive(Clone, Debug)]
+struct BeforeBranch(std::rc::Rc<(Heap, im::OrdSet<usize>, im::OrdMap<usize, Abs>, im::OrdMap<String, (Abs, bool)>, bool)>);
+
+impl PartialEq for BeforeBranch {
+    fn eq(&self, _: &BeforeBranch) -> bool {
+        true
+    }
+}
+impl Eq for BeforeBranch {}
+impl std::hash::Hash for BeforeBranch {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
 /// The objects of the class whose constructor is at `c`: the constructor,
@@ -1678,6 +1728,8 @@ struct EntrySplit {
     boundary: std::cell::RefCell<Vec<(State, Vec<usize>, HashMap<usize, usize>)>>,
     /// The residual load code, when the split was made.
     load: std::cell::RefCell<Option<Program<Op, Cond>>>,
+    /// `load` has been cleaned up (see `Js::clean_load`).
+    load_cleaned: std::cell::Cell<bool>,
     /// The variables the load code gives `main`.
     exports: std::cell::RefCell<Vec<usize>>,
     /// The boundary's objects a call may change (by address).
@@ -1688,6 +1740,16 @@ struct EntrySplit {
     all_globals_dynamic: std::cell::Cell<bool>,
     /// No split: a pass cap reached before what `main` changes was found.
     disabled: std::cell::Cell<bool>,
+    /// The top-level code did not end in one state (a runtime branch in
+    /// it, a loop it could not unroll): it still runs once, as the load
+    /// code, and everything it leaves is runtime state to `main`, which
+    /// knows none of it (see `Js::entry_boundary`). Without this the whole
+    /// script would be `main`, its top-level code run again at every call.
+    generalize: std::cell::Cell<bool>,
+    /// With `generalize`: nothing at all is known of that runtime state,
+    /// not even which function a variable holds (the paths to the
+    /// boundary did not agree on that either).
+    generalize_plain: std::cell::Cell<bool>,
     /// No other script reads the top-level lexical bindings (see
     /// `Js::set_closed_script`).
     closed: std::cell::Cell<bool>,
@@ -1744,13 +1806,46 @@ thread_local! {
 /// objects than the boundary's).
 fn entry_watch_paused<T>(f: impl FnOnce() -> T) -> T {
     let saved = ENTRY_WATCH.with(|w| w.borrow_mut().take());
+    let regions = REGION_WATCH.with(|w| std::mem::take(&mut *w.borrow_mut()));
+    let region_globals = REGION_GLOBALS.with(|w| std::mem::take(&mut *w.borrow_mut()));
     let r = f();
     ENTRY_WATCH.with(|w| *w.borrow_mut() = saved);
+    REGION_WATCH.with(|w| *w.borrow_mut() = regions);
+    REGION_GLOBALS.with(|w| *w.borrow_mut() = region_globals);
     r
+}
+
+thread_local! {
+    /// The residual `try` regions being specialized (see
+    /// `Js::residualize_try`), innermost last: for each, the address its
+    /// state's objects lie below, and those of them the region's code has
+    /// written, or made runtime values, so far.
+    static REGION_WATCH: std::cell::RefCell<Vec<(usize, std::collections::BTreeSet<usize>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Whether the code of each such region has changed what is known of
+    /// a global (assigned one, or run runtime code that may have).
+    static REGION_GLOBALS: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What is known of a global changes: noted for every region being watched.
+fn region_note_globals() {
+    REGION_GLOBALS.with(|w| w.borrow_mut().iter_mut().for_each(|g| *g = true));
+}
+
+/// The object at `a` is written, or made a runtime value: noted for every
+/// region being watched whose state had it.
+fn region_note(a: usize) {
+    REGION_WATCH.with(|w| {
+        for (limit, touched) in w.borrow_mut().iter_mut() {
+            if a < *limit {
+                touched.insert(a);
+            }
+        }
+    });
 }
 
 #[track_caller]
 fn note_entry_write(a: usize) {
+    region_note(a);
     let at = std::panic::Location::caller();
     ENTRY_WATCH.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
@@ -1867,6 +1962,7 @@ fn note_entry_weak(a: usize) {
 }
 
 fn note_entry_escape(a: usize) {
+    region_note(a);
     ENTRY_WATCH.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
             if a < w.limit {
@@ -2166,6 +2262,10 @@ struct Handler {
     exc_slot: Option<usize>,
     frame_depth: usize,
     ostack_depth: usize,
+    /// A handler of the load code that only throws what it caught again
+    /// (after writing variables): an operation left to runtime in its `try`
+    /// needs no runtime `try` (see `Js::load_rethrow_handler`).
+    transparent: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2408,13 +2508,14 @@ impl State {
         let addrs: Vec<usize> = self.heap.keys().copied().collect();
         for a in addrs {
             let o = &self.heap[&a];
-            let named = matches!(o, HeapObj::Closure { ident: Some(v), .. } if m.contains_key(v));
+            let named = matches!(o, HeapObj::Closure { ident: Some(v), .. } | HeapObj::Object { class: ObjClass::FinalCell { made: Some(v) }, .. } if m.contains_key(v));
             if o.holds_no_dyn() && !named {
                 continue;
             }
             let o = self.heap.get_mut_quiet(&a).unwrap();
             o.children_mut().into_iter().for_each(ren);
-            if let HeapObj::Closure { ident: Some(v), .. } = o {
+            // (The variable a function, or a variable's cell, was made in.)
+            if let HeapObj::Closure { ident: Some(v), .. } | HeapObj::Object { class: ObjClass::FinalCell { made: Some(v) }, .. } = o {
                 if let Some(n) = m.get(v) {
                     *v = *n;
                 }
@@ -2536,7 +2637,7 @@ fn typeof_from(e: &RExpr, ta: Option<&'static str>, tb: Option<&'static str>) ->
             },
         },
         RExpr::Opaque(op, xs) => match (op.as_str(), xs.len()) {
-            ("typeof", _) => Some("string"),
+            ("typeof", _) | (ILL_FORMED_STRING, _) => Some("string"),
             ("!", 1) => Some("boolean"),
             ("/" | "%" | "**", 2) => match (ta, tb) {
                 (Some("bigint"), Some("bigint")) => Some("bigint"),
@@ -2798,209 +2899,6 @@ fn analyze_loop_mutations(
         }
     }
     (bases, true)
-}
-
-/// Which slots *drive dispatch* in a loop body: a slot whose value, after at
-/// least one field/element access (`obj.field` / `arr[i]`), reaches a branch
-/// condition. This is the tree-walk interpreter's `node` in `switch (node.op)`
-/// or `i < node.body.length` — keeping it STATIC lets the dispatch fold away.
-/// A slot used only as opaque data (read, concatenated, returned — never feeding
-/// a branch) is NOT a driver, so keeping it static would only duplicate the
-/// literal at each use; such slots are materialized to a runtime variable.
-///
-/// Each abstract-stack entry tracks `slot` (the bare slot of a `Load`, before any
-/// field access) and `ff` (the set of slots a value is derived from THROUGH a
-/// field/index access). At every consuming op the operands' `slot` folds into
-/// `ff`; a `JmpIfFalsy` marks every slot in the popped value's `ff`.
-fn analyze_dispatch_drivers(
-    code: &[Instr],
-    lo: usize,
-    hi: usize,
-    leaders: &[bool],
-    nslots: usize,
-) -> Vec<bool> {
-    use std::collections::BTreeSet;
-    #[derive(Clone, Default)]
-    struct Ent {
-        slot: Option<usize>,
-        ff: BTreeSet<usize>,
-    }
-    let mut drivers = vec![false; nslots];
-    let mut stack: Vec<Ent> = Vec::new();
-    // Fold a consumed operand's bare slot into its field-derived set.
-    let consumed = |e: Ent| -> BTreeSet<usize> {
-        let mut s = e.ff;
-        if let Some(x) = e.slot {
-            s.insert(x);
-        }
-        s
-    };
-    for pc in lo..hi {
-        if leaders[pc] {
-            stack.clear();
-        }
-        macro_rules! pop {
-            () => {
-                stack.pop().unwrap_or_default()
-            };
-        }
-        match &code[pc] {
-            Instr::Load(s) => stack.push(Ent { slot: Some(*s), ff: BTreeSet::new() }),
-            Instr::PushNum(_) | Instr::PushStr(_) | Instr::PushBigInt(_) | Instr::PushVerbatim(..) | Instr::PushBool(_) | Instr::PushUndef
-            | Instr::PushNull | Instr::PushThis | Instr::PushGlobal(_) | Instr::PushFunc(_) => {
-                stack.push(Ent::default())
-            }
-            Instr::Dup => {
-                let t = stack.last().cloned().unwrap_or_default();
-                stack.push(t);
-            }
-            Instr::Snapshot | Instr::MarkClass | Instr::ChkCoercible(_) => {}
-            Instr::GetProp(_) => {
-                let e = pop!();
-                stack.push(Ent { slot: None, ff: consumed(e) });
-            }
-            Instr::GetIndex => {
-                let idx = pop!();
-                let base = pop!();
-                let mut ff = consumed(base);
-                ff.extend(consumed(idx));
-                stack.push(Ent { slot: None, ff });
-            }
-            Instr::Bin(_) => {
-                let b = pop!();
-                let a = pop!();
-                let mut ff = consumed(a);
-                ff.extend(consumed(b));
-                stack.push(Ent { slot: None, ff });
-            }
-            Instr::JmpIfFalsy(_) => {
-                let e = pop!();
-                for s in &e.ff {
-                    if *s < drivers.len() {
-                        drivers[*s] = true;
-                    }
-                }
-            }
-            Instr::Pop | Instr::Store(_) | Instr::SetGlobalOp(_) | Instr::Throw | Instr::Ret => {
-                let _ = pop!();
-            }
-            Instr::OpaqueOp { arity, .. } => {
-                for _ in 0..*arity {
-                    let _ = pop!();
-                }
-                stack.push(Ent::default());
-            }
-            Instr::NewObject(keys) => {
-                for _ in 0..keys.len() {
-                    let _ = pop!();
-                }
-                stack.push(Ent::default());
-            }
-            Instr::NewArray(n) => {
-                for _ in 0..*n {
-                    let _ = pop!();
-                }
-                stack.push(Ent::default());
-            }
-            Instr::MakeClosure(_, ncap) => {
-                for _ in 0..*ncap {
-                    let _ = pop!();
-                }
-                stack.push(Ent::default());
-            }
-            Instr::Call(nargs) | Instr::NewOp(nargs) => {
-                // A field-derived value flowing into a call argument (or callee)
-                // is a dispatch driver: this is the tree-walk descent
-                // `exec(node.seq, ...)` / `exec(node.body[i], ...)`, where a
-                // sub-object of `node` becomes the next recursion subject. Keeping
-                // `node` static is what lets that recursion bottom out and fold.
-                for _ in 0..nargs + 1 {
-                    let e = pop!();
-                    for s in consumed(e) {
-                        if s < drivers.len() {
-                            drivers[s] = true;
-                        }
-                    }
-                }
-                stack.push(Ent::default());
-            }
-            Instr::CallMethod(nargs) => {
-                // As for `Call`, plus the receiver.
-                for _ in 0..nargs + 2 {
-                    let e = pop!();
-                    for s in consumed(e) {
-                        if s < drivers.len() {
-                            drivers[s] = true;
-                        }
-                    }
-                }
-                stack.push(Ent::default());
-            }
-            Instr::SetIndexOp => {
-                let _ = pop!();
-                let _ = pop!();
-                let _ = pop!();
-            }
-            Instr::DefineProp { .. } | Instr::DefineAccessor { .. } => {
-                let _ = pop!();
-                let _ = pop!();
-                let o = pop!();
-                stack.push(o);
-            }
-            Instr::CopyProps | Instr::SetProto => {
-                let _ = pop!();
-                let o = pop!();
-                stack.push(o);
-            }
-            Instr::GetProto => {
-                let e = pop!();
-                stack.push(Ent { slot: None, ff: consumed(e) });
-            }
-            Instr::SuperCall(nargs) => {
-                for _ in 0..nargs + 1 {
-                    let e = pop!();
-                    for s in consumed(e) {
-                        if s < drivers.len() {
-                            drivers[s] = true;
-                        }
-                    }
-                }
-                stack.push(Ent::default());
-            }
-            Instr::SuperCallSpread => {
-                let _ = pop!();
-                let _ = pop!();
-                stack.push(Ent::default());
-            }
-            Instr::PushNewTarget => stack.push(Ent::default()),
-            Instr::GetIter => {
-                let e = pop!();
-                stack.push(Ent { slot: None, ff: consumed(e) });
-            }
-            Instr::IterClose => {
-                let _ = pop!();
-            }
-            Instr::Yield | Instr::Await => {
-                let _ = pop!();
-                stack.push(Ent::default());
-            }
-            Instr::NewRegExp { .. } => stack.push(Ent::default()),
-            Instr::SetPropOp(_) | Instr::PushArr | Instr::DeleteIndexOp => {
-                let _ = pop!();
-                let _ = pop!();
-            }
-            Instr::DeleteValue => {
-                let _ = pop!();
-                let _ = pop!();
-                stack.push(Ent::default());
-            }
-            Instr::DeletePropOp(_) => {
-                let _ = pop!();
-            }
-            Instr::Jmp(_) | Instr::PushHandler { .. } | Instr::TryFinally { .. } | Instr::PopHandler | Instr::AssumeType(..) | Instr::FinalCell(_) | Instr::RerunAtRuntime | Instr::EntryBoundary => {}
-        }
-    }
-    drivers
 }
 
 /// Does `small` occur as a subterm of `big`? The termination whistle uses this to
@@ -4130,6 +4028,10 @@ pub struct Js {
     array_prelude: HashMap<String, usize>,
     /// Self-hosted `Map`/`Set` methods (`__pe_Map_<m>`), by `"Map.<m>"`.
     collection_prelude: HashMap<String, usize>,
+    /// Self-hosted standard functions (`__pe_std_JSON_stringify` in the
+    /// prelude), by the name the program reads them by (`"JSON.stringify"`):
+    /// see `Js::std_prelude_of`.
+    std_prelude: HashMap<String, usize>,
     /// For a loop head whose condition the dry run cannot evaluate: whether
     /// that condition has ever been dynamic when it really ran (see
     /// `dynamically_controlled`).
@@ -4176,6 +4078,12 @@ pub struct Js {
     /// conditional transfer: its paths then stop.
     straight_probe: std::cell::Cell<bool>,
     straight_failed: std::cell::Cell<bool>,
+    /// How many probes of whether a call unfolds (`call_unfolds`) are under
+    /// way, and whether the code the innermost one runs gave up (a
+    /// self-hosted built-in meeting a case it does not cover: see
+    /// `prelude_gives_up`), wherever in it (a nested program too).
+    unfold_probes: std::cell::Cell<usize>,
+    unfold_gave_up: std::cell::Cell<bool>,
     /// Residual variables holding a variable's `{value}` cell (a residual
     /// function's capture of one): reading their `value` runs nothing.
     cell_vars: std::cell::RefCell<std::collections::HashSet<usize>>,
@@ -4299,6 +4207,10 @@ pub struct Js {
     /// primitive value they all held there or `None` (`None` overall: no path
     /// reached it yet). See `residualize_try`.
     halt_locals: std::cell::RefCell<Vec<(usize, Option<Vec<Option<Abs>>>)>>,
+    /// Per residual `try` region being specialized, innermost last: the
+    /// address below which an object is one the region's state had when it
+    /// began and keeps as it is (see `Js::residualize_try`; 0: none).
+    region_limits: std::cell::RefCell<Vec<usize>>,
     /// True while running the foldability probe for a `try`: a would-be
     /// `forbid_residual_in_try` records taint instead of aborting.
     probing: std::cell::Cell<bool>,
@@ -4403,6 +4315,27 @@ pub struct Js {
     /// A `Cell` so a test can toggle it on a freshly built client without racy
     /// process-global env mutation; defaults from the env at construction.
     force_escape_all: std::cell::Cell<bool>,
+    /// Where and why each residual variable was made (see `why`).
+    why: why::Ledger,
+    /// Each function's slot names, for `why`'s report.
+    slot_names: Vec<Vec<String>>,
+    /// What `coalesce_vars` renamed the variables of each part of the
+    /// residual to (see `var_source_names`).
+    coalesced: std::cell::RefCell<HashMap<ResidualPart, HashMap<usize, usize>>>,
+    /// See `set_source_names`.
+    source_names: std::cell::Cell<bool>,
+    /// The built-ins each self-hosted function uses (see
+    /// `prelude_globals_pristine`).
+    prelude_globals: std::cell::RefCell<HashMap<usize, std::rc::Rc<Vec<String>>>>,
+}
+
+/// A part of the residual with variables of its own: `main`, the load code,
+/// a residual function (by its index).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ResidualPart {
+    Main,
+    Load,
+    Fn(usize),
 }
 
 impl Js {
@@ -4768,16 +4701,13 @@ impl Js {
                     analyze_loop_mutations(&code, pc, loop_back[pc] + 1, &leaders, max_slots);
                 if all_attributed {
                     let modified = &loop_modified[pc];
-                    // Keep an object STATIC only when it both (a) is loop-invariant
-                    // read-only AND (b) drives dispatch (its fields feed a branch) —
-                    // the tree-walk interpreter's `node`. A loop-invariant object
-                    // that is mere data (never branched on) is materialized instead,
-                    // so its literal is emitted once, not duplicated at every use.
-                    let drivers =
-                        analyze_dispatch_drivers(&code, pc, loop_back[pc] + 1, &leaders, max_slots);
-                    let inv: Vec<bool> = (0..max_slots)
-                        .map(|slot| !bases[slot] && !modified.contains(&slot) && drivers[slot])
-                        .collect();
+                    // An object the loop neither mutates nor reassigns stays
+                    // STATIC across it, whatever the loop does with what it
+                    // reads of it: a read of a known field is its value. One
+                    // the loop's code needs as a runtime value (an element at
+                    // a runtime index, an argument of a runtime call) becomes
+                    // one there, and the loop's head is met again without it.
+                    let inv: Vec<bool> = (0..max_slots).map(|slot| !bases[slot] && !modified.contains(&slot)).collect();
                     loop_invariant[pc] = inv;
                     loop_mut_bases[pc] = (0..max_slots).filter(|&s| bases[s]).collect();
                 }
@@ -5113,6 +5043,11 @@ impl Js {
             loop_exit_branch_of,
             loop_back,
             loop_exit_dynamic: std::cell::RefCell::new(std::collections::HashSet::new()),
+            std_prelude: program
+                .iter()
+                .enumerate()
+                .filter_map(|(fid, f)| f.name.strip_prefix("__pe_std_").map(|n| (n.replace('_', "."), fid)))
+                .collect(),
             collection_prelude: program
                 .iter()
                 .enumerate()
@@ -5135,6 +5070,8 @@ impl Js {
             cell_vars: std::cell::RefCell::new(std::collections::HashSet::new()),
             straight_probe: std::cell::Cell::new(false),
             straight_failed: std::cell::Cell::new(false),
+            unfold_probes: std::cell::Cell::new(0),
+            unfold_gave_up: std::cell::Cell::new(false),
             building_fns: std::cell::RefCell::new(std::collections::HashSet::new()),
             referenced_building: std::cell::RefCell::new(std::collections::HashSet::new()),
             fn_cell_captures: program.iter().map(|f| f.cell_captures.clone()).collect(),
@@ -5174,6 +5111,7 @@ impl Js {
             entry: EntrySplit::default(),
             residual_try_stack: std::cell::RefCell::new(Vec::new()),
             halt_locals: std::cell::RefCell::new(Vec::new()),
+            region_limits: std::cell::RefCell::new(Vec::new()),
             probing: std::cell::Cell::new(false),
             try_taint: std::cell::Cell::new(false),
             spec_steps: std::cell::Cell::new(0),
@@ -5199,6 +5137,11 @@ impl Js {
             branched_contexts: std::cell::RefCell::new(std::collections::HashSet::new()),
             step_operands: std::cell::RefCell::new(Vec::new()),
             force_escape_all: std::cell::Cell::new(env_flag!("FORCE_ESCAPE_ALL")),
+            why: why::Ledger::default(),
+            slot_names: program.iter().map(|f| f.slot_names.iter().map(|n| n.to_string()).collect()).collect(),
+            coalesced: Default::default(),
+            source_names: Default::default(),
+            prelude_globals: Default::default(),
         }
     }
 
@@ -5243,12 +5186,38 @@ impl Js {
                 }
             }
         }
+        // (A generator function's `prototype`, an object this model does not
+        // make: the runtime's.)
+        if k == "prototype" {
+            if let HeapObj::Closure { fid, .. } = &heap[&addr] {
+                if self.fn_kinds[*fid] == FnKind::Generator && heap[&addr].own(k).is_none() {
+                    return Found::Unknown;
+                }
+            }
+        }
         match lookup_prop_chain(heap, addr, k) {
             Chain::MissingPastIntrinsic { function } => {
                 if self.intrinsic_protos_pristine(function) {
                     Found::Missing
                 } else {
                     Found::Unknown
+                }
+            }
+            // What a standard error's prototype gives (the standard ones
+            // unchanged): its own `name` and `constructor`, the `message`
+            // of `Error.prototype`; its methods, and `stack` (the engine's,
+            // on the object), are the runtime's; nothing else.
+            Chain::PastErrorPrototype(name) => {
+                if !(self.pristine(name) && self.pristine("Error") && self.pristine("Object")) {
+                    return Found::Unknown;
+                }
+                match k {
+                    "name" => Found::Data(Abs::Str(name.to_string())),
+                    "message" => Found::Data(Abs::Str(String::new())),
+                    "constructor" => Found::Data(Abs::Dyn(RExpr::Global(name.to_string()))),
+                    "toString" | "stack" => Found::Unknown,
+                    k if is_object_proto_member(k) => Found::Unknown,
+                    _ => Found::Missing,
                 }
             }
             Chain::Found(f) => f,
@@ -5313,6 +5282,26 @@ impl Js {
         panic!("prototype chain too long (a cycle?)")
     }
 
+    /// The standard method `v[Symbol.iterator]` is, by kind, for a value
+    /// whose iteration this model knows (as `Instr::GetIter` does): the
+    /// method that makes its iterator, read as a value.
+    fn iterator_method_kind(&self, s: &State, v: &Abs) -> Option<&'static str> {
+        match v {
+            Abs::Str(_) if self.pristine("String") => Some(STRING_ITERATOR_METHOD),
+            Abs::Ref(a) => match &s.heap[a] {
+                HeapObj::Array(arr) if self.iterated_elems(&s.heap, arr).is_some() && self.pristine("Array") => Some("Array.prototype.values"),
+                HeapObj::Builtin { kind, ext, .. }
+                    if (kind == "Map" || kind == "Set") && ext.as_ref().is_none_or(|e| self.subclass_iterates(&s.heap, &e.proto, kind)) && self.pristine(kind) =>
+                {
+                    Some(if kind == "Map" { "Map.prototype.entries" } else { "Set.prototype.values" })
+                }
+                HeapObj::Builtin { kind, .. } if is_iterator_kind(kind) => Some(ITERATOR_SELF_METHOD),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The elements an array yields when iterated (`[...a]`, `new Set(a)`):
     /// its elements, unless it is a subclass's whose iteration is not
     /// known to be `Array`'s (`subclass_iterates`).
@@ -5356,8 +5345,30 @@ impl Js {
     }
 
     /// Is the entry function strict code (then `main` is emitted strict)?
+    /// Is the residual's `main` strict code? As the entry function is: a
+    /// whole script's `main` stands for it (the script's top-level code is
+    /// the load code), and what is inlined into it is mostly that function
+    /// and what it calls. (Either way is right: an operation of code of the
+    /// other strictness is written as that code does it, see `in_mode`.)
     pub fn main_is_strict(&self) -> bool {
-        self.fn_strict[self.main]
+        if env_flag!("PE_MAIN_AS_SCRIPT") {
+            return self.fn_strict[self.main];
+        }
+        self.entry_fn().map_or(self.fn_strict[self.main], |f| self.fn_strict[f])
+    }
+
+    /// The program's entry function, when the residual's `main` is a whole
+    /// script that ends by calling it: the function of the entry's name
+    /// whose parameter the program named (not one the front end made).
+    fn entry_fn(&self) -> Option<usize> {
+        (0..self.names.len()).find(|&f| {
+            f != self.main
+                && self.names[f] == self.entry_name
+                && self.nparams[f] >= 1
+                && self.slot_names.get(f).and_then(|n| n.get(self.ncaptured[f])).is_some_and(|n| {
+                    !n.is_empty() && !n.starts_with("__") && n.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                })
+        })
     }
 
     /// Is the entry function async (then `main` is emitted `async`)?
@@ -5448,40 +5459,60 @@ impl Js {
     /// and every residual function.
     /// (`PE_NO_CLEANUP` skips it, to debug the raw residual.)
     pub fn coalesce(&self, main: &mut Program<Op, Cond>) {
-        if env_flag!("PE_NO_CLEANUP") {
-            return;
-        }
+        self.clean(main);
+        self.coalesce_vars(main);
+    }
+
+    /// The variables `main`'s cleanup keeps: the input, and what the load
+    /// code gives it (see `EntrySplit`).
+    fn main_keep(&self) -> std::collections::HashSet<usize> {
         let mut keep: std::collections::HashSet<usize> = std::collections::HashSet::new();
         keep.insert(self.input_var());
         keep.insert(ARGUMENTS_VAR_ID);
-        // (And what the load code gives it: see `EntrySplit`.)
         keep.extend(self.entry.exports.borrow().iter().copied());
-        self.settle_branches(main);
-        crate::inline::strip_bound_methods(main);
-        crate::inline::drop_number_coercions(main, &keep);
-        crate::inline::drop_dead_defs(main, &keep, &|e, num, defs| self.pure_builtin_call(e, num, defs));
-        crate::inline::hoist_common_prefix(main);
-        crate::inline::inline_temps(main, &keep);
-        // (Inlining can leave a definition dead that was not: a call whose
-        // fresh target is now the literal it was made from.)
-        crate::inline::drop_dead_defs(main, &keep, &|e, num, defs| self.pure_builtin_call(e, num, defs));
-        crate::inline::fold_global_base(main, &keep);
-        // (Until nothing more folds: a value folded to a literal may then be
-        // propagated.)
-        for _ in 0..4 {
-            if !crate::inline::fold_literals(main, &keep) {
-                break;
-            }
-            crate::inline::drop_dead_defs(main, &keep, &|e, num, defs| self.pure_builtin_call(e, num, defs));
-            crate::inline::inline_temps(main, &keep);
+        keep
+    }
+
+    /// The first half of `coalesce`: the cleanup of `main`, of every
+    /// residual function and of the load code, their variables still the
+    /// ones specialization made (what `why_report` reads).
+    pub fn clean(&self, main: &mut Program<Op, Cond>) {
+        if env_flag!("PE_NO_CLEANUP") {
+            return;
         }
-        crate::inline::trim_holes_before_length(main);
-        crate::coalesce::coalesce_vars(main, &keep);
+        let keep = self.main_keep();
+        self.clean_up(main, &keep);
         for rf in self.residual_fns.borrow_mut().iter_mut() {
             let keep = Js::residual_fn_keep(rf);
             self.clean_up(&mut rf.body, &keep);
-            crate::coalesce::coalesce_vars(&mut rf.body, &keep);
         }
+    }
+
+    /// The second half of `coalesce`: the variables of `main` and of every
+    /// residual function, coalesced.
+    pub fn coalesce_vars(&self, main: &mut Program<Op, Cond>) {
+        if env_flag!("PE_NO_CLEANUP") {
+            return;
+        }
+        let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Main));
+        let map = crate::coalesce::coalesce_vars_named(main, &self.main_keep(), names.as_ref());
+        self.coalesced.borrow_mut().insert(ResidualPart::Main, map);
+        let n = self.residual_fns.borrow().len();
+        for rfid in 0..n {
+            let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Fn(rfid)));
+            let mut fns = self.residual_fns.borrow_mut();
+            let rf = &mut fns[rfid];
+            let keep = Js::residual_fn_keep(rf);
+            let map = crate::coalesce::coalesce_vars_named(&mut rf.body, &keep, names.as_ref());
+            self.coalesced.borrow_mut().insert(ResidualPart::Fn(rfid), map);
+        }
+    }
+
+    /// The residual is to name its variables as the program does (see
+    /// `var_source_names`): variables of different names are then kept
+    /// apart.
+    pub fn set_source_names(&self, on: bool) {
+        self.source_names.set(on);
     }
 
     /// The variables a residual function's cleanup keeps: its parameters
@@ -5513,6 +5544,8 @@ impl Js {
             crate::inline::inline_temps(body, keep);
         }
         crate::inline::trim_holes_before_length(body);
+        // (The blocks the cleanup emptied, and those now in a line.)
+        crate::residual::simplify(body);
     }
 
 
@@ -5613,6 +5646,9 @@ impl Js {
     /// captures'.
     pub(super) fn cap_forms_and(&self, fid: usize, addr: usize, captured: &[Abs], once: bool, heap: &Heap, with: Option<usize>) -> Vec<CapForm> {
         let with_self = with.is_some();
+        if env_flag!("CAP_DEBUG") {
+            eprintln!("[CAP] {} once={once} captured={:?}", self.names[fid], captured.iter().map(|c| match c { Abs::Ref(a) => format!("{:?}", heap.get(a)), v => format!("{v:?}") }).collect::<Vec<_>>());
+        }
         if !once {
             return vec![CapForm::PASSED; captured.len()];
         }
@@ -6822,7 +6858,23 @@ impl Js {
     /// `Object.prototype`'s keys is a symbol; `Function.prototype` has
     /// `@@hasInstance`). `Unknown` for a chain this model does not know.
     fn sym_lookup(&self, heap: &Heap, addr: usize, k: &Sym) -> Found {
-        let key = PKey::Sym(k.clone());
+        self.sym_chain_lookup(heap, addr, Some(k))
+    }
+
+    /// `sym_lookup` for a fresh symbol (`Symbol(d)`'s, see `symbol_temps`):
+    /// no modeled property has it as its key (a modeled object's keys are
+    /// strings, well-known and registered symbols; a write of another key
+    /// takes the object out of the model), and no standard prototype has
+    /// it. So `Missing` up a modeled chain that ends at one, where
+    /// `sym_lookup` would find no key either.
+    fn fresh_sym_lookup(&self, heap: &Heap, addr: usize) -> Found {
+        self.sym_chain_lookup(heap, addr, None)
+    }
+
+    /// `k` (`None`: a fresh symbol, see `fresh_sym_lookup`) up the chain
+    /// from `addr`.
+    fn sym_chain_lookup(&self, heap: &Heap, addr: usize, k: Option<&Sym>) -> Found {
+        let key = k.map(|k| PKey::Sym(k.clone()));
         let mut cur = addr;
         for _ in 0..10_000 {
             let o = &heap[&cur];
@@ -6836,20 +6888,20 @@ impl Js {
                 HeapObj::Closure { known: true, .. } => true,
                 _ => return Found::Unknown,
             };
-            if let Some(p) = o.own_key(&key) {
+            if let Some(p) = key.as_ref().and_then(|key| o.own_key(key)) {
                 return match &p.val {
                     PVal::Data(v) => Found::Data(v.clone()),
                     PVal::Accessor { get, set } => Found::Accessor { get: get.clone(), set: set.clone() },
                 };
             }
             // (An arguments object's own `@@iterator`, implied: not modeled.)
-            if matches!(o, HeapObj::Object { class: ObjClass::Arguments { .. }, .. }) && *k == Sym::WellKnown("iterator".into()) {
+            if matches!(o, HeapObj::Object { class: ObjClass::Arguments { .. }, .. }) && k == Some(&Sym::WellKnown("iterator".into())) {
                 return Found::Unknown;
             }
             let (HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. }) = o else { unreachable!() };
             match proto {
                 Abs::Undef => {
-                    return if function && *k == Sym::WellKnown("hasInstance".into()) {
+                    return if function && k == Some(&Sym::WellKnown("hasInstance".into())) {
                         Found::Unknown
                     } else if self.intrinsic_protos_pristine(function) {
                         Found::Missing
@@ -7295,6 +7347,68 @@ impl Js {
         0
     }
 
+    /// The source name of each variable of a part of the residual that
+    /// stands for one variable of the program: a local or parameter of a
+    /// function (`VarKey::Stable`), a residual function's parameter, the
+    /// entry's input. (For the residual's text to name them as the source
+    /// does: see `codegen::program_to_js`.) A variable `coalesce_vars` made
+    /// of several has the one name they have, if it is one.
+    pub fn var_source_names(&self, part: ResidualPart) -> HashMap<usize, String> {
+        let mut made: HashMap<usize, String> = HashMap::new();
+        let name = |func: usize, slot: usize| -> Option<String> {
+            let n = self.slot_names.get(func)?.get(slot)?;
+            // (A slot two variables share in turn has no one name.)
+            (!n.is_empty() && !n.contains('/')).then(|| n.clone())
+        };
+        for (id, k) in self.var_ids.borrow().keys.iter() {
+            if let VarKey::Stable(func, slot) = k {
+                if let Some(n) = name(*func, *slot) {
+                    made.insert(*id, n);
+                }
+            }
+        }
+        match part {
+            ResidualPart::Fn(rfid) => {
+                let fns = self.residual_fns.borrow();
+                // (Its captures' variables, then its parameters': a capture
+                // by the slot it is in, not one of the values it is given
+                // besides.)
+                if let Some(fid) = fns.get(rfid).and_then(|rf| rf.fid) {
+                    for (id, k) in self.var_ids.borrow().keys.iter() {
+                        let slot = match k {
+                            VarKey::Residual(0, r, i) if *r == rfid && *i < self.ncaptured[fid] => *i,
+                            VarKey::Residual(1, r, j) if *r == rfid => self.ncaptured[fid] + *j,
+                            _ => continue,
+                        };
+                        if let Some(n) = name(fid, slot) {
+                            made.insert(*id, n);
+                        }
+                    }
+                }
+            }
+            ResidualPart::Main | ResidualPart::Load => {
+                // (The input: the parameter of the entry function, which
+                // a whole script's `main` stands for.)
+                let input = self.entry_fn().or(Some(self.main)).and_then(|f| name(f, self.ncaptured[f])).filter(|n| !n.starts_with("__") && !n.starts_with('%'));
+                if let Some(n) = input {
+                    made.insert(self.input_var(), n);
+                }
+            }
+        }
+        let coalesced = self.coalesced.borrow();
+        let map = coalesced.get(&part);
+        let mut names: HashMap<usize, Option<String>> = HashMap::new();
+        for (v, n) in made {
+            let to = map.and_then(|m| m.get(&v)).copied().unwrap_or(v);
+            names.entry(to).and_modify(|have| {
+                if have.as_ref() != Some(&n) {
+                    *have = None;
+                }
+            }).or_insert(Some(n));
+        }
+        names.into_iter().filter_map(|(v, n)| Some((v, n?))).collect()
+    }
+
     /// Specialize the whole program, again while a pass finds that it
     /// assumed what its residual contradicts (a built-in it took as
     /// standard that the residual writes, a React root's `render` found
@@ -7389,6 +7503,23 @@ impl Js {
                     }
                 }
             }
+            // (A self-hosted built-in's give-up helpers exist only while
+            // its call is probed: residual code naming one would call
+            // nothing.)
+            {
+                let fns = self.residual_fns.borrow();
+                let mut progs: Vec<&Program<Op, Cond>> = vec![&prog];
+                progs.extend(load.as_ref());
+                progs.extend(fns.iter().enumerate().filter(|(r, _)| live.contains(r)).map(|(_, rf)| &rf.body));
+                let mut read = std::collections::BTreeSet::new();
+                let mut every = false;
+                for p in progs {
+                    program_globals_read(p, &mut read, &mut every);
+                }
+                for helper in [UNMODELED_HELPER, SLOT_KIND_HELPER] {
+                    assert!(!read.contains(helper), "the residual names `{helper}`, a helper of the prelude's self-hosted built-ins that exists only at specialization time");
+                }
+            }
             drop(load);
             if !added {
                 self.prune_entry_exports(&prog);
@@ -7419,6 +7550,7 @@ impl Js {
     /// `PE_NO_ENTRY_SPLIT`.
     fn specialize_entry(&self) -> Program<Op, Cond> {
         *self.entry.load.borrow_mut() = None;
+        self.entry.load_cleaned.set(false);
         self.entry.exports.borrow_mut().clear();
         self.entry.boundary.borrow_mut().clear();
         self.entry.skipped.borrow_mut().clear();
@@ -7432,6 +7564,76 @@ impl Js {
         self.entry.loading.set(false);
         let mut ends = std::mem::take(&mut *self.entry.boundary.borrow_mut());
         let names_input = program_names_var(&load, self.input_var());
+        if names_input && env_flag!("ENTRY_DEBUG") {
+            let v = self.input_var();
+            let named = |e: &RExpr| rexpr_contains(e, &|x| matches!(x, RExpr::Var(w) if *w == v));
+            for b in &load.blocks {
+                for op in &b.ops {
+                    if crate::inline::op_exprs(op).into_iter().any(named) || matches!(op, Op::Assign { var, .. } | Op::Eval { dst: var, .. } if *var == v) {
+                        eprintln!("[ENTRY] the load code names the input: {op:?}");
+                    }
+                }
+                if matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(e), .. } if named(e)) {
+                    eprintln!("[ENTRY] the load code branches on the input: {:?}", b.term);
+                }
+            }
+        }
+        // Several end states: once more, each made runtime state at the
+        // boundary (`EntrySplit::generalize`), where they are then one.
+        if ends.len() > 1 && !names_input && !self.entry.generalize.get() && !env_flag!("PE_ENTRY_NO_GENERALIZE") {
+            if env_flag!("ENTRY_DEBUG") {
+                eprintln!("[ENTRY] {} end states: the load code's state as runtime state", ends.len());
+                // (How the first two differ.)
+                let (a, b) = (&ends[0].0, &ends[1].0);
+                for (i, (x, y)) in a.top().locals.iter().zip(b.top().locals.iter()).enumerate() {
+                    if x != y {
+                        eprintln!("[ENTRY]   local {i} ({:?}): {x:?} | {y:?}", self.slot_names.get(a.top().func).and_then(|n| n.get(i)));
+                    }
+                }
+                if a.globals != b.globals {
+                    for (k, v) in a.globals.iter() {
+                        if b.globals.get(k) != Some(v) {
+                            eprintln!("[ENTRY]   global {k}: {v:?} | {:?}", b.globals.get(k));
+                        }
+                    }
+                }
+                if a.facts != b.facts {
+                    eprintln!("[ENTRY]   facts differ");
+                }
+                if a.escaped != b.escaped {
+                    eprintln!("[ENTRY]   escaped differ");
+                }
+                if a.fns != b.fns {
+                    eprintln!("[ENTRY]   fns differ");
+                }
+                let mut n = 0;
+                for (addr, o) in a.heap.iter() {
+                    if b.heap.get(addr) != Some(o) && n < 12 {
+                        n += 1;
+                        eprintln!("[ENTRY]   heap @{addr}: {} | {}", format!("{o:?}").chars().take(160).collect::<String>(), format!("{:?}", b.heap.get(addr)).chars().take(160).collect::<String>());
+                    }
+                }
+                eprintln!("[ENTRY]   heap sizes {} | {}; exports {:?} | {:?}", a.heap.len(), b.heap.len(), ends[0].1.len(), ends[1].1.len());
+            }
+            self.entry.generalize.set(true);
+            self.reset_for_respecialization();
+            return self.specialize_entry();
+        }
+        if self.entry.generalize.get() && ends.len() > 1 {
+            let key = self.key(&ends[0].0);
+            if ends.iter().all(|(st, ex, _)| self.key(st) == key && *ex == ends[0].1) {
+                ends.truncate(1);
+            } else if !self.entry.generalize_plain.get() && !names_input {
+                // (The paths did not agree on which functions the
+                // variables hold: once more, with nothing known.)
+                if env_flag!("ENTRY_DEBUG") {
+                    eprintln!("[ENTRY] {} end states still: the load code's state as runtime state, nothing known of it", ends.len());
+                }
+                self.entry.generalize_plain.set(true);
+                self.reset_for_respecialization();
+                return self.specialize_entry();
+            }
+        }
         if ends.len() != 1 || names_input {
             if env_flag!("ENTRY_DEBUG") {
                 eprintln!("[ENTRY] no split: {} end states, names input {names_input}", ends.len());
@@ -7666,14 +7868,24 @@ impl Js {
         if env_flag!("PE_NO_CLEANUP") {
             return;
         }
+        self.clean_load();
+        let mut l = self.entry.load.borrow_mut();
+        let Some(load) = l.as_mut() else { return };
+        let names = self.source_names.get().then(|| self.var_source_names(ResidualPart::Load));
+        let map = crate::coalesce::coalesce_vars_named(load, &self.main_keep(), names.as_ref());
+        self.coalesced.borrow_mut().insert(ResidualPart::Load, map);
+    }
+
+    /// The cleanup of the residual load code, its variables still the ones
+    /// specialization made (see `clean`). Done once.
+    pub fn clean_load(&self) {
+        if env_flag!("PE_NO_CLEANUP") || self.entry.load_cleaned.replace(true) {
+            return;
+        }
         let mut l = self.entry.load.borrow_mut();
         let Some(load) = l.as_mut() else { return };
         crate::residual::simplify(load);
-        let mut keep: std::collections::HashSet<usize> = self.entry.exports.borrow().iter().copied().collect();
-        keep.insert(self.input_var());
-        keep.insert(ARGUMENTS_VAR_ID);
-        self.clean_up(load, &keep);
-        crate::coalesce::coalesce_vars(load, &keep);
+        self.clean_up(load, &self.main_keep());
     }
 
     /// Clear all per-specialization mutable state so a fresh `engine::specialize`
@@ -7687,7 +7899,7 @@ impl Js {
         if let Some(r) = &self.react {
             r.reset();
         }
-        self.residual_strict.set(self.fn_strict[self.main]);
+        self.residual_strict.set(self.main_is_strict());
         self.simple_vars.borrow_mut().clear();
         self.resume_memo.borrow_mut().clear();
         self.assumed_pristine.borrow_mut().clear();
@@ -7704,6 +7916,7 @@ impl Js {
         self.creation_pc.borrow_mut().clear();
         self.field_owner.borrow_mut().clear();
         self.branched_contexts.borrow_mut().clear();
+        self.why.reset();
     }
 
     /// Fold a binary operator over abstract operands. Total: any combination it
@@ -7737,8 +7950,12 @@ impl Js {
                 if a.is_dynamic() { a.clone() } else { b.clone() }
             }
             // Any dynamic operand: residualize. (Static prims convert to literals.)
+            // (Integer arithmetic under a reduction combines as it is
+            // built: an unrolled loop's `+ 1 & 255`, each time round, is
+            // one addition. See `inline::combine_int_arith`.)
             _ if a.is_dynamic() || b.is_dynamic() => {
-                Dyn(RExpr::Bin(op, Box::new(a.to_rexpr()), Box::new(b.to_rexpr())))
+                let e = RExpr::Bin(op, Box::new(a.to_rexpr()), Box::new(b.to_rexpr()));
+                Dyn(crate::inline::combine_int_arith(&e).unwrap_or(e))
             }
             // Bitwise/shift over mixed static primitive types: JS `ToInt32`-coerces
             // both operands (e.g. the `x | 0` idiom, where a non-numeric string
@@ -7938,6 +8155,27 @@ fn to_integer_or_inf(x: f64) -> f64 {
 /// The pass-through operator for a template literal substitution's
 /// `ToString` (renders as `` `${x}` ``).
 pub const TEMPLATE_TO_STRING: &str = "`${}`";
+/// The opaque operator of a string that is not well-formed Unicode (it
+/// holds a surrogate code unit without its pair, `"\ud800"`): over its
+/// UTF-16 code units, four hex digits each. This model's strings are
+/// sequences of Unicode scalar values, which cannot hold one; such a string
+/// is a runtime value, written in the residual as the literal it is.
+pub const ILL_FORMED_STRING: &str = "utf16";
+
+/// The JavaScript string literal of the code units `hex` lists (see
+/// `ILL_FORMED_STRING`): printable ASCII as itself, anything else escaped.
+pub fn ill_formed_string_literal(hex: &str) -> String {
+    let mut out = String::from("\"");
+    for i in (0..hex.len()).step_by(4) {
+        let unit = u16::from_str_radix(&hex[i..i + 4], 16).expect("code units are four hex digits each");
+        match char::from_u32(unit as u32) {
+            Some(c) if (' '..='~').contains(&c) && c != '"' && c != '\\' => out.push(c),
+            _ => out.push_str(&format!("\\u{unit:04x}")),
+        }
+    }
+    out.push('"');
+    out
+}
 
 /// What a property lookup along the prototype chain found.
 #[derive(Debug)]
@@ -8023,6 +8261,9 @@ fn is_intrinsic_proto(e: &RExpr, base: &str) -> bool {
 enum Chain {
     Found(Found),
     MissingPastIntrinsic { function: bool },
+    /// No such property down to a standard error's prototype, `E.prototype`
+    /// (see `Js::lookup_prop`).
+    PastErrorPrototype(&'static str),
 }
 
 /// `[[Get]]`'s lookup of `k` starting at heap object `addr`: own property,
@@ -8084,8 +8325,14 @@ fn lookup_prop_chain(heap: &Heap, addr: usize, k: &str) -> Chain {
         match proto {
             Abs::Null => return Chain::Found(Found::Missing),
             Abs::Ref(p) => cur = *p,
-            // A prototype that escaped is a runtime object: unknown here.
-            Abs::Dyn(_) => return Chain::Found(Found::Unknown),
+            // A prototype that escaped is a runtime object: unknown here
+            // (but a standard error's, by its name).
+            Abs::Dyn(e) => {
+                return match error_proto_name(e) {
+                    Some(name) => Chain::PastErrorPrototype(name),
+                    None => Chain::Found(Found::Unknown),
+                };
+            }
             other => panic!("malformed [[Prototype]] {other:?}"),
         }
     }
@@ -8203,8 +8450,19 @@ fn closure_chain_standard(heap: &Heap, addr: usize) -> bool {
 
 /// How many times one static loop of an activation goes around in its
 /// block before blocks are made per iteration again, for the engine's
-/// unroll backstop (its `UNROLL_BOUND`).
-const STATIC_UNROLL_INLINE: usize = 5_000;
+/// unroll backstop (its `UNROLL_BOUND`). An interpreter's dispatch loop
+/// goes around once for every instruction its known program executes, so
+/// this bounds how long a known program may run while it is specialized:
+/// generous, as each round is cheap, and a loop that never ends is still
+/// given up on in a few seconds. (`PE_STATIC_UNROLL` sets another.)
+const STATIC_UNROLL_INLINE: usize = 250_000;
+
+fn static_unroll_inline() -> usize {
+    thread_local! {
+        static N: usize = std::env::var("PE_STATIC_UNROLL").ok().and_then(|v| v.parse().ok()).unwrap_or(STATIC_UNROLL_INLINE);
+    }
+    N.with(|n| *n)
+}
 
 /// Methods of `String.prototype` that, on a string with primitive (not
 /// symbol) arguments, compute a primitive without throwing or running code.
@@ -8806,6 +9064,12 @@ fn ta_convert(ctor: &str, n: JsNum) -> JsNum {
 /// The element conversion as an expression over a runtime value (`None`
 /// where none is exact: `Uint8ClampedArray` rounds half to even).
 fn ta_convert_expr(ctor: &str, e: RExpr) -> Option<RExpr> {
+    let mut r = ta_convert_expr_plain(ctor, e)?;
+    crate::inline::combine_int_arith_deep(&mut r);
+    Some(r)
+}
+
+fn ta_convert_expr_plain(ctor: &str, e: RExpr) -> Option<RExpr> {
     let num = |n: i64| Box::new(RExpr::Num(JsNum::int(n)));
     let b = Box::new(e.clone());
     Some(match ctor {
@@ -9012,7 +9276,7 @@ fn rexpr_typeof(e: &RExpr) -> Option<&'static str> {
             }
         },
         RExpr::Opaque(op, xs) => match (op.as_str(), xs.as_slice()) {
-            ("typeof", _) => Some("string"),
+            ("typeof", _) | (ILL_FORMED_STRING, _) => Some("string"),
             ("!", [_]) => Some("boolean"),
             ("/" | "%" | "**", [a, b]) => match (rexpr_typeof(a), rexpr_typeof(b)) {
                 (Some("bigint"), Some("bigint")) => Some("bigint"),
@@ -9162,6 +9426,11 @@ fn throw_type_error_expr() -> RExpr {
 /// Residual helpers returning a fresh (empty) arguments object: sloppy (its
 /// `callee` the helper) and strict. Codegen defines whichever is used.
 pub const SLOPPY_ARGUMENTS_HELPER: &str = "__pe_args";
+/// `__pe_unmodeled()` in a self-hosted standard function (`prelude.js`): the
+/// case at hand is one it does not cover, and the call stays the runtime's.
+const UNMODELED_HELPER: &str = "__pe_unmodeled";
+/// `__pe_slotKind(v)` in a self-hosted standard function: see `do_call`.
+const SLOT_KIND_HELPER: &str = "__pe_slotKind";
 /// The runtime helpers (`runtime.js`) a class's private names are made by:
 /// a private field's store (a `WeakMap` of its values by object) and a
 /// private method's brand (a `WeakSet`). Only the lowering of the class
@@ -9176,9 +9445,38 @@ pub const PRIVATE_SET_HELPER: &str = "__pe_privateSet";
 pub const SUPER_GET_HELPER: &str = "__pe_superGet";
 pub const STRICT_ARGUMENTS_HELPER: &str = "__pe_strictArgs";
 
+/// The method values `x[Symbol.iterator]` reads that no property name
+/// reads: `String.prototype`'s, and the one every iterator inherits
+/// (`%IteratorPrototype%`'s, which returns its receiver). An array's is
+/// `Array.prototype.values`, a Map's `Map.prototype.entries`, a Set's
+/// `Set.prototype.values`.
+const STRING_ITERATOR_METHOD: &str = "%String.prototype[@@iterator]%";
+const ITERATOR_SELF_METHOD: &str = "%IteratorPrototype%[@@iterator]";
+
+/// Is a modeled built-in of this kind a function (an intrinsic method
+/// read as a value, a bound function, a host model's callable), as
+/// `typeof` says?
+fn builtin_kind_is_function(kind: &str) -> bool {
+    kind == BOUND_FUNCTION
+        || kind == STRING_ITERATOR_METHOD
+        || kind == ITERATOR_SELF_METHOD
+        || kind == "%ThrowTypeError%"
+        || kind.contains(".prototype.")
+        || kind.starts_with("Array.")
+        || react::is_callable_model(kind)
+}
+
+fn symbol_iterator_expr() -> RExpr {
+    RExpr::Get(Box::new(RExpr::Global("Symbol".into())), "iterator".into())
+}
+
 fn intrinsic_method_expr(kind: &str) -> Option<RExpr> {
     if kind == "%ThrowTypeError%" {
         return Some(throw_type_error_expr());
+    }
+    if kind == STRING_ITERATOR_METHOD {
+        let proto = RExpr::Get(Box::new(RExpr::Global("String".into())), "prototype".into());
+        return Some(RExpr::Index(Box::new(proto), Box::new(symbol_iterator_expr())));
     }
     let (base, method) = kind.split_once(".prototype.")?;
     let base = collection_ctor(base);
@@ -9188,7 +9486,7 @@ fn intrinsic_method_expr(kind: &str) -> Option<RExpr> {
         let i8proto = RExpr::Get(Box::new(RExpr::Global("Int8Array".into())), "prototype".into());
         return Some(RExpr::Get(Box::new(RExpr::Call(Box::new(get_proto), vec![i8proto])), method.to_string()));
     }
-    if !matches!(base, "Object" | "Function" | "Array" | "String" | "Map" | "Set" | "WeakMap" | "WeakSet" | "RegExp") {
+    if !matches!(base, "Object" | "Function" | "Array" | "String" | "Map" | "Set" | "WeakMap" | "WeakSet" | "RegExp" | "Error") {
         return None;
     }
     Some(RExpr::Get(
@@ -9243,6 +9541,10 @@ fn standard_static_method(g: &str, m: &str) -> bool {
         "Array" => &["from", "isArray", "of"],
         "Promise" => &["all", "allSettled", "any", "race", "reject", "resolve"],
         "Symbol" => &["for", "keyFor"],
+        "Date" => &["UTC", "now", "parse"],
+        "Intl" => &["Collator", "DateTimeFormat", "NumberFormat", "PluralRules", "getCanonicalLocales"],
+        "ArrayBuffer" => &["isView"],
+        "BigInt" => &["asIntN", "asUintN"],
         _ => &[],
     };
     ms.contains(&m)
@@ -9464,7 +9766,14 @@ fn loose_eq_static(a: &Abs, b: &Abs) -> Option<bool> {
         (Null | Undef, Null | Undef) => Some(true),
         // null/undefined are loosely equal only to each other.
         (Null | Undef, _) | (_, Null | Undef) => Some(false),
-        // mixed primitive types (or object-vs-primitive) coerce: don't fold.
+        // A Number and a String: the Number and the String's number. A
+        // Boolean is its number (and compared again).
+        (Num(x), Str(_)) => prim_to_number(b).map(|y| x.js_eq(y)),
+        (Str(_), Num(y)) => prim_to_number(a).map(|x| x.js_eq(*y)),
+        (Bool(_), Num(_) | Str(_)) => prim_to_number(a).and_then(|x| loose_eq_static(&Num(x), b)),
+        (Num(_) | Str(_), Bool(_)) => prim_to_number(b).and_then(|y| loose_eq_static(a, &Num(y))),
+        // An object and a primitive: the object's primitive, which may run
+        // the program's code. Not folded here.
         _ => None,
     }
 }
@@ -9823,12 +10132,15 @@ fn compute_recursive(entries: &[usize], code: &[Instr], nfuncs: usize) -> Vec<bo
 pub struct JsCandFacts {
     /// `dynamically_controlled(cand)`.
     dynamic: bool,
+    /// `loop_condition_fields(cand)`, once some comparison asks: the same
+    /// for every earlier state the candidate is compared with.
+    guard_fields: std::cell::OnceCell<Vec<(usize, Option<usize>)>>,
 }
 
 impl Client for Js {
     type CandFacts = JsCandFacts;
     fn cand_facts(&self, cand: &State) -> JsCandFacts {
-        JsCandFacts { dynamic: self.dynamically_controlled(cand) }
+        JsCandFacts { dynamic: self.dynamically_controlled(cand), guard_fields: std::cell::OnceCell::new() }
     }
     fn whistle_given(&self, seen: &State, cand: &State, facts: &JsCandFacts) -> bool {
         self.whistle_with(seen, cand, facts, true)
@@ -9843,7 +10155,7 @@ impl Client for Js {
     /// fire otherwise.)
     fn whistle_class(&self, s: &State) -> Option<u64> {
         use std::hash::{Hash, Hasher};
-        if !s.pending_joins.is_empty() || !s.handlers.is_empty() || s.top().yields != 0 {
+        if !s.pending_joins.is_empty() || Js::guarded(s) || s.top().yields != 0 {
             return None;
         }
         let f = s.top();
@@ -9856,6 +10168,11 @@ impl Client for Js {
             }
             match v {
                 Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null => (slot, v).hash(&mut h),
+                // (A known object, by which it is: a module's variable a
+                // loop's condition reads through its cell, `i <
+                // TABLE.length`. Two states holding different objects there
+                // fire no whistle either: see `loop_diverges`.)
+                Abs::Ref(a) => (slot, usize::MAX, *a).hash(&mut h),
                 _ => return None,
             }
         }
@@ -9992,7 +10309,22 @@ impl Client for Js {
     }
 
     fn generalize(&self, seen: &State, from: &State, out: &mut Vec<Op>) -> State {
-        self.generalize_inner(seen, from, out)
+        let n0 = out.len();
+        let g = self.generalize_inner(seen, from, out);
+        if env_flag!("GENERALIZE_DEBUG") {
+            eprintln!(
+                "[GENERALIZE] pc={}\n  seen locals {:?} facts {:?}\n  from locals {:?} facts {:?}\n  -> locals {:?} facts {:?}\n  ops {:?}",
+                from.top().pc,
+                seen.top().locals,
+                seen.facts,
+                from.top().locals,
+                from.facts,
+                g.top().locals,
+                g.facts,
+                &out[n0..]
+            );
+        }
+        g
     }
 }
 
@@ -10001,7 +10333,7 @@ impl Js {
     /// with `differ`, that the two differ).
     fn whistle_with(&self, seen: &State, cand: &State, facts: &JsCandFacts, differ: bool) -> bool {
         let yielded = seen.frames.len() == cand.frames.len() && seen.top().yields != cand.top().yields;
-        let fired = (differ || seen != cand) && (yielded || facts.dynamic || self.loop_diverges(seen, cand) || self.join_mergeable(seen, cand));
+        let fired = (differ || seen != cand) && (yielded || facts.dynamic || self.loop_diverges_with(seen, cand, Some(&facts.guard_fields)) || self.join_mergeable(seen, cand));
         if fired && env_flag!("FACTS_DEBUG") {
             eprintln!("[FACTS] pc={} same_but_facts={} seen={:?}\n        cand={:?}", cand.top().pc, same_but_facts(seen, cand), seen.facts, cand.facts);
         }
@@ -10129,9 +10461,14 @@ impl Js {
                     // (A local holding a static primitive already holds it
                     // in its variable: the residual `try` wrote it as it
                     // began, or a store as it ran, see `eager_stores`.)
+                    // (Nor one holding an object the region began with and
+                    // kept as it is: it is that object after it too.)
+                    let limit = self.region_limits.borrow().last().copied().unwrap_or(0);
                     let slots: Vec<usize> = (0..s.top().locals.len())
                         .filter(|&k| !matches!(s.top().locals[k], Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null))
+                        .filter(|&k| !matches!(s.top().locals[k], Abs::Ref(a) if a < limit))
                         .collect();
+                    let _why = self.why.merging(why::Merge::TryEnd);
                     self.materialize(s, &slots, out);
                 }
                 return Step::Halt;
@@ -10213,18 +10550,23 @@ impl Js {
             Instr::PushHandler { catch_pc, exc_slot, body_end, end } => {
                 let frame_depth = s.frames.len();
                 let ostack_depth = s.top().ostack.len();
+                let transparent = self.load_rethrow_handler(s, *catch_pc, *exc_slot, *end);
                 let handler = Handler {
                     catch_pc: *catch_pc,
                     exc_slot: *exc_slot,
                     frame_depth,
                     ostack_depth,
+                    transparent,
                 };
                 // Decide whether the try body fully specializes (model `throw` as
                 // control flow, exceptions vanish) or must residualize a runtime
                 // `try`/`catch` (the body has a may-throw residual op). The probe
                 // re-specializes the region; if it would trip the soundness guard,
                 // residualize. (Already inside a probe: just push and continue.)
-                if self.probing.get() || self.try_folds(s, &handler, *body_end, *end) {
+                if env_flag!("HANDLER_DEBUG") {
+                    eprintln!("[HANDLER] pc={pc} catch_pc={catch_pc} exc_slot={exc_slot:?} body_end={body_end} end={end}: {:?}", &self.code[*catch_pc..(*end).min(*catch_pc + 24)]);
+                }
+                if transparent || self.probing.get() || self.try_folds(s, &handler, *body_end, *end) {
                     s.handlers.push(handler);
                     self.advance(s)
                 } else {
@@ -10291,6 +10633,10 @@ impl Js {
                 let Abs::Ref(g) = (*s.top().generator).clone() else {
                     panic!("`yield` outside a running generator activation");
                 };
+                // (A value that may throw, a read of a runtime object's
+                // property, is read here, once: the result object it goes in
+                // may be read several times, or never.)
+                let v = self.emit_if_maythrow(s, pc, 0, v, out);
                 let depth = s.frames.len();
                 if s.handlers.iter().any(|h| h.frame_depth >= depth) {
                     panic!("`yield` inside `try` is not supported yet");
@@ -10331,6 +10677,12 @@ impl Js {
                 //     the slot from copying the whole expression (copies multiply,
                 //     exponentially when a function re-reads values it built).
                 let large = matches!(&v, Abs::Dyn(e) if !rexpr_is_atom(e) && rexpr_weight(e) > LET_WEIGHT);
+                //  4. a RHS that converts a value that may be an object (`s =
+                //     "" + v`, `n = +v`): the conversion runs the object's own
+                //     code, once, at the assignment. Left pending, every use
+                //     of the slot would convert again.
+                let converts = !env_flag!("PE_NO_STORE_CONVERSIONS") && matches!(&v, Abs::Dyn(e) if !rexpr_is_atom(e) && self.converts_unknown_in(s, e));
+                let throws = throws || converts;
                 if eager || throws || large {
                     // A may-throw store inside a source `try` must mark that try
                     // un-foldable (so it is residualized and the exception is
@@ -10446,6 +10798,17 @@ impl Js {
                 }
                 let b = s.top_mut().ostack.pop().unwrap();
                 let a = s.top_mut().ostack.pop().unwrap();
+                // (`"" + s` and `s + ""` of a value that is a string, the
+                // result of a standard function that makes one: `s`.)
+                if *op == Bop::Add {
+                    let empty = |v: &Abs| matches!(v, Abs::Str(t) if t.is_empty());
+                    if empty(&a) && self.makes_string(s, &b) {
+                        return self.push(s, b);
+                    }
+                    if empty(&b) && self.makes_string(s, &a) {
+                        return self.push(s, a);
+                    }
+                }
                 // First try to fold with full JS coercion over static operands
                 // (`ToPrimitive`/`ToNumber`/`ToString`): this collapses the
                 // coercion soup that obfuscators like JSFuck are built from
@@ -10506,6 +10869,11 @@ impl Js {
                 // program's own runs that code: the operator is a runtime call,
                 // in program order (strict equality converts nothing).
                 if !matches!(op, Bop::Eq | Bop::Ne) && (self.user_conversion(s, &a) || self.user_conversion(s, &b)) {
+                    // (On known values: the conversion's own code runs here,
+                    // as the prelude's `__pe_convert_op` spells it out.)
+                    if let Some(step) = self.convert_op_inline(s, op.sym(), vec![a.clone(), b.clone()], pc, out) {
+                        return step;
+                    }
                     let mut escaped = std::collections::HashSet::new();
                     let ar = self.operand_rexpr(s, &a, &mut escaped, out);
                     let br = self.operand_rexpr(s, &b, &mut escaped, out);
@@ -10622,6 +10990,7 @@ impl Js {
                 // global binding is no property of the global object.)
                 if is_global_object(&o) && !self.in_residual_body.get() && !self.is_lexical_global(k) && self.global_write_tracked(k) {
                     note_entry_global(k);
+                    region_note_globals();
                     s.globals.insert(k.clone(), (v, true));
                     return self.advance(s);
                 }
@@ -10724,8 +11093,54 @@ impl Js {
                         let v = self.emit_if_maythrow(s, pc, 0, v, out);
                         set_heap_data_prop(&mut s.heap, addr, k, v);
                     }
+                    // `arr.length = n` on a modeled array, `n` a known length:
+                    // the elements past it are gone, or holes are added up to
+                    // it (not a great many: such an array is made at runtime).
+                    Abs::Ref(addr)
+                        if k == "length"
+                            && matches!(&s.heap[&addr], HeapObj::Array(a) if !a.frozen)
+                            && matches!(&v, Abs::Num(n) if n.as_index().is_some_and(|n| {
+                                let len = match &s.heap[&addr] { HeapObj::Array(a) => a.elems.len(), _ => 0 };
+                                n <= len + 4096 && n < u32::MAX as usize
+                            })) =>
+                    {
+                        let Abs::Num(n) = &v else { unreachable!() };
+                        let n = n.as_index().unwrap();
+                        if let Some(HeapObj::Array(a)) = s.heap.get_mut(&addr) {
+                            let len = a.elems.len();
+                            if n < len {
+                                a.elems.truncate(n);
+                                a.holes.retain(|h| *h < n);
+                            } else {
+                                for i in len..n {
+                                    a.elems.push(Abs::Undef);
+                                    a.holes.insert(i);
+                                }
+                            }
+                        }
+                    }
+                    // A property of an array that is no element (`arr.extra =
+                    // v`): its own data property, on a standard array (whose
+                    // prototypes' members an assignment shadows).
+                    Abs::Ref(addr)
+                        if k != "length"
+                            && k != "__proto__"
+                            && array_index_key(k).is_none()
+                            && matches!(&s.heap[&addr], HeapObj::Array(a) if !a.frozen && a.standard()
+                                && a.props.iter().find(|p| p.key == *k).is_none_or(|p| matches!(p.val, PVal::Data(_)) && p.attrs & WRITABLE != 0))
+                            && self.pristine("Array")
+                            && self.pristine("Object") =>
+                    {
+                        let v = self.emit_if_maythrow(s, pc, 0, v, out);
+                        if let Some(HeapObj::Array(a)) = s.heap.get_mut(&addr) {
+                            match a.props.iter_mut().find(|p| p.key == *k) {
+                                Some(p) => p.val = PVal::Data(v),
+                                None => a.props.push(Prop::data(k.as_str(), v)),
+                            }
+                        }
+                    }
                     // A named-property write on a non-object ref (e.g. `arr.foo =
-                    // v`, `arr.length = n`): the abstract heap doesn't model it,
+                    // v` on a frozen array): the abstract heap doesn't model it,
                     // so the container escapes and the write residualizes.
                     Abs::Ref(addr) => {
                         let obj_r = self.escape(s, addr, &mut std::collections::HashSet::new(), out);
@@ -10933,6 +11348,7 @@ impl Js {
                 let nm = name.clone();
                 self.freeze_readers(s, pc, out, &|e| matches!(e, RExpr::Global(n) if *n == nm));
                 note_entry_global(name);
+                region_note_globals();
                 s.globals.insert(name.clone(), (v, true));
                 self.advance(s)
             }
@@ -10946,6 +11362,7 @@ impl Js {
                 out.push(self.in_mode(s, Op::AssignGlobal { name: name.clone(), expr }));
                 note_entry_global(name);
                 // (No longer tracked: it is the runtime's from here.)
+                region_note_globals();
                 s.globals.remove(name);
                 self.advance(s)
             }
@@ -11061,6 +11478,13 @@ impl Js {
                     Abs::Null | Abs::Undef => true,
                     // (One the facts know is neither cannot throw either.)
                     Abs::Dyn(RExpr::Var(v)) if !self.facts_off && s.facts.get(v).is_some_and(|i| i.types & (crate::facts::T_NULL | crate::facts::T_UNDEF) == 0) => false,
+                    // (Nor a standard function read by name, `Math.min` or
+                    // `Array.prototype.slice`, the receiver of a `.call` or
+                    // `.apply`; nor a variable holding an object the
+                    // residual made.)
+                    Abs::Dyn(RExpr::Get(g, m)) if matches!(&**g, RExpr::Global(g) if standard_static_method(g, m) && self.pristine(g)) => false,
+                    Abs::Dyn(_) if self.intrinsic_identity(&s.heap, &a).is_some() => false,
+                    Abs::Dyn(e) if self.known_object(e) => false,
                     Abs::Dyn(e) => !rexpr_coercible(e),
                 };
                 if needs_guard {
@@ -11068,6 +11492,20 @@ impl Js {
                     // the impure arguments that follow: it throws iff the receiver
                     // is null/undefined (matching `recv.key`).
                     self.forbid_residual_in_try(s, "a receiver coercibility check");
+                    // (A receiver that is itself a pending read, `a.list`
+                    // of `a.list.concat(...)`, is read here, once: the call
+                    // that follows has it as `this`, and would read it
+                    // again.)
+                    let a = match a {
+                        Abs::Dyn(e) if !rexpr_is_atom(&e) && self.throws_in(s, &e) => {
+                            let r = self.aux_var(121, pc, 0);
+                            self.emit_temp(s, r, e, pc, out);
+                            let v = Abs::Dyn(RExpr::Var(r));
+                            *s.top_mut().ostack.last_mut().unwrap() = v.clone();
+                            v
+                        }
+                        a => a,
+                    };
                     let recv = a.to_rexpr();
                     let dst = self.coerce_var(pc);
                     out.push(Op::Eval { dst, expr: RExpr::Get(Box::new(recv), k.clone()) });
@@ -11157,6 +11595,21 @@ impl Js {
                         Found::Unknown => {}
                     }
                 }
+                // `x[Symbol.iterator]` of a value whose iteration is the
+                // standard one: that method, as a value (called on `x`, it
+                // makes the iterator `for..of` would).
+                if self.sym_of(&i) == Some(Sym::WellKnown("iterator".into())) {
+                    if let Some(kind) = self.iterator_method_kind(s, &a) {
+                        let b = s.alloc(HeapObj::Builtin { kind: kind.into(), data: vec![].into(), ext: None });
+                        return self.push(s, Abs::Ref(b));
+                    }
+                }
+                // (A fresh symbol key: no modeled property has it.)
+                if let (Abs::Ref(addr), Abs::Dyn(RExpr::Var(k))) = (&a, &i) {
+                    if self.symbol_temps.borrow().contains(k) && matches!(self.fresh_sym_lookup(&s.heap, *addr), Found::Missing) {
+                        return self.push(s, Abs::Undef);
+                    }
+                }
                 // A static key on a modeled built-in (a RegExp, a Map, a
                 // proxy ...; not a typed array or buffer, which have
                 // elements): the property of that name, as `.k` reads it
@@ -11185,6 +11638,22 @@ impl Js {
                 let (a, i) = if self.index_is_static(s, &a, &i) {
                     (a, i)
                 } else {
+                    // A key known now names a property: the read is that of
+                    // `.k` (an accessor's getter runs, a method is found up
+                    // the chain), for an object or function, and for an
+                    // array's property that is no element.
+                    if let (Abs::Ref(addr), Abs::Str(k)) = (&a, &i) {
+                        let named = match &s.heap[addr] {
+                            HeapObj::Object { .. } | HeapObj::Closure { .. } => true,
+                            HeapObj::Array(_) => array_index_key(k).is_none(),
+                            _ => false,
+                        };
+                        if named {
+                            let k = k.clone();
+                            s.top_mut().ostack.push(a);
+                            return self.get_prop_step(s, &k, pc, out);
+                        }
+                    }
                     let a = self.escape_if_ref(s, a, out);
                     let i = self.escape_if_ref(s, i, out);
                     (a, i)
@@ -11424,7 +11893,7 @@ impl Js {
                             || ta_view(&s.heap, *a).is_some()
                             || (is_arguments_obj(&s.heap, *a) && s.heap[a].own_key(&PKey::Sym(Sym::WellKnown("iterator".into()))).is_none()) =>
                     {
-                        Some(HeapObj::Builtin { kind: "ArrayIterator".into(), data: vec![v.clone(), Abs::Num(JsNum::int(0))].into(), ext: None })
+                        Some(HeapObj::Builtin { kind: "ArrayIterator".into(), data: vec![v.clone(), Abs::Num(JsNum::int(0)), Abs::Str("values".into())].into(), ext: None })
                     }
                     Abs::Str(_) => Some(HeapObj::Builtin {
                         kind: "StringIterator".into(),
@@ -11595,8 +12064,16 @@ impl Js {
                 // point a `try` must catch or globals must be written out for.
                 let plain_error = matches!(&callee, Abs::Dyn(RExpr::Global(g)) if STANDARD_ERRORS.contains(&g.as_str()) && self.pristine(g))
                     && args.iter().all(|a| matches!(a, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null));
+                // (Nor does a standard constructor given only primitives run
+                // any: what it reads of them is theirs alone, so the
+                // program's globals are as they were after it. It may throw.)
+                let primitive_builtin = matches!(&callee, Abs::Dyn(RExpr::Global(g))
+                        if crate::pristine::BUILTIN_GLOBALS.contains(&g.as_str()) && !matches!(g.as_str(), "Function" | "Proxy" | "Promise" | "eval") && builtin_typeof(g) == Some("function") && self.pristine(g))
+                    && args.iter().all(|a| matches!(a, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null));
                 if !plain_error {
-                    self.sync_globals(s, true, out);
+                    if !primitive_builtin {
+                        self.sync_globals(s, true, out);
+                    }
                     self.forbid_residual_in_try(s, "a `new` expression");
                 }
                 let callee_r = match callee {
@@ -11841,6 +12318,11 @@ impl Js {
                             }
                         }
                     }
+                    // (`globalThis`'s: the global object. Not of `window`,
+                    // `global` or `self`, names an environment may lack.)
+                    if matches!(&operands[0], Abs::Dyn(RExpr::Global(g)) if g == "globalThis") {
+                        return self.push(s, Abs::Str("object".into()));
+                    }
                     if let Abs::Ref(a) = &operands[0] {
                         // (A proxy's is its target's.)
                         let mut a = *a;
@@ -11852,8 +12334,7 @@ impl Js {
                         }
                         let t = match &s.heap[&a] {
                             HeapObj::Closure { .. } => "function",
-                            HeapObj::Builtin { kind, .. } if kind == BOUND_FUNCTION => "function",
-                            HeapObj::Builtin { kind, .. } if kind.contains(".prototype.") || kind.starts_with("Array.") || react::is_callable_model(kind) => "function",
+                            HeapObj::Builtin { kind, .. } if builtin_kind_is_function(kind) => "function",
                             HeapObj::Builtin { .. } => "object",
                             _ => "object",
                         };
@@ -11873,6 +12354,20 @@ impl Js {
                 // residualizes and unrolls forever.
                 if let Some(folded) = fold_opaque(op, &operands) {
                     return self.push(s, folded);
+                }
+                // `==` / `!=` of an object and a primitive: of the object's
+                // primitive, where converting it runs none of the program's
+                // code (`[5] == 5`).
+                if (op == "==" || op == "!=") && operands.len() == 2 {
+                    let prim = |v: &Abs| matches!(v, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_));
+                    let pair = match (&operands[0], &operands[1]) {
+                        (o @ Abs::Ref(_), p) if prim(p) && !self.user_conversion(s, o) => self.to_primitive_static(s, o).map(|x| (x, p.clone())),
+                        (p, o @ Abs::Ref(_)) if prim(p) && !self.user_conversion(s, o) => self.to_primitive_static(s, o).map(|x| (p.clone(), x)),
+                        _ => None,
+                    };
+                    if let Some(eq) = pair.and_then(|(x, y)| loose_eq_static(&x, &y)) {
+                        return self.push(s, Abs::Bool(eq == (op == "==")));
+                    }
                 }
                 // `c ? x : y`: each side as its side of `c` makes it.
                 let operands = if op == "?:" && operands.len() == 3 && !self.facts_off {
@@ -11918,6 +12413,14 @@ impl Js {
                     _ => &operands,
                 };
                 if converted.iter().any(|v| self.user_conversion(s, v)) {
+                    let named = match (op.as_str(), operands.len()) {
+                        (o, 1) => Some(format!("u{o}")),
+                        (o, 2) => Some(o.to_string()),
+                        _ => None,
+                    };
+                    if let Some(step) = named.and_then(|o| self.convert_op_inline(s, &o, operands.clone(), pc, out)) {
+                        return step;
+                    }
                     let mut escaped = std::collections::HashSet::new();
                     let mut args = Vec::with_capacity(operands.len());
                     for a in operands {
@@ -11987,6 +12490,7 @@ impl Js {
                             c
                         } else {
                             s.top_mut().ostack.push(c);
+                            let _why = self.why.merging(why::Merge::BranchWrite);
                             self.materialize(s, &hm, out);
                             s.top_mut().ostack.pop().unwrap()
                         };
@@ -12013,7 +12517,8 @@ impl Js {
                         }
                         if env_flag!("DYNBR_DEBUG") {
                             let frames: Vec<&str> = s.frames.iter().map(|f| self.names[f.func].as_str()).collect();
-                            eprintln!("[DYNBR] pc={} cond={:?} in {}", pc, r, frames.join(" > "));
+                            let before: Vec<String> = (pc.saturating_sub(6)..pc).map(|i| format!("{:?}", self.code[i])).collect();
+                            eprintln!("[DYNBR] pc={} cond={:?} in {}\n        after {}", pc, r, frames.join(" > "), before.join("; "));
                         }
                         // Every inlined activation on the stack has now branched
                         // dynamically: remember its context (see `do_call`).
@@ -12039,14 +12544,15 @@ impl Js {
                         // array), a marker would just make the arms' states differ
                         // by the un-popped stack and block the natural merge.
                         for (end, mods, globals) in &self.if_forward_joins[pc] {
-                            let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone() };
+                            let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: None };
                             tstate.pending_joins.push(j.clone());
                             fstate.pending_joins.push(j);
                         }
                         if let Some((end, mods)) = &self.if_join[pc] {
                             let globals = &self.if_global_mods[pc];
                             if !mods.is_empty() || !globals.is_empty() {
-                                let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone() };
+                                let before = BeforeBranch(std::rc::Rc::new((s.heap.clone(), s.escaped.clone(), s.fns.clone(), s.globals.clone(), s.top().branched)));
+                                let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: Some(before) };
                                 tstate.pending_joins.push(j.clone());
                                 fstate.pending_joins.push(j);
                             }
@@ -12221,8 +12727,9 @@ impl Js {
             // it would materialize a dead object into the variable of a live
             // one.
             g.gc();
-            for addr in self.heap_shape_changes(&seen.heap, &g.heap) {
-                if g.heap.contains_key(&addr) {
+            let changed = self.heap_shape_changes(&seen.heap, &g.heap);
+            for addr in Js::holders_first(&g.heap, &changed, 1) {
+                if g.heap.contains_key(&addr) && !g.escaped.contains(&addr) {
                     if env_flag!("GEN_DEBUG") {
                         eprintln!("[GEN-SHAPE] escape @{addr}");
                     }
@@ -12234,7 +12741,10 @@ impl Js {
                 }
             }
         }
-        self.materialize_with_fields(&mut g, &slots, &fields, out);
+        {
+            let _why = self.why.merging(if self.dynamically_controlled(from) { why::Merge::LoopControl } else { why::Merge::LoopGrowth });
+            self.materialize_with_fields(&mut g, &slots, &fields, out);
+        }
         self.merge_facts(seen, &mut g, &out[n0..]);
         // An escaped object is garbage now (its references became its runtime
         // variable): left in the heap, a later freeze would still find the
@@ -12418,6 +12928,13 @@ impl Js {
         // (The global object is itself.)
         if matches!(op, Bop::Eq | Bop::Ne) && is_global_object(a) && is_global_object(b) {
             return Some(Abs::Bool(op == Bop::Eq));
+        }
+        // (A standard global the program leaves alone is itself:
+        // `e.constructor === TypeError`.)
+        if let (Bop::Eq | Bop::Ne, Abs::Dyn(RExpr::Global(g)), Abs::Dyn(RExpr::Global(h))) = (op, a, b) {
+            if g == h && crate::pristine::BUILTIN_GLOBALS.contains(&g.as_str()) && matches!(builtin_typeof(g), Some("function" | "object")) && self.pristine(g) {
+                return Some(Abs::Bool(op == Bop::Eq));
+            }
         }
         let (ia, ib) = (self.info_abs(s, a)?, self.info_abs(s, b)?);
         let r = match op {
@@ -13108,6 +13625,9 @@ impl Js {
             // A `return` out of a `try` discards that frame's handlers.
             let depth = s.frames.len();
             s.handlers.retain(|h| h.frame_depth < depth);
+            // (And leaves that activation's dynamic branches: their joins
+            // are never reached. See `PendingJoin`.)
+            s.pending_joins.retain(|j| j.depth < depth);
             let f = s.frames.pop().unwrap();
             if let Abs::Ref(g) = &*f.generator {
                 // A generator's `return`: it completes with `{value, done: true}`.
@@ -13115,6 +13635,8 @@ impl Js {
                     *frame = None;
                     *state = GEN_DONE;
                 }
+                // (Read once, as a yielded value is: see `Instr::Yield`.)
+                let v = self.emit_if_maythrow(s, pc, 1, v, out);
                 let r = self.iter_result(s, v, true, pc);
                 s.top_mut().ostack.push(r);
                 return Step::Continue;
@@ -14422,6 +14944,7 @@ impl Js {
                             let read = RExpr::Global(g.clone());
                             self.declared_types.borrow_mut().insert(t, (read.clone(), info));
                             self.emit_temp(s, t, read, pc, out);
+                            region_note_globals();
                             s.globals.insert(g.clone(), (Abs::Dyn(RExpr::Var(t)), false));
                         }
                     }
@@ -14524,6 +15047,12 @@ impl Js {
     }
 
     fn loop_diverges(&self, seen: &State, cand: &State) -> bool {
+        self.loop_diverges_with(seen, cand, None)
+    }
+
+    /// `loop_diverges`, `guards` holding `loop_condition_fields(cand)` once
+    /// it is asked for (see `JsCandFacts::guard_fields`).
+    fn loop_diverges_with(&self, seen: &State, cand: &State, cond_fields: Option<&std::cell::OnceCell<Vec<(usize, Option<usize>)>>>) -> bool {
         // Cheap structural checks first; the O(heap) `heap ==` is done LAST.
         if seen.frames.len() != cand.frames.len() {
             return false;
@@ -14568,6 +15097,13 @@ impl Js {
                     grew = true;
                     continue;
                 }
+                // (A runtime value replaced by the slot's own variable: a
+                // store since assigned it, see `Instr::Store`. The same
+                // growth, written out.)
+                if *b == RExpr::Var(self.stable_id(cf.func, slot)) {
+                    grew = true;
+                    continue;
+                }
             }
             // A changed slot that did not grow as a `Dyn` superterm. A loop GUARD
             // (induction variable in the header condition) keeps the loop bounded →
@@ -14609,7 +15145,7 @@ impl Js {
         if seen.frames[..fi] != cand.frames[..fi] {
             return false;
         }
-        match self.heap_field_changes(&seen.heap, &cand.heap, false, cand, &HashMap::new()) {
+        match self.heap_field_changes_with(&seen.heap, &cand.heap, false, cand, &HashMap::new(), cond_fields) {
             Some((_, heap_grew)) => grew || heap_grew,
             // Structures changed shape (an array grew, an object gained a
             // property). With static progress elsewhere (a counter, an
@@ -14655,9 +15191,17 @@ impl Js {
                 }
                 _ => false,
             };
-            if same_shape
-                && s.children().into_iter().zip(c.children()).any(|(x, y)| x != y && (!x.is_dynamic() || !y.is_dynamic()))
-            {
+            if !same_shape {
+                continue;
+            }
+            let progress = |(x, y): (&Abs, &Abs)| x != y && (!x.is_dynamic() || !y.is_dynamic());
+            // (A built-in's elements in place, up to the first that moved: a
+            // buffer of thousands is not listed for each pair of states.)
+            let moved = match (s, c) {
+                (HeapObj::Builtin { data: d1, ext: None, .. }, HeapObj::Builtin { data: d2, ext: None, .. }) => d1.v.iter().zip(d2.v.iter()).any(progress),
+                _ => s.children().into_iter().zip(c.children()).any(progress),
+            };
+            if moved {
                 return true;
             }
         }
@@ -14740,6 +15284,21 @@ impl Js {
         at: &State,
         fresh: &HashMap<usize, usize>,
     ) -> Option<(Vec<(usize, usize)>, bool)> {
+        self.heap_field_changes_with(seen, cand, dynamic, at, fresh, None)
+    }
+
+    /// `heap_field_changes`, `guards` holding `loop_condition_fields(at)`
+    /// once it is asked for.
+    #[allow(clippy::too_many_arguments)]
+    fn heap_field_changes_with(
+        &self,
+        seen: &Heap,
+        cand: &Heap,
+        dynamic: bool,
+        at: &State,
+        fresh: &HashMap<usize, usize>,
+        guards: Option<&std::cell::OnceCell<Vec<(usize, Option<usize>)>>>,
+    ) -> Option<(Vec<(usize, usize)>, bool)> {
         if seen.len() != cand.len() {
             return None;
         }
@@ -14747,6 +15306,17 @@ impl Js {
         let mut changes = Vec::new();
         let mut grew = false;
         let mut guard_fields: Option<Vec<(usize, Option<usize>)>> = None;
+        // (Only the objects the two heaps do not share: with no object
+        // standing for another, those their maps hold differently.)
+        let changed: Option<Vec<usize>> = fresh.is_empty().then(|| {
+            seen.m
+                .diff(&cand.m)
+                .map(|d| match d {
+                    im::ordmap::DiffItem::Add(k, _) | im::ordmap::DiffItem::Remove(k, _) => *k,
+                    im::ordmap::DiffItem::Update { new, .. } => *new.0,
+                })
+                .collect()
+        });
         // (`cand`'s value as `seen` would hold it: a fresh object is its
         // partner.)
         let as_seen = |v: &Abs| -> Abs {
@@ -14755,7 +15325,12 @@ impl Js {
                 other => other.clone(),
             }
         };
-        for (addr, c) in cand.iter() {
+        let addrs: Vec<usize> = match &changed {
+            Some(c) => c.clone(),
+            None => cand.keys().copied().collect(),
+        };
+        for addr in &addrs {
+            let c = cand.get(addr)?;
             let s = seen.get(fresh.get(addr).unwrap_or(addr))?;
             if s == c {
                 continue;
@@ -14791,13 +15366,21 @@ impl Js {
                 // A field moving between two STATIC values that a loop's
                 // condition reads: the loop's bound (see above).
                 if !dynamic && !a.is_dynamic() && !b.is_dynamic() {
-                    let guards = guard_fields.get_or_insert_with(|| self.loop_condition_fields(at));
+                    let guards: &Vec<(usize, Option<usize>)> = match guards {
+                        Some(cell) => cell.get_or_init(|| self.loop_condition_fields(at)),
+                        None => guard_fields.get_or_insert_with(|| self.loop_condition_fields(at)),
+                    };
                     if guards.iter().any(|&(g, e)| g == *addr && e.is_none_or(|e| e == idx)) {
                         return None;
                     }
                 }
                 if let (Abs::Dyn(x), Abs::Dyn(y)) = (a, b) {
                     if rexpr_subterm(x, y) {
+                        grew = true;
+                    }
+                    // (A runtime value replaced by one written out where it
+                    // was stored, see `emit_if_maythrow`: the same growth.)
+                    if matches!(y, RExpr::Var(v) if matches!(self.var_ids.borrow().keys.get(v), Some(VarKey::Elem(..)))) {
                         grew = true;
                     }
                 }
@@ -15172,6 +15755,66 @@ impl Js {
         Abs::Dyn(RExpr::Var(t))
     }
 
+    /// The string the Error object at `addr` converts to, when the
+    /// conversion is `Error.prototype.toString`'s (neither it nor `valueOf`
+    /// is the object's own or a modeled prototype's, no `@@toPrimitive`
+    /// is) and its `name` and `message` are known strings (or absent).
+    fn error_to_string(&self, heap: &Heap, addr: usize) -> Option<String> {
+        for k in ["toString", "valueOf"] {
+            match lookup_prop_chain(heap, addr, k) {
+                Chain::PastErrorPrototype(n) if self.pristine(n) && self.pristine("Error") && self.pristine("Object") => {}
+                _ => return None,
+            }
+        }
+        let to_primitive = PKey::Sym(Sym::WellKnown("toPrimitive".into()));
+        let mut cur = addr;
+        loop {
+            let o = heap.get(&cur)?;
+            if o.own_key(&to_primitive).is_some() {
+                return None;
+            }
+            match o {
+                HeapObj::Object { proto: Abs::Ref(p), .. } => cur = *p,
+                HeapObj::Object { .. } => break,
+                _ => return None,
+            }
+        }
+        let part = |k: &str, absent: &str| match self.lookup_prop(heap, addr, k) {
+            Found::Data(Abs::Str(t)) => Some(t),
+            Found::Data(Abs::Undef) | Found::Missing => Some(absent.to_string()),
+            _ => None,
+        };
+        let (name, message) = (part("name", "Error")?, part("message", "")?);
+        Some(if name.is_empty() {
+            message
+        } else if message.is_empty() {
+            name
+        } else {
+            format!("{name}: {message}")
+        })
+    }
+
+    /// `new E(message)` for the standard error `STANDARD_ERRORS[ctor]`.
+    fn error_shell(ctor: u8, message: Option<String>) -> RExpr {
+        RExpr::New(Box::new(RExpr::Global(STANDARD_ERRORS[ctor as usize].to_string())), message.into_iter().map(RExpr::Str).collect())
+    }
+
+    /// The message an Error object `o` is made with at runtime: its own
+    /// `message` when that is a known string with the attributes the
+    /// constructor gives it, taken out of `o` (the constructor defines it).
+    fn error_shell_message(&self, o: &mut HeapObj) -> Option<String> {
+        let props = o.props_mut()?;
+        let i = props.iter().position(|p| p.key == "message")?;
+        match &props[i] {
+            Prop { val: PVal::Data(Abs::Str(m)), attrs, .. } if *attrs == WRITABLE | CONFIGURABLE => {
+                let m = m.clone();
+                props.remove(i);
+                Some(m)
+            }
+            _ => None,
+        }
+    }
+
     fn object_shell(&self, dst: usize, proto: &Abs, proto_r: RExpr) -> Op {
         if *proto == INTRINSIC_PROTO {
             // `Object.create(Object.prototype)` is `{}`.
@@ -15461,6 +16104,13 @@ impl Js {
                     return None;
                 }
                 let out = match &s.heap[addr] {
+                    // A RegExp as its own instances are (`RegExp.prototype`'s
+                    // `toString`, `source` and `flags`): `/source/flags`.
+                    HeapObj::Builtin { kind, data, ext: None } if kind == "RegExp" && self.pristine("RegExp") && self.pristine("Object") => {
+                        let (Abs::Str(src), Abs::Str(flags)) = (&data[0], &data[1]) else { unreachable!("a modeled RegExp has a static pattern and flags") };
+                        let flags: String = "dgimsuvy".chars().filter(|c| flags.contains(*c)).collect();
+                        format!("/{}/{flags}", regex_literal_source(src))
+                    }
                     // `Array.prototype.toString` is `join(",")`, where `null` and
                     // `undefined` elements stringify to the empty string.
                     HeapObj::Array(elems) if self.array_converts_standard(&s.heap, *addr) => {
@@ -15489,9 +16139,14 @@ impl Js {
                     {
                         self.fn_source_text[*fid].as_deref().unwrap().to_string()
                     }
+                    // An Error object converted by `Error.prototype.toString`:
+                    // its name and its message.
+                    HeapObj::Object { class: ObjClass::Error { .. }, .. } if self.error_to_string(&s.heap, *addr).is_some() => {
+                        self.error_to_string(&s.heap, *addr).unwrap()
+                    }
                     // (Nor an `@@toPrimitive`, nor an `@@toStringTag` that
                     // would name it.)
-                    HeapObj::Object { .. }
+                    HeapObj::Object { class: ObjClass::Ordinary | ObjClass::Arguments { .. } | ObjClass::FinalCell { .. }, .. }
                         if matches!(self.lookup_prop(&s.heap, *addr, "toString"), Found::Unknown)
                             && matches!(self.lookup_prop(&s.heap, *addr, "valueOf"), Found::Unknown)
                             && matches!(self.sym_lookup(&s.heap, *addr, &Sym::WellKnown("toPrimitive".into())), Found::Missing)
@@ -15679,6 +16334,7 @@ impl Js {
             "Object" if matches!(callee, Abs::Dyn(_)) => Some("Object"),
             "String" if matches!(callee, Abs::Dyn(_)) => Some("String"),
             "Proxy" if matches!(callee, Abs::Dyn(_)) => Some(PROXY),
+            e if matches!(callee, Abs::Dyn(_)) => STANDARD_ERRORS.iter().copied().find(|x| *x == e),
             _ => None,
         }
     }
@@ -15708,6 +16364,26 @@ impl Js {
                 None | Some(Abs::Undef | Abs::Null) => Some(Abs::Ref(s.alloc(HeapObj::object(vec![])))),
                 _ => None,
             },
+            // `new E(message)` for a standard error `E`, its message a
+            // known primitive (its string is the `message` property) or
+            // absent, and no options: an Error object (`ObjClass::Error`).
+            e if STANDARD_ERRORS.contains(&e) && self.pristine("Error") && self.pristine("Object") => {
+                if !matches!(args.get(1), None | Some(Abs::Undef)) {
+                    return None;
+                }
+                let mut props = Vec::new();
+                match args.first() {
+                    None | Some(Abs::Undef) => {}
+                    Some(v @ (Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null)) => {
+                        let text = self.to_string_static(s, v)?;
+                        props.push(Prop { key: "message".into(), val: PVal::Data(Abs::Str(text)), attrs: WRITABLE | CONFIGURABLE });
+                    }
+                    _ => return None,
+                }
+                let ctor = STANDARD_ERRORS.iter().position(|x| *x == e).unwrap() as u8;
+                let proto = Abs::Dyn(RExpr::Get(Box::new(RExpr::Global(e.to_string())), "prototype".into()));
+                Some(Abs::Ref(s.alloc(HeapObj::Object { props, proto, class: ObjClass::Error { ctor }, private: Vec::new(), extensible: true })))
+            }
             // `new String(v)` of a static primitive: a String object (a
             // runtime value once anything but its identity is used).
             "String" => {
@@ -15772,22 +16448,42 @@ impl Js {
             "Map" | "Set" | "WeakMap" | "WeakSet" => {
                 let weak = name.starts_with("Weak");
                 let name = collection_base(name);
-                let items: Vec<Abs> = match args.first() {
+                // What it is made of: an array's elements, a string's code
+                // points, another collection's entries (a Map's as pairs),
+                // each iterated the standard way.
+                enum Item {
+                    One(Abs),
+                    Pair(Abs, Abs),
+                }
+                let items: Vec<Item> = match args.first() {
                     None | Some(Abs::Undef) | Some(Abs::Null) => vec![],
+                    Some(Abs::Str(text)) if self.pristine("String") => text.chars().map(|c| Item::One(Abs::Str(c.to_string()))).collect(),
                     Some(Abs::Ref(a)) => match &s.heap[a] {
-                        HeapObj::Array(xs) => self.iterated_elems(&s.heap, xs)?,
+                        HeapObj::Array(xs) => self.iterated_elems(&s.heap, xs)?.into_iter().map(Item::One).collect(),
+                        HeapObj::Builtin { kind, data, ext } if (kind == "Map" || kind == "Set") && ext.as_ref().is_none_or(|e| self.subclass_iterates(&s.heap, &e.proto, kind)) && self.pristine(kind) => {
+                            let stride = collection_stride(kind);
+                            let d = data.to_vec();
+                            d.chunks(stride)
+                                .filter(|e| e[stride - 1] == Abs::Bool(true))
+                                .map(|e| if kind == "Map" { Item::Pair(e[0].clone(), e[1].clone()) } else { Item::One(e[0].clone()) })
+                                .collect()
+                        }
                         _ => return None,
                     },
                     _ => return None,
                 };
                 let mut data: Vec<Abs> = Vec::new();
                 for it in items {
-                    let (k, v) = if name == "Map" {
-                        let Abs::Ref(e) = &it else { return None };
-                        let HeapObj::Array(kv) = &s.heap[e] else { return None };
-                        (kv.first().cloned().unwrap_or(Abs::Undef), kv.get(1).cloned().unwrap_or(Abs::Undef))
-                    } else {
-                        (it, Abs::Undef)
+                    let (k, v) = match (name, it) {
+                        ("Map", Item::Pair(k, v)) => (k, v),
+                        ("Map", Item::One(it)) => {
+                            let Abs::Ref(e) = &it else { return None };
+                            let HeapObj::Array(kv) = &s.heap[e] else { return None };
+                            (kv.first().cloned().unwrap_or(Abs::Undef), kv.get(1).cloned().unwrap_or(Abs::Undef))
+                        }
+                        (_, Item::One(it)) => (it, Abs::Undef),
+                        // (A Set of a Map: of its entries, each a fresh pair.)
+                        (_, Item::Pair(..)) => return None,
                     };
                     if weak && !matches!(k, Abs::Ref(_)) {
                         return None; // a TypeError at runtime
@@ -16406,6 +17102,9 @@ impl Js {
             return callee;
         }
         let Abs::Dyn(RExpr::Var(v)) = &callee else { return callee };
+        if env_flag!("KNOWN_DEBUG") {
+            eprintln!("[KNOWN] call of v{v}: fact {:?}", s.facts.get(v).map(|i| i.callee.is_some()));
+        }
         let Some(kf) = s.facts.get(v).and_then(|i| i.callee.clone()) else { return callee };
         let v = *v;
         let mut captured = Vec::with_capacity(kf.caps.len());
@@ -16615,6 +17314,9 @@ impl Js {
                 && self.pristine("Object")
                 && self.pristine("Array")
                 && self.json_stringify(s, &Abs::Ref(root), &mut String::new(), &mut vec![]).is_none()
+                // (Not where the self-hosted `JSON.stringify` folds: an
+                // object with a `toJSON` or a getter it runs here.)
+                && self.std_prelude_unfolding(s, &callee, &args, ret, pc).is_none()
             {
                 let mut probe = s.clone();
                 if let Some(copy @ Abs::Ref(_)) = self.json_copy(&mut probe, &Abs::Ref(root), &mut vec![]) {
@@ -16848,7 +17550,50 @@ impl Js {
                         s.top_mut().pc += 1;
                         self.finish_call(s, v, Abs::Undef, ret, pc, out);
                         return Step::Continue;
+                    } else if let Some(&fid) = self.collection_prelude.get(&format!("{ck}.{m}")).filter(|fid| self.prelude_unfolds(s, **fid, &args, &this, pc)) {
+                        // (Any other method the prelude has, `__pe_Set_union`:
+                        // self-hosted, where it unfolds.)
+                        let f = s.alloc(HeapObj::closure(fid, vec![]));
+                        let n = args.len();
+                        s.top_mut().ostack.push(Abs::Ref(f));
+                        s.top_mut().ostack.extend(args);
+                        return self.do_call(s, n, pc, out, this, ret, Abs::Undef);
                     }
+                }
+            }
+        }
+        // `String.prototype[@@iterator]` on a known string: its iterator;
+        // an iterator's own `[@@iterator]`: the iterator. On any other
+        // receiver, the runtime's call of that method.
+        if let Abs::Ref(addr) = &callee {
+            if let HeapObj::Builtin { kind, .. } = &s.heap[addr] {
+                if kind == STRING_ITERATOR_METHOD || kind == ITERATOR_SELF_METHOD {
+                    let made = match (kind.as_str(), &this) {
+                        (STRING_ITERATOR_METHOD, Abs::Str(_)) => {
+                            let it = s.alloc(HeapObj::Builtin {
+                                kind: "StringIterator".into(),
+                                data: vec![this.clone(), Abs::Num(JsNum::int(0)), Abs::Num(JsNum::int(0))].into(),
+                                ext: None,
+                            });
+                            self.creation_pc.borrow_mut().insert(it, pc);
+                            Some(Abs::Ref(it))
+                        }
+                        (ITERATOR_SELF_METHOD, Abs::Ref(t)) if matches!(&s.heap[t], HeapObj::Builtin { kind, .. } if is_iterator_kind(kind)) => Some(this.clone()),
+                        _ => None,
+                    };
+                    let r = match made {
+                        Some(v) => v,
+                        None => {
+                            let mut escaped = std::collections::HashSet::new();
+                            let func = self.escape_if_ref(s, callee.clone(), out).to_rexpr();
+                            let recv = self.operand_rexpr(s, &this, &mut escaped, out);
+                            let arg_rs: Vec<RExpr> = args.iter().map(|a| self.operand_rexpr(s, a, &mut escaped, out)).collect();
+                            self.runtime_call(s, RExpr::BoundMethod { func: Box::new(func), recv: Box::new(recv) }, arg_rs, pc, out)
+                        }
+                    };
+                    s.top_mut().pc += 1;
+                    self.finish_call(s, r, Abs::Undef, ret, pc, out);
+                    return Step::Continue;
                 }
             }
         }
@@ -16944,6 +17689,37 @@ impl Js {
                     // function or an intrinsic method (`super.m(...)` of a
                     // class extending a built-in): an ordinary call of `f`
                     // with `this = t`.
+                    // (An array's method on an array-like object, an
+                    // `arguments` among them: its self-hosted version, which
+                    // reads only `length` and the elements.)
+                    if let (Abs::Ref(f), Some(Abs::Ref(t))) = (&this, args.first()) {
+                        let prelude = match (&s.heap[f], &s.heap[t]) {
+                            (HeapObj::Builtin { kind, .. }, HeapObj::Object { class: ObjClass::Arguments { .. } | ObjClass::Ordinary, .. }) => kind
+                                .strip_prefix("Array.prototype.")
+                                .filter(|m| !mutates_array(m) && self.pristine("Array"))
+                                .and_then(|m| self.array_prelude.get(m).copied()),
+                            _ => None,
+                        };
+                        let list: Option<Vec<Abs>> = match method {
+                            "call" => Some(args.iter().skip(1).cloned().collect()),
+                            "apply" => match args.get(1) {
+                                None | Some(Abs::Undef) | Some(Abs::Null) => Some(vec![]),
+                                Some(Abs::Ref(a)) => array_like_elems(&s.heap, *a),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let (Some(fid), Some(list)) = (prelude, list) {
+                            let recv = args[0].clone();
+                            if self.prelude_unfolds(s, fid, &list, &recv, pc) {
+                                let callee = Abs::Ref(s.alloc(HeapObj::closure(fid, vec![])));
+                                let n = list.len();
+                                s.top_mut().ostack.push(callee);
+                                s.top_mut().ostack.extend(list);
+                                return self.do_call(s, n, pc, out, recv, ret, Abs::Undef);
+                            }
+                        }
+                    }
                     if let Abs::Ref(f) = &this {
                         if matches!(&s.heap[f], HeapObj::Closure { .. })
                             || matches!(&s.heap[f], HeapObj::Builtin { kind, .. } if kind == PROXY || kind == BOUND_FUNCTION)
@@ -16971,6 +17747,17 @@ impl Js {
                     if let Some(v) = self.try_object_proto_method(s, method, &this, &args) {
                         s.top_mut().pc += 1;
                         self.finish_call(s, v, this, ret, pc, out);
+                        return Step::Continue;
+                    }
+                } else if kind == "Error.prototype.toString" {
+                    // On an Error object whose name and message are known.
+                    let text = match &this {
+                        Abs::Ref(t) if matches!(&s.heap[t], HeapObj::Object { class: ObjClass::Error { .. }, .. }) => self.error_to_string(&s.heap, *t),
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        s.top_mut().pc += 1;
+                        self.finish_call(s, Abs::Str(text), this, ret, pc, out);
                         return Step::Continue;
                     }
                 }
@@ -17049,6 +17836,62 @@ impl Js {
                         s.top_mut().ostack.push(args[0].clone());
                         s.top_mut().ostack.extend(list);
                         return self.do_call(s, n, pc, out, args[1].clone(), ret, Abs::Undef);
+                    }
+                }
+            }
+        }
+        // `X.prototype.m.call(recv, ...args)` / `.apply(recv, list)` for a
+        // standard prototype's method read by name, on a known receiver of
+        // its kind: the method called on it, as `recv.m(...args)` is (a
+        // string's or number's method; an array's on an array, or on an
+        // array-like object through its self-hosted version, which reads
+        // only `length` and the elements).
+        if let Abs::Dyn(RExpr::Get(f, cm)) = &callee {
+            if let (RExpr::Get(p, m), "call" | "apply") = (&**f, cm.as_str()) {
+                if let RExpr::Get(g, pr) = &**p {
+                    if let (RExpr::Global(g), true) = (&**g, pr == "prototype") {
+                        let recv = args.first().cloned().unwrap_or(Abs::Undef);
+                        let list: Option<Vec<Abs>> = match cm.as_str() {
+                            "call" => Some(args.iter().skip(1).cloned().collect()),
+                            _ => match args.get(1) {
+                                None | Some(Abs::Undef) | Some(Abs::Null) => Some(vec![]),
+                                Some(Abs::Ref(a)) => array_like_elems(&s.heap, *a),
+                                _ => None,
+                            },
+                        };
+                        // (What is called, and as whose method.)
+                        enum Target {
+                            Value(Abs),
+                            Prelude(usize),
+                        }
+                        let target = match (g.as_str(), &recv) {
+                            _ if !(self.pristine(g) && self.pristine("Function")) => None,
+                            ("String", Abs::Str(_)) | ("Number", Abs::Num(_)) | ("Boolean", Abs::Bool(_)) => {
+                                Some(Target::Value(Abs::Dyn(RExpr::Get(Box::new(recv.to_rexpr()), m.clone()))))
+                            }
+                            ("Array", Abs::Ref(r)) => match &s.heap[r] {
+                                HeapObj::Array(a) if a.standard() && is_array_proto_member(m) && !a.props.iter().any(|q| q.key == *m) => {
+                                    Some(Target::Value(Abs::Ref(s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{m}"), data: vec![].into(), ext: None }))))
+                                }
+                                HeapObj::Object { class: ObjClass::Arguments { .. } | ObjClass::Ordinary, .. } if !mutates_array(m) => {
+                                    self.array_prelude.get(m.as_str()).map(|fid| Target::Prelude(*fid))
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let (Some(target), Some(list)) = (target, list) {
+                            let callee = match target {
+                                Target::Value(v) => Some(v),
+                                Target::Prelude(fid) => self.prelude_unfolds(s, fid, &list, &recv, pc).then(|| Abs::Ref(s.alloc(HeapObj::closure(fid, vec![])))),
+                            };
+                            if let Some(callee) = callee {
+                                let n = list.len();
+                                s.top_mut().ostack.push(callee);
+                                s.top_mut().ostack.extend(list);
+                                return self.do_call(s, n, pc, out, recv, ret, Abs::Undef);
+                            }
+                        }
                     }
                 }
             }
@@ -17178,6 +18021,35 @@ impl Js {
                 self.finish_call(s, Abs::Ref(a), Abs::Undef, ret, pc, out);
                 return Step::Continue;
             }
+            // A self-hosted standard function meeting a case it does not
+            // cover: the probe that asked whether it unfolds is told no (see
+            // `std_prelude_of`); it runs nowhere else.
+            if g == UNMODELED_HELPER {
+                self.prelude_gives_up(UNMODELED_HELPER);
+                return Step::Halt;
+            }
+            // What a self-hosted standard function asks of a value it was
+            // given: `"Array"` for an array, `"Object"` for an ordinary
+            // object, `"Function"`. Any other (a wrapper, a collection, a
+            // proxy, a runtime value) is a case it does not cover.
+            if g == SLOT_KIND_HELPER {
+                let kind = match args.first() {
+                    Some(Abs::Ref(a)) => match &s.heap[a] {
+                        HeapObj::Array(_) => Some("Array"),
+                        HeapObj::Object { class: ObjClass::Ordinary | ObjClass::FinalCell { .. } | ObjClass::Arguments { .. }, .. } => Some("Object"),
+                        HeapObj::Closure { .. } => Some("Function"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(kind) = kind else {
+                    self.prelude_gives_up(SLOT_KIND_HELPER);
+                    return Step::Halt;
+                };
+                s.top_mut().pc += 1;
+                self.finish_call(s, Abs::Str(kind.to_string()), Abs::Undef, ret, pc, out);
+                return Step::Continue;
+            }
             if g == "__pe_forInKeys" {
                 if let Some(keys) = self.for_in_keys(s, args.first().unwrap_or(&Abs::Undef)) {
                     let a = s.alloc(HeapObj::Array(ArrayObj::from(keys.into_iter().map(Abs::Str).collect::<Vec<_>>())));
@@ -17297,6 +18169,18 @@ impl Js {
             }
         }
 
+        // A standard function no model above folded here, which the prelude
+        // has a self-hosted version of (`__pe_std_JSON_stringify` for
+        // `JSON.stringify`): that version, where it unfolds (see
+        // `std_prelude_unfolding`).
+        if let Some((fid, prelude_this)) = self.std_prelude_unfolding(s, &callee, &args, ret, pc) {
+            let f = s.alloc(HeapObj::closure(fid, vec![]));
+            let n = args.len();
+            s.top_mut().ostack.push(Abs::Ref(f));
+            s.top_mut().ostack.extend(args);
+            return self.do_call(s, n, pc, out, prelude_this, ret, Abs::Undef);
+        }
+
         // A runtime function of known code (`known_callee`) runs inline when
         // that makes straight-line code; otherwise the call is that
         // function's runtime call. (Its runtime writes keep its strictness:
@@ -17393,7 +18277,9 @@ impl Js {
                 // receiver is that receiver's method call: `recv.get(k)`.
                 let intrinsic_name = match &callee {
                     Abs::Ref(a) => match &s.heap[a] {
-                        HeapObj::Builtin { kind, .. } if intrinsic_method_expr(kind).is_some() && this != Abs::Undef => {
+                        // (One read by name: `String.prototype[@@iterator]`
+                        // is called as the value it is.)
+                        HeapObj::Builtin { kind, .. } if intrinsic_method_expr(kind).is_some() && kind != STRING_ITERATOR_METHOD && this != Abs::Undef => {
                             kind.split_once(".prototype.").map(|(_, m)| m.to_string())
                         }
                         _ => None,
@@ -17553,6 +18439,19 @@ impl Js {
                 || self.code[self.entries[fid]..hi].iter().any(|i| matches!(i, Instr::SuperCall(_) | Instr::SuperCallSpread))
         };
         if try_stays || dynamic_recursion || self.is_async[fid] {
+            self.why.kept(pc, if self.is_async[fid] {
+                why::Kept::Async
+            } else if try_stays {
+                why::Kept::Try
+            } else if s.frames.len() >= MAX_DEPTH {
+                why::Kept::Depth
+            } else if shared_context {
+                why::Kept::SharedContext
+            } else if !args.is_empty() && args.iter().all(|a| a.is_dynamic()) {
+                why::Kept::DynamicArgs
+            } else {
+                why::Kept::StalledRecursion
+            });
             self.forbid_residual_in_try(s, "a call to a residual function");
             self.freeze_before_opaque_call(s, pc, out);
             let mut escaped = std::collections::HashSet::new();
@@ -17566,10 +18465,28 @@ impl Js {
             // loader closure decrypts the captured byte array, but the reader
             // re-materialized the undecrypted literal.)
             // (Only the captures it reads: one it does not cannot change.)
-            let rfid = self.residual_fn_for(fid);
-            let keep = self.caps_kept(rfid, captured.len());
+            // (The function as a closure of it made once is given its
+            // captures: a variable's final cell as its value, what is known
+            // of a value known to its code. See `cap_forms`.)
+            let made_once = match &callee {
+                Abs::Ref(a) => match s.heap.get(a) {
+                    Some(HeapObj::Closure { once, .. }) => Some((*a, *once)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let (rfid, passed) = match made_once {
+                Some((addr, once)) if self.react.is_none() && !env_flag!("PE_NO_DIRECT_FORMS") => {
+                    let forms = self.cap_forms(fid, addr, &captured, once, &s.heap);
+                    let rfid = self.residual_fn_for_closure(fid, &forms);
+                    let passed = self.passed_for(rfid, &captured, None, &forms, &s.heap);
+                    (rfid, passed)
+                }
+                _ => (self.residual_fn_for(fid), captured.to_vec()),
+            };
+            let keep = self.caps_kept(rfid, passed.len());
             let caps: Vec<RExpr> =
-                captured.iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| self.operand_rexpr(s, c, &mut escaped, out)).collect();
+                passed.iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| self.operand_rexpr(s, c, &mut escaped, out)).collect();
             // (A construction whose code reads `new.target`: see below.)
             let construct = matches!(ret, RetMode::Construct | RetMode::SuperConstruct) && self.reads_new_target(fid);
             let this_r = match &this {
@@ -17747,7 +18664,8 @@ impl Js {
                     // (A standard intrinsic prototype by name: a subclass's
                     // prototype inheriting `%Array.prototype%`.)
                     Abs::Dyn(e)
-                        if ["Object", "Array", "Function", "Map", "Set", "WeakMap", "WeakSet"].iter().any(|g| is_intrinsic_proto(&e, g) && self.pristine(g)) =>
+                        if ["Object", "Array", "Function", "Map", "Set", "WeakMap", "WeakSet"].iter().any(|g| is_intrinsic_proto(&e, g) && self.pristine(g))
+                            || error_proto_name(&e).is_some_and(|g| self.pristine(g) && self.pristine("Error")) =>
                     {
                         return Some((out, Abs::Dyn(e)));
                     }
@@ -17824,7 +18742,9 @@ impl Js {
                     HeapObj::Builtin { kind, ext: None, .. } if kind == "RegExp" || is_collection(kind) => Some(kind == g),
                     HeapObj::Builtin { .. } | HeapObj::Choice { .. } | HeapObj::Log { .. } | HeapObj::Generator { .. } => None,
                     _ => match chain(s, o)? {
-                        (_, Abs::Dyn(e)) => Some(is_intrinsic_proto(&e, g)),
+                        // (Every standard error's prototype inherits
+                        // `Error.prototype`.)
+                        (_, Abs::Dyn(e)) => Some(is_intrinsic_proto(&e, g) || (g == "Error" && error_proto_name(&e).is_some())),
                         // (At `null`, or a standard array's `Array.prototype`.)
                         (_, Abs::Null | Abs::Undef) => Some(false),
                         _ => None,
@@ -17871,6 +18791,29 @@ impl Js {
                         let mut keys: Vec<Abs> = (0..xs.elems.len()).filter(|i| !xs.holes.contains(i)).map(|i| Abs::Str(i.to_string())).collect();
                         keys.push(Abs::Str("length".into()));
                         keys.extend(own_string_keys_order(&xs.props).into_iter().map(|(k, _)| Abs::Str(k.to_string())));
+                        keys
+                    }
+                    // (A function of known code, as made: its indexes, then
+                    // `length`, `name` and, if it constructs, `prototype`,
+                    // then what it was given since. One whose `name` or
+                    // `length` was redefined lists them where that put them:
+                    // not known here.)
+                    HeapObj::Closure { fid, known: true, ident: None, props, .. }
+                        if !props.iter().any(|p| p.key == "name" || p.key == "length")
+                            && !self.is_async[*fid]
+                            && matches!(self.fn_kinds[*fid], FnKind::Normal | FnKind::Arrow | FnKind::Method | FnKind::ClassCtor { .. }) =>
+                    {
+                        self.ensure_prototype(s, a);
+                        let o = &s.heap[&a];
+                        let own = own_string_keys_order(o.props().unwrap());
+                        let index = |k: &str| k.parse::<u32>().is_ok_and(|n| n != u32::MAX && n.to_string() == k);
+                        let mut keys: Vec<Abs> = own.iter().filter(|(k, _)| index(k)).map(|(k, _)| Abs::Str(k.to_string())).collect();
+                        keys.push(Abs::Str("length".into()));
+                        keys.push(Abs::Str("name".into()));
+                        if own.iter().any(|(k, _)| *k == "prototype") {
+                            keys.push(Abs::Str("prototype".into()));
+                        }
+                        keys.extend(own.iter().filter(|(k, _)| !index(k) && *k != "prototype").map(|(k, _)| Abs::Str(k.to_string())));
                         keys
                     }
                     _ => return None,
@@ -17995,6 +18938,18 @@ impl Js {
                             self.ensure_prototype(s, o);
                         }
                     }
+                    // (Its `name` or `length` as made: see the read of one.)
+                    HeapObj::Closure { fid, known: true, ident: None, props, .. } if !props.iter().any(|p| p.key == "name" || p.key == "length") => {
+                        let v = if k == "name" { Abs::Str(self.names[*fid].clone()) } else { Abs::Num(JsNum::int(self.lengths[*fid] as i64)) };
+                        let d = s.alloc(HeapObj::object(vec![
+                            Prop::data("value", v),
+                            Prop::data("writable", Abs::Bool(false)),
+                            Prop::data("enumerable", Abs::Bool(false)),
+                            Prop::data("configurable", Abs::Bool(true)),
+                        ]));
+                        self.creation_pc.borrow_mut().insert(d, pc);
+                        return Some(Abs::Ref(d));
+                    }
                     _ => return None,
                 }
                 let Some(p) = s.heap[&o].own_key(&k).cloned() else { return Some(Abs::Undef) };
@@ -18080,6 +19035,9 @@ impl Js {
                     HeapObj::Closure { known: true, .. } if k != "prototype" => {
                         matches!(k.as_str(), Some("name" | "length")) && s.heap[&o].own_key(&k).is_none()
                     }
+                    // (A property of an array that is neither an element
+                    // nor its `length`: one of its own, as an object's.)
+                    HeapObj::Array(xs) if xs.proto == INTRINSIC_PROTO && k.as_str().is_some_and(|k| !array_element_key(&s.heap[&o], k)) => false,
                     _ => return None,
                 };
                 if let Some(k) = k.as_str() {
@@ -18209,6 +19167,17 @@ impl Js {
                 (a, b) if !a.is_dynamic() && !b.is_dynamic() => Some(Abs::Bool(static_strict_eq(&a, &b))),
                 _ => None,
             },
+            // (An ordinary object's symbol keys, in the order they were
+            // defined: each its symbol, read from `Symbol`.)
+            ("Object", "getOwnPropertySymbols") => match arg(0) {
+                Abs::Ref(a) if matches!(&s.heap[&a], HeapObj::Object { class: ObjClass::Ordinary, .. }) => {
+                    let keys: Vec<Abs> =
+                        own_keys_order(s.heap[&a].props().unwrap()).into_iter().filter(|p| p.key.is_sym()).map(|p| Abs::Dyn(p.key.to_rexpr())).collect();
+                    Some(new_array(s, keys))
+                }
+                Abs::Ref(a) if matches!(&s.heap[&a], HeapObj::Array(xs) if xs.proto == INTRINSIC_PROTO && !xs.props.iter().any(|p| p.key.is_sym())) => Some(new_array(s, vec![])),
+                _ => None,
+            },
             ("Reflect", "ownKeys") => match arg(0) {
                 Abs::Ref(a) if matches!(&s.heap[&a], HeapObj::Object { .. }) => {
                     // (A symbol key is its symbol, read from `Symbol`.)
@@ -18324,6 +19293,17 @@ impl Js {
         if matches!(m, "pop" | "shift") {
             let Some(HeapObj::Array(a)) = s.heap.get_mut(&recv) else { unreachable!() };
             return Some(array_pop_shift(a, m));
+        }
+        // An iterator over it: its elements, indexes or pairs, read as the
+        // iterator steps (see `iterator_step`).
+        if matches!(m, "values" | "keys" | "entries") {
+            let it = s.alloc(HeapObj::Builtin {
+                kind: "ArrayIterator".into(),
+                data: vec![Abs::Ref(recv), Abs::Num(JsNum::int(0)), Abs::Str(m.into())].into(),
+                ext: None,
+            });
+            self.creation_pc.borrow_mut().insert(it, pc);
+            return Some(Abs::Ref(it));
         }
         let xs = xs.elems;
         let len = xs.len() as f64;
@@ -18631,13 +19611,56 @@ impl Js {
             && !self.probing.get()
             && self.halt_at.borrow().is_empty()
             && !self.in_residual_body.get();
+        if self.entry.loading.get() && !at_top && env_flag!("ENTRY_DEBUG") && !self.probing.get() {
+            eprintln!(
+                "[ENTRY] boundary passed: frames {} handlers {} pending joins {:?} halt_at {} in residual body {}",
+                s.frames.len(),
+                s.handlers.len(),
+                s.pending_joins.iter().map(|j| (j.start, format!("{:?}", self.code.get(j.start.saturating_sub(1))), j.end, format!("{:?}", self.code.get(j.end)), j.depth, s.top().pc)).collect::<Vec<_>>(),
+                self.halt_at.borrow().len(),
+                self.in_residual_body.get()
+            );
+        }
         if !self.entry.loading.get() || !at_top {
             return self.advance(s);
         }
+        // (Everything the top-level code leaves, as runtime state: its
+        // locals and what they reach, its globals, nothing known of any.)
+        let generalize = self.entry.generalize.get();
+        if generalize {
+            // (But the entry's input, a runtime value already, which the
+            // load code may not name.)
+            let _why = self.why.merging(why::Merge::Whole);
+            let input = Abs::Dyn(RExpr::Var(self.input_var()));
+            let fi = s.frames.len() - 1;
+            let mut escaped = std::collections::HashSet::new();
+            for slot in 0..s.frames[fi].locals.len() {
+                if let Abs::Ref(addr) = s.frames[fi].locals[slot] {
+                    let _ = self.escape(s, addr, &mut escaped, out);
+                }
+            }
+            let slots: Vec<usize> = (0..s.frames[fi].locals.len()).filter(|&k| s.frames[fi].locals[k] != input).collect();
+            self.materialize(s, &slots, out);
+            self.sync_globals(s, true, out);
+            // (Nothing known of any, but which function a variable holds:
+            // its code and captures cannot change, so `main` calling it
+            // runs that code. See `facts::KnownFn`.)
+            s.facts = if self.entry.generalize_plain.get() {
+                Default::default()
+            } else {
+                s.facts
+                    .iter()
+                    .filter_map(|(v, i)| {
+                        let callee = i.callee.clone()?;
+                        Some((*v, Info { types: crate::facts::T_FUNC, truthy: Some(true), callee: Some(callee), ..Info::top() }))
+                    })
+                    .collect()
+            };
+        }
         let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
         let mut escaped = std::collections::HashSet::new();
-        for a in dynamic {
-            if s.heap.contains_key(&a) {
+        for a in Js::holders_first(&s.heap, &dynamic, 2) {
+            if s.heap.contains_key(&a) && !s.escaped.contains(&a) {
                 self.escape(s, a, &mut escaped, out);
             }
         }
@@ -18670,6 +19693,7 @@ impl Js {
         for (name, v) in dirty {
             if closed_lexical(&name) && !self.entry.read_every.get() && !self.entry.read_globals.borrow().contains(&name) {
                 self.entry.skipped.borrow_mut().insert(name.clone());
+                region_note_globals();
                 s.globals.insert(name, (v, false));
                 continue;
             }
@@ -18678,12 +19702,15 @@ impl Js {
                 other => other.to_rexpr(),
             };
             out.push(Op::AssignGlobal { name: name.clone(), expr });
+            region_note_globals();
             s.globals.insert(name, (v, false));
         }
         if self.entry.all_globals_dynamic.get() {
+            region_note_globals();
             s.globals = im::OrdMap::new();
         } else {
             for g in self.entry.dynamic_globals.borrow().iter() {
+                region_note_globals();
                 s.globals.remove(g);
             }
         }
@@ -18694,7 +19721,7 @@ impl Js {
         s.prune_facts();
         let mut vars = s.value_vars();
         for (_, o) in s.heap.iter() {
-            if let HeapObj::Closure { ident: Some(v), .. } = o {
+            if let HeapObj::Closure { ident: Some(v), .. } | HeapObj::Object { class: ObjClass::FinalCell { made: Some(v) }, .. } = o {
                 vars.insert(*v);
             }
         }
@@ -18711,8 +19738,23 @@ impl Js {
         let mut rename: HashMap<usize, usize> = HashMap::new();
         let mut exports: Vec<usize> = hoisted.values().copied().collect();
         exports.sort_unstable();
+        // (An object the load code made that the state still holds (a
+        // variable's cell) is named by its address: `main` reads the
+        // variable it was made in, under that name.)
+        let mut pinned: Vec<usize> = s.escaped.iter().filter(|a| s.heap.contains_key(a)).map(|a| self.escape_var(*a)).collect();
+        pinned.sort_unstable();
+        for v in &pinned {
+            if !exports.contains(v) {
+                exports.push(*v);
+            }
+        }
         for v in vars {
-            let n = self.fresh_var();
+            if pinned.contains(&v) {
+                continue;
+            }
+            // (One variable per variable named, the same on every path to
+            // the boundary, when the paths are to meet there.)
+            let n = if generalize { self.aux_var(120, v, 0) } else { self.fresh_var() };
             out.push(Op::Assign { var: n, expr: RExpr::Var(v) });
             rename.insert(v, n);
             exports.push(n);
@@ -18726,6 +19768,13 @@ impl Js {
             let made: Vec<(usize, (RExpr, Info))> =
                 rename.iter().filter_map(|(v, n)| declared.get(v).map(|(e, i)| (*n, (crate::inline::rename_vars(e, &to), i.renamed(&to))))).collect();
             declared.extend(made);
+        }
+        // (An export of a fresh symbol holds only that symbol: it is
+        // assigned once, here.)
+        {
+            let mut syms = self.symbol_temps.borrow_mut();
+            let fresh: Vec<usize> = rename.iter().filter(|(v, _)| syms.contains(*v)).map(|(_, n)| *n).collect();
+            syms.extend(fresh);
         }
         s.top_mut().pc += 1;
         self.entry.boundary.borrow_mut().push((s.clone(), exports, hoisted));
@@ -18763,6 +19812,16 @@ impl Js {
         if k == "description" && self.well_known_symbol(&o).is_some() {
             let name = self.well_known_symbol(&o).unwrap();
             return self.push(s, Abs::Str(format!("Symbol.{name}")));
+        }
+        // `globalThis.undefined`, `.NaN`, `.Infinity`: the global object's
+        // properties no code can change.
+        if is_global_object(&o) {
+            match k.as_str() {
+                "undefined" => return self.push(s, Abs::Undef),
+                "NaN" => return self.push(s, Abs::Num(JsNum(f64::NAN))),
+                "Infinity" => return self.push(s, Abs::Num(JsNum(f64::INFINITY))),
+                _ => {}
+            }
         }
         // `globalThis.x` for a tracked global `x` (a script's lexical
         // global is no property).
@@ -18817,7 +19876,14 @@ impl Js {
             if let Some(val) = self.react.as_ref().and_then(|_| self.react_props_read(s, *v, k, known.clone(), pc, out)) {
                 return self.push(s, val);
             }
-            if let Some(pi) = known {
+            // (Read into a variable, which carries what is known of the
+            // property, only where the read cannot throw: the base is known
+            // not to be `null` or `undefined`. A read that may throw stays
+            // an expression where it stands: an operand of a `?:` or `&&`
+            // kept as one expression runs only when it is reached, as in
+            // `m ? m.index : -1` for a match `m` that may be `null`.)
+            let base_nullish = s.facts.get(v).is_none_or(|i| i.types & (crate::facts::T_NULL | crate::facts::T_UNDEF) != 0);
+            if let (Some(pi), false) = (known, base_nullish) {
                 let t = self.aux_var(52, pc, *v);
                 let read = RExpr::Get(Box::new(RExpr::Var(*v)), k.clone());
                 self.declared_types.borrow_mut().insert(t, (read.clone(), pi));
@@ -18854,7 +19920,8 @@ impl Js {
         // `.call` / `.apply` of an intrinsic method value.
         if let Abs::Ref(a) = &o {
             if let HeapObj::Builtin { kind, .. } = &s.heap[a] {
-                if intrinsic_method_expr(kind).is_some() && (k == "call" || k == "apply") && self.pristine("Function") {
+                let iterator_method = kind == ITERATOR_SELF_METHOD || kind.strip_suffix(".prototype.next").is_some_and(is_iterator_kind);
+                if (intrinsic_method_expr(kind).is_some() || iterator_method) && (k == "call" || k == "apply") && self.pristine("Function") {
                     let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
                     return self.push(s, Abs::Ref(b));
                 }
@@ -18995,7 +20062,7 @@ impl Js {
                     // arrays that multiply the specializer's states
                     // without bound (a specializer running over an
                     // unknown program walks its static tables this way).
-                    if self.array_prelude.contains_key(k.as_str()) && self.may_fold_builtins(s, k) && self.pristine("Array") {
+                    if (self.array_prelude.contains_key(k.as_str()) || matches!(k.as_str(), "values" | "keys" | "entries")) && self.may_fold_builtins(s, k) && self.pristine("Array") {
                         let baddr = s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{k}"), data: vec![].into(), ext: None });
                         return self.push(s, Abs::Ref(baddr));
                     }
@@ -19082,7 +20149,7 @@ impl Js {
                         let n = collection_size(kind, data);
                         return self.push(s, Abs::Num(JsNum::int(n as i64)));
                     }
-                    if collection_methods(kind).contains(&k.as_str()) {
+                    if collection_methods(kind).contains(&k.as_str()) || self.collection_prelude.contains_key(&format!("{}.{k}", collection_base(kind))) {
                         let b = s.alloc(HeapObj::Builtin { kind: format!("{kind}.prototype.{k}"), data: vec![].into(), ext: None });
                         return self.push(s, Abs::Ref(b));
                     }
@@ -19131,7 +20198,9 @@ impl Js {
                 // (Any other member of a model's value: read at
                 // runtime from it.)
                 HeapObj::Builtin { kind, .. } if kind == react::ELEMENT || react::is_handle(kind) || react::is_callable_model(kind) => true,
-                HeapObj::Builtin { kind, data, .. } => {
+                // A `TextDecoder`'s method, bound to it (`decode`: see
+                // `try_builtin_method`).
+                HeapObj::Builtin { kind, data, .. } if kind == "TextDecoder" => {
                     let bound = HeapObj::Builtin {
                         kind: format!("{kind}.{k}"),
                         data: data.clone(),
@@ -19140,6 +20209,18 @@ impl Js {
                     let baddr = s.alloc(bound);
                     return self.push(s, Abs::Ref(baddr));
                 }
+                // A String object's `length`: its string's. Any other
+                // member is read at runtime, from the object.
+                HeapObj::Builtin { kind, data, .. } if kind == "StringObject" => {
+                    if let (true, Abs::Str(text)) = (k == "length", &data[0]) {
+                        let n = utf16_len(text);
+                        return self.push(s, Abs::Num(JsNum::int(n as i64)));
+                    }
+                    true
+                }
+                // Any other built-in value: its members are read at
+                // runtime, from it.
+                HeapObj::Builtin { .. } => true,
                 // An own or inherited data property folds, as does a
                 // genuine miss (`undefined`). A member of an intrinsic
                 // prototype (`toString`, `call`, ...) or an accessor
@@ -19168,13 +20249,28 @@ impl Js {
                                     }
                                 }
                             }
+                            // (Likewise its `length`: its parameters'.)
+                            if k == "length" {
+                                if let HeapObj::Closure { fid, known: true, ident: None, .. } = &s.heap[&addr] {
+                                    if s.heap[&addr].own("length").is_none() {
+                                        let n = self.lengths[*fid];
+                                        return self.push(s, Abs::Num(JsNum::int(n as i64)));
+                                    }
+                                }
+                            }
                             // (`f.bind` of a function of known code, with
                             // React's model: see `react::BOUND`.)
                             if is_fn && k == "bind" && self.react.is_some() && self.pristine("Function") && matches!(&s.heap[&addr], HeapObj::Closure { known: true, ident: None, .. }) {
                                 let b = s.alloc(HeapObj::Builtin { kind: react::BIND_FN.into(), data: vec![Abs::Ref(addr)].into(), ext: None });
                                 return self.push(s, Abs::Ref(b));
                             }
-                            let kind = if is_fn && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") {
+                            // (An Error object's `toString` is
+                            // `Error.prototype`'s, not `Object.prototype`'s.)
+                            let error_to_string = k == "toString"
+                                && matches!(lookup_prop_chain(&s.heap, addr, k), Chain::PastErrorPrototype(n) if self.pristine(n) && self.pristine("Error"));
+                            let kind = if error_to_string {
+                                Some("Error.prototype.toString".to_string())
+                            } else if is_fn && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") {
                                 Some(format!("Function.prototype.{k}"))
                             } else if MODELED_OBJECT_PROTO_METHODS.contains(&k.as_str())
                                 && !(is_fn && k == "toString")
@@ -19357,7 +20453,7 @@ impl Js {
                 }
                 let a = s.alloc(HeapObj::Array(ArrayObj::from(results)));
                 self.creation_pc.borrow_mut().insert(a, pc);
-                let it = s.alloc(HeapObj::Builtin { kind: "ArrayIterator".into(), data: vec![Abs::Ref(a), Abs::Num(JsNum::int(0))].into(), ext: None });
+                let it = s.alloc(HeapObj::Builtin { kind: "ArrayIterator".into(), data: vec![Abs::Ref(a), Abs::Num(JsNum::int(0)), Abs::Str("values".into())].into(), ext: None });
                 self.creation_pc.borrow_mut().insert(it, pc);
                 Some(Abs::Ref(it))
             }
@@ -19550,6 +20646,21 @@ impl Js {
                 Abs::Null => Some("null".into()),
             }
         };
+        // (`toString` of a primitive: its type's tag, none of the standard
+        // prototypes naming another.)
+        if method == "toString" && self.pristine("Object") {
+            let tag = match this {
+                Abs::Undef => Some("Undefined"),
+                Abs::Null => Some("Null"),
+                Abs::Num(_) if self.pristine("Number") => Some("Number"),
+                Abs::Str(_) if self.pristine("String") => Some("String"),
+                Abs::Bool(_) if self.pristine("Boolean") => Some("Boolean"),
+                _ => None,
+            };
+            if let Some(tag) = tag {
+                return Some(Abs::Str(format!("[object {tag}]")));
+            }
+        }
         let addr = match this {
             Abs::Ref(a) => *a,
             _ => return None,
@@ -19620,8 +20731,21 @@ impl Js {
                 HeapObj::Generator { .. } => Some(Abs::Str("[object Generator]".into())),
                 HeapObj::Array(a) if a.standard() && !a.props.iter().any(|p| p.key.is_sym()) => Some(Abs::Str("[object Array]".into())),
                 HeapObj::Array(_) => None,
-                HeapObj::Closure { .. } => Some(Abs::Str("[object Function]".into())),
+                // (A generator or async function inherits its tag from its
+                // standard prototype, `%GeneratorFunction.prototype%` and
+                // the like; with another prototype, or none of those, it is
+                // a function.)
+                HeapObj::Closure { fid, proto, .. } => {
+                    let tag = match (*proto == Abs::Undef, self.fn_kinds[*fid] == FnKind::Generator, self.is_async[*fid]) {
+                        (true, true, true) => "AsyncGeneratorFunction",
+                        (true, true, false) => "GeneratorFunction",
+                        (true, false, true) => "AsyncFunction",
+                        _ => "Function",
+                    };
+                    Some(Abs::Str(format!("[object {tag}]")))
+                }
                 HeapObj::Object { class: ObjClass::Arguments { .. }, .. } => Some(Abs::Str("[object Arguments]".into())),
+                HeapObj::Object { class: ObjClass::Error { .. }, .. } => Some(Abs::Str("[object Error]".into())),
                 HeapObj::Object { .. } => Some(Abs::Str("[object Object]".into())),
                 HeapObj::Builtin { .. } | HeapObj::Choice { .. } | HeapObj::Log { .. } => None,
             },
@@ -19712,6 +20836,78 @@ impl Js {
         {
             return false;
         }
+        // (With different pending joins, the same of every value but the
+        // top activation's slots those joins merge: joining the paths
+        // changes nothing else. Cheap, where the test below copies both
+        // states to join them: a join many paths reach is compared with
+        // every one of them.)
+        if a.pending_joins != b.pending_joins {
+            let pc = a.top().pc;
+            let merged = |st: &State| -> std::collections::HashSet<usize> {
+                st.pending_joins.iter().rev().take_while(|j| j.end == pc).flat_map(|j| j.mods.iter().copied()).collect()
+            };
+            let (ma, mb) = (merged(a), merged(b));
+            let top = a.frames.len() - 1;
+            let differ = a.frames.iter().zip(b.frames.iter()).enumerate().any(|(i, (fa, fb))| {
+                fa.locals.len() != fb.locals.len()
+                    || fa.ostack.len() != fb.ostack.len()
+                    || !fa.ostack.iter().zip(fb.ostack.iter()).all(|(x, y)| compat(x, y))
+                    || fa.locals.iter().zip(fb.locals.iter()).enumerate().any(|(slot, (x, y))| !(i == top && (ma.contains(&slot) || mb.contains(&slot))) && !compat(x, y))
+            });
+            if differ {
+                return false;
+            }
+        }
+        // (However two paths join, an object both model, that runtime code
+        // has reached on neither, is the same on both: joining makes
+        // runtime values of what one path gave away, forgets functions,
+        // merges facts, and changes no other object. Two visits of a loop
+        // head that differ in a counter kept in an object, or a buffer's
+        // cell, are told apart here, by the objects' cheap comparison,
+        // before either state is copied.)
+        if !a.heap.m.ptr_eq(&b.heap.m) {
+            for (addr, x) in a.heap.m.iter() {
+                if matches!(&**x, HeapObj::Closure { .. }) || a.escaped.contains(addr) || b.escaped.contains(addr) {
+                    continue;
+                }
+                let Some(y) = b.heap.m.get(addr) else { continue };
+                if std::rc::Rc::ptr_eq(x, y) || **x == **y {
+                    continue;
+                }
+                // (But for a value that is an object on one path and that
+                // object's runtime variable on the other: `compat`.)
+                let differ = match (&**x, &**y) {
+                    (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None }) if k1 == k2 && d1.v.len() == d2.v.len() => {
+                        d1.v.iter().zip(d2.v.iter()).any(|(p, q)| !compat(p, q))
+                    }
+                    (HeapObj::Array(p), HeapObj::Array(q)) if p.len() == q.len() => x.children().into_iter().zip(y.children()).any(|(p, q)| !compat(p, q)),
+                    (HeapObj::Object { .. }, HeapObj::Object { .. }) if obj_cell_labels(x) == obj_cell_labels(y) => {
+                        x.children().into_iter().zip(y.children()).any(|(p, q)| !compat(p, q))
+                    }
+                    _ => false,
+                };
+                if differ {
+                    return false;
+                }
+            }
+        }
+        if env_flag!("JOIN_DEBUG") {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static N: AtomicU64 = AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            if n % 2000 == 0 {
+                let frames: Vec<&str> = a.frames.iter().map(|f| self.names[f.func].as_str()).collect();
+                eprintln!(
+                    "[JOIN] #{n} pc={} in {} joins a={:?} b={:?} handlers={} instr={:?}",
+                    a.top().pc,
+                    frames.join(" > "),
+                    a.pending_joins.iter().map(|j| (j.start, j.end, j.depth)).collect::<Vec<_>>(),
+                    b.pending_joins.iter().map(|j| (j.start, j.end, j.depth)).collect::<Vec<_>>(),
+                    a.handlers.len(),
+                    self.code.get(a.top().pc)
+                );
+            }
+        }
         // (Two paths that differ only in what they know merge by keeping
         // the facts both hold: see `generalize`.)
         if same_but_facts(a, b) {
@@ -19795,7 +20991,7 @@ impl Js {
         let pc = g.top().pc;
         self.consume_pending_joins(&mut g, pc, out);
         let addrs: Vec<usize> = seen.escaped.iter().filter(|a| !g.escaped.contains(a) && g.heap.contains_key(a)).copied().collect();
-        for a in addrs {
+        for a in Js::holders_first(&g.heap, &addrs, 3) {
             if g.heap.contains_key(&a) && !g.escaped.contains(&a) {
                 self.escape(&mut g, a, &mut std::collections::HashSet::new(), out);
             }
@@ -19851,6 +21047,7 @@ impl Js {
         if forget {
             // (Not those no runtime code changes: see `EntrySplit::stable`.)
             let stable = self.entry.stable.borrow();
+            region_note_globals();
             s.globals = if stable.is_empty() { im::OrdMap::new() } else { s.globals.iter().filter(|(k, _)| stable.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect() };
         }
     }
@@ -19884,6 +21081,7 @@ impl Js {
             (Abs::Ref(_) | Abs::Dyn(_), None) => Abs::Dyn(expr),
             (prim, None) => prim,
         };
+        region_note_globals();
         s.globals.insert(name.to_string(), (kept, false));
     }
 
@@ -20050,7 +21248,7 @@ impl Js {
     /// object). `None` when the parent or the arguments are not modeled.
     fn builtin_super(&self, s: &mut State, parent: &Abs, args: &[Abs], pc: usize, out: &mut Vec<Op>) -> Option<Abs> {
         let Abs::Dyn(RExpr::Global(name)) = parent else { return None };
-        if !matches!(name.as_str(), "Array" | "Map" | "Set" | "WeakMap" | "WeakSet") || !self.pristine(name) {
+        if !(matches!(name.as_str(), "Array" | "Map" | "Set" | "WeakMap" | "WeakSet") || STANDARD_ERRORS.contains(&name.as_str())) || !self.pristine(name) {
             return None;
         }
         let nt = s.top().new_target.clone();
@@ -20077,6 +21275,13 @@ impl Js {
         match s.heap.get_mut(&made) {
             Some(HeapObj::Array(a)) => a.proto = proto,
             Some(HeapObj::Builtin { ext, .. }) => *ext = Some(Box::new(BuiltinExt { props: Vec::new(), proto })),
+            // (An Error object: the subclass's prototype in place of the
+            // standard error's; none for a subclass with the standard one.)
+            Some(HeapObj::Object { proto: p, class: ObjClass::Error { .. }, .. }) => {
+                if proto != INTRINSIC_PROTO {
+                    *p = proto;
+                }
+            }
             o => unreachable!("a modeled built-in's instance: {o:?}"),
         }
         Some(Abs::Ref(made))
@@ -20179,6 +21384,10 @@ impl Js {
                     "Array.pop" => Some("Array.prototype.pop".into()),
                     "Array.shift" => Some("Array.prototype.shift".into()),
                     k if intrinsic_method_expr(k).is_some() => Some(k.to_string()),
+                    // (Any other method of a standard prototype read as a
+                    // value, an iterator's `next` among them: one function
+                    // per prototype, whichever object it was read from.)
+                    k if k == ITERATOR_SELF_METHOD || k.contains(".prototype.") || k == "TextDecoder.decode" => Some(k.to_string()),
                     _ => None,
                 }
             }
@@ -20196,7 +21405,23 @@ impl Js {
     /// receiver `this` (an array's method on an array, a collection's on a
     /// collection of its kind), as when read from the receiver?
     fn intrinsic_serves(&self, s: &State, f: &usize, this: Option<&Abs>) -> bool {
-        let (HeapObj::Builtin { kind, .. }, Some(Abs::Ref(t))) = (&s.heap[f], this) else { return false };
+        let HeapObj::Builtin { kind, .. } = &s.heap[f] else { return false };
+        // (The methods that make or step an iterator: a string's on a known
+        // string, an iterator's on a modeled iterator of its kind.)
+        let iterator = |t: &Abs, of: Option<&str>| match t {
+            Abs::Ref(t) => matches!(&s.heap[t], HeapObj::Builtin { kind, .. } if is_iterator_kind(kind) && of.is_none_or(|k| k == kind)),
+            _ => false,
+        };
+        if kind == STRING_ITERATOR_METHOD {
+            return matches!(this, Some(Abs::Str(_)));
+        }
+        if kind == ITERATOR_SELF_METHOD {
+            return this.is_some_and(|t| iterator(t, None));
+        }
+        if let Some(of) = kind.strip_suffix(".prototype.next").filter(|k| is_iterator_kind(k)) {
+            return this.is_some_and(|t| iterator(t, Some(of)));
+        }
+        let Some(Abs::Ref(t)) = this else { return false };
         let Some((base, _)) = kind.split_once(".prototype.") else { return false };
         match &s.heap[t] {
             HeapObj::Array(_) => base == "Array",
@@ -20252,7 +21477,17 @@ impl Js {
                         _ => return None,
                     };
                     if (i as usize) < xs.len() {
-                        let v = xs[i as usize].clone();
+                        // (What it yields: the element, its index, or the
+                        // pair, as `values`, `keys` or `entries` made it.)
+                        let v = match &data[2] {
+                            Abs::Str(mode) if mode == "keys" => Abs::Num(JsNum::int(i)),
+                            Abs::Str(mode) if mode == "entries" => {
+                                let pair = s.alloc(HeapObj::Array(ArrayObj::from(vec![Abs::Num(JsNum::int(i)), xs[i as usize].clone()])));
+                                self.creation_pc.borrow_mut().insert(pair, pc);
+                                Abs::Ref(pair)
+                            }
+                            _ => xs[i as usize].clone(),
+                        };
                         if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&it) {
                             data.set(1, Abs::Num(JsNum::int(i + 1)));
                         }
@@ -20373,7 +21608,12 @@ impl Js {
                 ops.push(Op::NewArray { dst: *v, elems: vec![] });
             }
         }
-        ops.push(Op::Eval { dst, expr: RExpr::Call(Box::new(RExpr::Index(Box::new(source), Box::new(key))), vec![]) });
+        // (An array's `keys()` or `entries()` iterator: that method's.)
+        let make = match (kind, data.get(2)) {
+            ("ArrayIterator", Some(Abs::Str(mode))) if mode != "values" => RExpr::Get(Box::new(source), mode.clone()),
+            _ => RExpr::Index(Box::new(source), Box::new(key)),
+        };
+        ops.push(Op::Eval { dst, expr: RExpr::Call(Box::new(make), vec![]) });
         for k in 0..steps {
             ops.push(Op::Eval {
                 dst: self.aux_var(13, addr, k as usize),
@@ -20807,6 +22047,10 @@ impl Js {
         out: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        // (Made a runtime value: for a residual `try` being specialized, an
+        // object of its state it does not keep as it is; for `main`, an
+        // object of the load code's state to make once, at load.)
+        note_entry_escape(addr);
         match &heap[&addr] {
             // A choice of objects: both sides, chosen at runtime.
             HeapObj::Choice { cond, a, b } => {
@@ -20891,6 +22135,19 @@ impl Js {
                     .count();
                 out.push(Op::Eval { dst, expr: Js::arguments_shell(strict, kids[..npassed].to_vec()) });
                 out.extend(self.arguments_props(dst, addr, &o, &kids, npassed, heap));
+            }
+            // An Error object: `new E(message)`, then what else it has, and
+            // its prototype when that is a subclass's.
+            o @ HeapObj::Object { proto, class: ObjClass::Error { ctor }, .. } => {
+                let (mut o, proto, ctor) = (o.clone(), proto.clone(), *ctor);
+                let message = self.error_shell_message(&mut o);
+                out.push(Op::Eval { dst, expr: Js::error_shell(ctor, message) });
+                let kids: Vec<RExpr> = o.children().into_iter().map(|c| self.mat_inline(c, heap, out, seen)).collect();
+                self.emit_props(dst, addr, &o, &kids, heap, out);
+                if error_proto_name(&proto.to_rexpr_or_undef()) != Some(STANDARD_ERRORS[ctor as usize]) {
+                    let p = self.mat_inline(&proto, heap, out, seen);
+                    out.push(self.set_proto_op(dst, addr, p));
+                }
             }
             o @ HeapObj::Object { proto, .. } => {
                 let o = o.clone();
@@ -21041,19 +22298,36 @@ impl Js {
                     }
                 }
             }
-            HeapObj::Builtin { kind, .. } if kind.ends_with("Iterator.prototype.next") => {
-                // `Object.getPrototypeOf([][Symbol.iterator]()).next` (or `""`).
-                let src = if kind.starts_with("Array") { RExpr::Var(self.aux_var(16, addr, 0)) } else { RExpr::Str(String::new()) };
-                if let RExpr::Var(v) = &src {
-                    out.push(Op::NewArray { dst: *v, elems: vec![] });
-                }
-                let key = RExpr::Get(Box::new(RExpr::Global("Symbol".into())), "iterator".into());
+            HeapObj::Builtin { kind, .. } if kind.ends_with("Iterator.prototype.next") || kind == ITERATOR_SELF_METHOD => {
+                // Its prototype has no name: it is read off an iterator of
+                // its kind, `Object.getPrototypeOf([][Symbol.iterator]())`
+                // (of `""`, `new Map()`, `new Set()`); `%IteratorPrototype%`
+                // is that one's prototype.
+                let made = self.aux_var(16, addr, 0);
+                let src = match kind.as_str() {
+                    k if k.starts_with("String") => RExpr::Str(String::new()),
+                    k if k.starts_with("Map") || k.starts_with("Set") => {
+                        let ctor = if k.starts_with("Map") { "Map" } else { "Set" };
+                        out.push(Op::Eval { dst: made, expr: RExpr::New(Box::new(RExpr::Global(ctor.into())), vec![]) });
+                        RExpr::Var(made)
+                    }
+                    _ => {
+                        out.push(Op::NewArray { dst: made, elems: vec![] });
+                        RExpr::Var(made)
+                    }
+                };
                 let it = self.aux_var(16, addr, 1);
-                out.push(Op::Eval { dst: it, expr: RExpr::Call(Box::new(RExpr::Index(Box::new(src), Box::new(key))), vec![]) });
-                let gp = RExpr::Get(Box::new(RExpr::Global("Object".into())), "getPrototypeOf".into());
+                out.push(Op::Eval { dst: it, expr: RExpr::Call(Box::new(RExpr::Index(Box::new(src), Box::new(symbol_iterator_expr()))), vec![]) });
+                let gp = || RExpr::Get(Box::new(RExpr::Global("Object".into())), "getPrototypeOf".into());
                 let proto = self.aux_var(16, addr, 2);
-                out.push(Op::Eval { dst: proto, expr: RExpr::Call(Box::new(gp), vec![RExpr::Var(it)]) });
-                out.push(Op::Assign { var: dst, expr: RExpr::Get(Box::new(RExpr::Var(proto)), "next".into()) });
+                out.push(Op::Eval { dst: proto, expr: RExpr::Call(Box::new(gp()), vec![RExpr::Var(it)]) });
+                if kind == ITERATOR_SELF_METHOD {
+                    let base = self.aux_var(16, addr, 3);
+                    out.push(Op::Eval { dst: base, expr: RExpr::Call(Box::new(gp()), vec![RExpr::Var(proto)]) });
+                    out.push(Op::Assign { var: dst, expr: RExpr::Index(Box::new(RExpr::Var(base)), Box::new(symbol_iterator_expr())) });
+                } else {
+                    out.push(Op::Assign { var: dst, expr: RExpr::Get(Box::new(RExpr::Var(proto)), "next".into()) });
+                }
             }
             HeapObj::Builtin { kind, data, .. } if kind == "ArrayBuffer" => {
                 let expr = typed_buffer_expr(&data.to_vec());
@@ -21622,6 +22896,9 @@ impl Js {
         fills: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        // (Made a runtime value: for a residual `try` being specialized, an
+        // object of its state it does not keep as it is.)
+        region_note(addr);
         match &heap[&addr] {
             // (A choice is no shell: it is its sides, which are.)
             HeapObj::Choice { cond, a, b } => {
@@ -21708,7 +22985,16 @@ impl Js {
                         return;
                     }
                 }
-                if o.is_plain_object() {
+                if let HeapObj::Object { class: ObjClass::Error { ctor }, .. } = o {
+                    // (An Error object: `new E()`; its message with its
+                    // other contents, its prototype in the fills when it
+                    // is a subclass's.)
+                    shells.push(Op::Eval { dst, expr: Js::error_shell(*ctor, None) });
+                    if error_proto_name(&proto.to_rexpr_or_undef()) != Some(STANDARD_ERRORS[*ctor as usize]) {
+                        let proto_r = self.mat_value(proto, heap, shells, fills, seen);
+                        fills.push(self.set_proto_op(dst, addr, proto_r));
+                    }
+                } else if o.is_plain_object() {
                     shells.push(Op::NewObject { dst, fields: vec![] });
                 } else {
                     // The prototype's shell is made before this one's
@@ -22179,6 +23465,37 @@ impl Js {
         })
     }
 
+    /// `addrs` with those that others of them reach last: making one a
+    /// runtime value makes what it reaches one too, so the objects that
+    /// hold the rest go first, and each of the rest is then already done
+    /// (a table of a thousand records is one escape, not a thousand, each
+    /// a pass over the heap).
+    fn holders_first(heap: &Heap, addrs: &[usize], site: u8) -> Vec<usize> {
+        if env_flag!("PE_NO_HOLDERS_FIRST") || std::env::var("PE_HF_SKIP").is_ok_and(|v| v.contains(&site.to_string())) {
+            return addrs.to_vec();
+        }
+        let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut held: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for &a in addrs {
+            if !visited.insert(a) {
+                continue;
+            }
+            let Some(o) = heap.get(&a) else { continue };
+            let mut work = o.child_refs();
+            while let Some(x) = work.pop() {
+                held.insert(x);
+                if visited.insert(x) {
+                    if let Some(o) = heap.get(&x) {
+                        work.extend(o.child_refs());
+                    }
+                }
+            }
+        }
+        let mut out: Vec<usize> = addrs.iter().copied().filter(|a| !held.contains(a)).collect();
+        out.extend(addrs.iter().copied().filter(|a| held.contains(a)));
+        out
+    }
+
     fn escape_var(&self, addr: usize) -> usize {
         self.var_id(VarKey::Escape(addr))
     }
@@ -22309,6 +23626,9 @@ impl Js {
         let detached = self.detach_private_entries(s, addr);
         let heap = s.heap.clone();
         let (root, made) = self.materialize_value_made(&Abs::Ref(addr), &heap, out);
+        for var in made.values() {
+            self.why.made(*var, s.top().pc, s.top().func);
+        }
         for p in detached {
             // (Or one the load code made, in that variable: see `EntryWatch::hoisted`.)
             let var = made.get(&p).copied().or_else(|| entry_hoisted(p));
@@ -22430,6 +23750,52 @@ impl Js {
                 self.pending_fixed.borrow_mut().insert(var, fixed);
             }
         }
+        // (A function made is that runtime function from now on, its code
+        // and what it captured still known: neither can change, so a call of
+        // its variable runs the code here. See `facts::KnownFn`.)
+        if !self.facts_off && !env_flag!("PE_NO_ESCAPED_FN_FACTS") {
+            for (a, var) in &made {
+                let Some(HeapObj::Closure { fid, captured, ident: None, .. }) = heap.get(a) else { continue };
+                if env_flag!("KNOWN_DEBUG") {
+                    eprintln!("[KNOWN] made v{var} = closure {} captured {:?}", self.names[*fid], captured);
+                }
+                // (A value as the runtime expression it is now: a constant,
+                // a variable, the variable of an object made here or before.)
+                let expr_of = |v: &Abs| -> Option<RExpr> {
+                    match v {
+                        Abs::Ref(c) => match made.get(c) {
+                            Some(w) => Some(RExpr::Var(*w)),
+                            None if s.escaped.contains(c) => Some(RExpr::Var(self.escape_var(*c))),
+                            None => Js::handle_expr(&heap, *c).filter(rexpr_is_atom),
+                        },
+                        Abs::Dyn(e) => rexpr_is_atom(e).then(|| e.clone()),
+                        prim => Some(prim.to_rexpr()),
+                    }
+                };
+                let caps: Option<Vec<crate::facts::KnownCap>> = captured
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        // (A variable's final cell: the value it holds for
+                        // good. Any other cell is the runtime object.)
+                        let cell = self.fn_cell_captures[*fid].get(i).copied().unwrap_or(false);
+                        match Js::final_cell_value(&heap, c).filter(|_| cell) {
+                            Some(v) => Some(crate::facts::KnownCap { cell: true, value: crate::facts::KnownVal::Expr(expr_of(&v)?) }),
+                            None => Some(crate::facts::KnownCap { cell: false, value: crate::facts::KnownVal::Expr(expr_of(c)?) }),
+                        }
+                    })
+                    .collect();
+                if env_flag!("KNOWN_DEBUG") {
+                    eprintln!("[KNOWN]   caps {caps:?} cells {:?} heap {:?}", self.fn_cell_captures[*fid], captured.iter().map(|c| match c { Abs::Ref(x) => format!("{:?}", heap.get(x)), v => format!("{v:?}") }).collect::<Vec<_>>());
+                }
+                let Some(caps) = caps else { continue };
+                let object = crate::facts::FnObject { proto_as_made: false, props: vec![("?".into(), None)], parent: None, es5_class: false, class_proto: false };
+                let kf = crate::facts::KnownFn { fid: *fid, caps, object, methods: Vec::new(), statics: Vec::new() };
+                let info = Info { types: crate::facts::T_FUNC, truthy: Some(true), callee: Some(std::rc::Rc::new(kf)), ..Info::top() };
+                s.facts.insert(*var, info.clone());
+                self.pending_info.borrow_mut().insert(*var, info);
+            }
+        }
         // (A final cell made is that object from now on.)
         for (a, var) in &made {
             if let Some(HeapObj::Object { class: ObjClass::FinalCell { made }, .. }) = s.heap.get_mut_quiet(a) {
@@ -22449,6 +23815,12 @@ impl Js {
     fn in_mode(&self, s: &State, op: Op) -> Op {
         let strict = self.fn_strict[s.top().func];
         if strict == self.residual_strict.get() {
+            return op;
+        }
+        // (An assignment of a binding the script declares is the same in
+        // either: only one of a name it does not declare differs, making a
+        // global in sloppy code and failing in strict code.)
+        if matches!(&op, Op::AssignGlobal { name, .. } if self.script_decls().iter().any(|(n, _)| n == name)) {
             return op;
         }
         let call = |name: &str, args: Vec<RExpr>| Op::Effect(RExpr::Call(Box::new(RExpr::Global(name.to_string())), args));
@@ -22553,6 +23925,19 @@ impl Js {
     /// `String(x)` a string, `Number(x)` a number, ... (`None`: unknown).
     fn standard_call_info(&self, callee: &Abs) -> Option<crate::facts::Info> {
         use crate::facts::{Info, T_BOOL, T_NUM, T_STR};
+        // (A standard namespace's function that returns one type whatever
+        // it is given, when it returns.)
+        if let Abs::Dyn(RExpr::Get(o, m)) = callee {
+            let RExpr::Global(g) = &**o else { return None };
+            let types = match (g.as_str(), m.as_str()) {
+                ("String", "fromCharCode" | "fromCodePoint" | "raw") => T_STR,
+                ("Math", m) if m != "constructor" && standard_static_method("Math", m) => T_NUM,
+                ("Number", "parseFloat" | "parseInt") | ("Date", "now" | "UTC" | "parse") => T_NUM,
+                ("Number", "isInteger" | "isFinite" | "isNaN" | "isSafeInteger") | ("Array", "isArray") | ("Object", "is") => T_BOOL,
+                _ => return None,
+            };
+            return self.pristine(g).then(|| Info::of_types(types));
+        }
         let Abs::Dyn(RExpr::Global(g)) = callee else { return None };
         let types = match g.as_str() {
             "String" | "encodeURIComponent" | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" => T_STR,
@@ -22706,6 +24091,40 @@ impl Js {
             .collect()
     }
 
+    /// Before a value is evaluated at runtime here: the values still
+    /// pending on the operand stack that may throw, or convert what may be
+    /// an object, are evaluated first, in the order the program computed
+    /// them (`{a: x.y, b: [z.w]}` reads `x.y` before `z.w`, though `x.y`
+    /// waits on the stack for its object while the inner array is made).
+    fn commit_pending_operands(&self, s: &mut State, pc: usize, out: &mut Vec<Op>) {
+        if env_flag!("PE_NO_OPERAND_ORDER") {
+            return;
+        }
+        let fi = s.frames.len() - 1;
+        for i in 0..s.frames[fi].ostack.len() {
+            let Abs::Dyn(e) = &s.frames[fi].ostack[i] else { continue };
+            if rexpr_is_atom(e) || matches!(e, RExpr::BoundMethod { .. }) {
+                continue;
+            }
+            if !(self.throws_in(s, e) || self.converts_unknown_in(s, e)) {
+                continue;
+            }
+            let expr = e.clone();
+            let dst = self.freeze_var(s, pc, 4096 + i);
+            // (A method read waiting to be called keeps its receiver: see
+            // `freeze_readers`.)
+            let bound_recv = match &expr {
+                RExpr::Get(base, _) | RExpr::Index(base, _) if rexpr_is_atom(base) => Some((**base).clone()),
+                _ => None,
+            };
+            out.push(Op::Eval { dst, expr });
+            s.frames[fi].ostack[i] = match bound_recv {
+                Some(recv) => Abs::Dyn(RExpr::BoundMethod { func: Box::new(RExpr::Var(dst)), recv: Box::new(recv) }),
+                None => Abs::Dyn(RExpr::Var(dst)),
+            };
+        }
+    }
+
     /// If `v` is a may-throw residual value, emit it for effect (single-evaluated
     /// into a stable temp keyed by (pc, i)) and return the temp; otherwise return
     /// `v` unchanged. Used wherever a value is *stored into the abstract heap*
@@ -22713,7 +24132,11 @@ impl Js {
     /// may never be materialized (a dead object), so the exception the read
     /// raises in the original must be committed here, at the write.
     fn emit_if_maythrow(&self, s: &mut State, pc: usize, i: usize, v: Abs, out: &mut Vec<Op>) -> Abs {
-        if matches!(&v, Abs::Dyn(e) if self.throws_in(s, e)) {
+        // (Or one that converts a value that may be an object, which runs
+        // that object's code: once, here. See `Instr::Store`.)
+        let converts = !env_flag!("PE_NO_STORE_CONVERSIONS") && matches!(&v, Abs::Dyn(e) if !rexpr_is_atom(e) && self.converts_unknown_in(s, e));
+        if converts || matches!(&v, Abs::Dyn(e) if self.throws_in(s, e)) {
+            self.commit_pending_operands(s, pc, out);
             self.forbid_residual_in_try(s, "a may-throw heap write/element");
             let dst = self.elem_var(pc, i);
             self.emit_temp(s, dst, v.to_rexpr(), pc, out);
@@ -22874,6 +24297,7 @@ impl Js {
                 Loc::This(fi) => s.frames[fi].this = fresh,
                 Loc::Global(name) => {
                     let d = s.globals.get(&name).map_or(false, |(_, d)| *d);
+                    region_note_globals();
                     s.globals.insert(name, (fresh, d));
                 }
                 Loc::Heap(addr, i) => {
@@ -22894,7 +24318,29 @@ impl Js {
         if makes_object(&expr) {
             self.object_temps.borrow_mut().insert(dst);
         }
+        self.why.emitted(pc, &expr);
         out.push(Op::Eval { dst, expr });
+    }
+
+    /// Is `v` certainly a string: the result of a standard function that
+    /// returns one whatever it is given (`String.fromCharCode(...)`,
+    /// `String(x)` of what is no symbol's... of anything: a symbol's
+    /// description), while `String` is the standard one; or a template's
+    /// conversion.
+    fn makes_string(&self, s: &State, v: &Abs) -> bool {
+        let Abs::Dyn(e) = v else { return false };
+        if !self.facts_off && self.info_abs(s, v).is_some_and(|i| i.types == crate::facts::T_STR) {
+            return true;
+        }
+        match e {
+            RExpr::Opaque(op, xs) => op == TEMPLATE_TO_STRING && xs.len() == 1,
+            RExpr::Call(c, _) => match &**c {
+                RExpr::Global(g) => g == "String" && self.pristine("String"),
+                RExpr::Get(o, m) => matches!(&**o, RExpr::Global(g) if g == "String") && matches!(m.as_str(), "fromCharCode" | "fromCodePoint") && self.pristine("String"),
+                _ => false,
+            },
+            _ => false,
+        }
     }
 
     /// Is `e` certainly an object: a materialized modeled object (its
@@ -23109,6 +24555,14 @@ impl Js {
                 Instr::Bin(op) => {
                     let b = probe.top_mut().ostack.pop().unwrap();
                     let a = probe.top_mut().ostack.pop().unwrap();
+                    // (Strict equality with a known object is identity: no
+                    // conversion, known now. `while (node !== null)`.)
+                    if matches!(op, Bop::Eq | Bop::Ne) && !a.is_dynamic() && !b.is_dynamic() && (matches!(a, Abs::Ref(_)) || matches!(b, Abs::Ref(_))) {
+                        let eq = static_strict_eq(&a, &b);
+                        probe.top_mut().ostack.push(Abs::Bool(eq == (*op == Bop::Eq)));
+                        probe.top_mut().pc += 1;
+                        continue;
+                    }
                     // A heap ref as an operand would have to escape (which a
                     // read-only probe cannot do); treat the condition as
                     // dynamically controlled.
@@ -23133,6 +24587,9 @@ impl Js {
                 Instr::GetIndex => {
                     let i = probe.top_mut().ostack.pop().unwrap();
                     let a = probe.top_mut().ostack.pop().unwrap();
+                    // (The key as the property key it names, as the real
+                    // step takes it: `o[undefined]` is `o["undefined"]`.)
+                    let i = object_key(&probe.heap, &a, i);
                     // A read the abstract heap can't serve statically would need
                     // to escape (impossible in a read-only probe): treat the
                     // loop as dynamically controlled.
@@ -23172,7 +24629,11 @@ impl Js {
                 Instr::OpaqueOp { op, arity } if op != "in" && op != "instanceof" => {
                     let base = probe.top().ostack.len() - arity;
                     let xs: Vec<Abs> = probe.top_mut().ostack.split_off(base);
-                    if xs.iter().any(|x| matches!(x, Abs::Ref(_))) {
+                    // (An operator that converts a known object would have
+                    // to make it a runtime value. The ones that only test or
+                    // pass one on do not: `while (node[k] && i < n)`.)
+                    let converts = !matches!(op.as_str(), "!" | "&&" | "||" | "??" | "?:" | "void");
+                    if converts && xs.iter().any(|x| matches!(x, Abs::Ref(_))) {
                         return true;
                     }
                     match fold_opaque(op, &xs) {
@@ -23225,12 +24686,28 @@ impl Js {
 
     fn consume_pending_joins(&self, ns: &mut State, target: usize, out: &mut Vec<Op>) {
         while ns.pending_joins.last().map(|j| j.end) == Some(target) {
-            let PendingJoin { mods: m, globals, .. } = ns.pending_joins.pop().unwrap();
+            let PendingJoin { mods: m, globals, before, depth, .. } = ns.pending_joins.pop().unwrap();
+            // (An arm that did nothing but assign the slots merged here:
+            // the other, if it did no more, arrives in this same state and
+            // is this path from here on. The activation is then no more
+            // branched than it was before the `if`: its loops run on as one
+            // path's do, see `jump_to`. Judged before the merge below, which
+            // changes neither.)
+            let rejoined = before.filter(|_| !env_flag!("PE_NO_REJOIN")).filter(|b| {
+                let (heap, escaped, fns, known_globals, _) = &*b.0;
+                depth == ns.frames.len()
+                    && globals.is_empty()
+                    && ns.escaped == *escaped
+                    && ns.fns == *fns
+                    && ns.globals == *known_globals
+                    && ns.heap.m.iter().all(|(a, o)| heap.m.get(a).is_some_and(|p| std::rc::Rc::ptr_eq(o, p) || **o == **p))
+            });
             for name in &globals {
                 if let Some((_, dirty)) = ns.globals.get(name).cloned() {
                     if dirty {
                         self.write_global(ns, name, out);
                     }
+                    region_note_globals();
                     ns.globals.remove(name);
                 }
             }
@@ -23242,6 +24719,7 @@ impl Js {
             // the loop). All genuinely-dynamic slots still merge.
             let fi = ns.frames.len() - 1;
             let func = ns.frames[fi].func;
+            let all = m.len();
             let m: Vec<usize> = m
                 .into_iter()
                 .filter(|&slot| {
@@ -23250,7 +24728,14 @@ impl Js {
                         && !ns.frames[fi].locals[slot].is_dynamic())
                 })
                 .collect();
+            let split = m.len() != all;
+            let _why = self.why.merging(why::Merge::Join);
             self.materialize(ns, &m, out);
+            if let Some(b) = rejoined {
+                if !split && !ns.pending_joins.iter().any(|j| j.depth == depth) {
+                    ns.frames[fi].branched = b.0 .4;
+                }
+            }
         }
     }
 
@@ -23268,7 +24753,11 @@ impl Js {
         if target > from
             && !self.loop_head[target]
             && !s.top().branched
-            && s.handlers.is_empty()
+            // (In a `try` too: a `throw` the specializer runs goes to its
+            // handler from wherever in the block it is; one left to runtime
+            // makes the `try` a runtime one, whose body is a program of
+            // its own.)
+            && (!Js::guarded(s) || !env_flag!("PE_NO_JUMP_IN_TRY"))
             && !s.pending_joins.iter().any(|j| j.end == target)
         {
             s.top_mut().pc = target;
@@ -23290,9 +24779,13 @@ impl Js {
         // iteration run before the head's first block is peeled off). No
         // other path reaches that state, so it is a fresh block, never
         // memoized (`Step::JumpFresh`: its key is not computed).
+        // (Nor a loop only its counters change, on a path that took a
+        // dynamic branch in the iteration: its iterations are the same
+        // residual code, and it runs at runtime. See `counter_only_loop`.)
         let static_guards = self.loop_head[target]
             && !s.top().branched
-            && s.handlers.is_empty()
+            && !(s.branched_since_head && self.loop_counters.get(target).is_some_and(|c| !c.is_empty()))
+            && !Js::guarded(s)
             && !s.pending_joins.iter().any(|j| j.end == target)
             && {
                 // (Judged at the loop's head.)
@@ -23336,7 +24829,7 @@ impl Js {
                     s.frames.len()
                 );
             }
-            if n <= STATIC_UNROLL_INLINE {
+            if n <= static_unroll_inline() {
                 s.top_mut().pc = target;
                 prune_joins(s);
                 self.clear_dead_moved(s);
@@ -23488,6 +24981,7 @@ impl Js {
                         .collect::<Vec<_>>(),
                 );
             }
+            let _why = self.why.merging(why::Merge::LoopControl);
             self.materialize(&mut ns, &slots, out);
         }
         if !self.ends_nested(&ns, target) {
@@ -23634,6 +25128,17 @@ impl Js {
             }
         }
         let slots: &[usize] = &live_slots;
+        if env_flag!("MAT_DEBUG") {
+            eprintln!("[MAT] at pc={at} slots={slots:?} values={:?}", slots.iter().map(|&k| &ns.frames[fi].locals[k]).collect::<Vec<_>>());
+        }
+        for &slot in slots {
+            self.why.made(self.stable_id(func, slot), at, func);
+        }
+        for &(addr, idx) in fields {
+            if let Some(&cpc) = self.creation_pc.borrow().get(&addr) {
+                self.why.made(self.heap_field_id(cpc, addr, idx), at, func);
+            }
+        }
         if !slots.is_empty() && self.materialize_may_throw(ns, slots) {
             self.forbid_residual_in_try(ns, "a may-throw value materializing");
         }
@@ -23667,6 +25172,9 @@ impl Js {
         // `arr` var.
         let mut seen: HashMap<usize, usize> = HashMap::new();
         let is_closure = |addr: usize| matches!(&heap[&addr], HeapObj::Closure { .. });
+        // (The objects' constructions are emitted after the primitive
+        // values that read a variable they assign: see below.)
+        let mut ref_ops: Vec<Op> = Vec::new();
         for pass_closures in [false, true] {
             for &slot in slots {
                 let cur = ns.frames[fi].locals[slot].clone();
@@ -23677,14 +25185,21 @@ impl Js {
                 let id = self.stable_id(func, slot);
                 if let Some(&existing) = seen.get(&addr) {
                     if existing != id {
-                        out.push(Op::Assign { var: id, expr: RExpr::Var(existing) });
+                        ref_ops.push(Op::Assign { var: id, expr: RExpr::Var(existing) });
                     }
                 } else {
-                    self.materialize_into_seen(id, &cur, &heap, out, &mut seen);
+                    self.materialize_into_seen(id, &cur, &heap, &mut ref_ops, &mut seen);
                 }
                 ns.frames[fi].locals[slot] = Abs::Dyn(RExpr::Var(id));
             }
         }
+        let ref_defs: std::collections::HashSet<usize> = {
+            let mut defs = Vec::new();
+            for op in &ref_ops {
+                op_defs_deep(op, &mut defs);
+            }
+            defs.into_iter().collect()
+        };
         // Each materialized object is now that runtime value: every other
         // reference to it (a closure's capture, a field of a static object,
         // another frame) must name the same variable, or the abstract copy and
@@ -23763,8 +25278,23 @@ impl Js {
             }
             *cell = Abs::Dyn(RExpr::Var(id));
         }
+        // A primitive value that reads a variable an object's construction
+        // assigns (the old value of a slot that holds a new object now:
+        // `isCommon = newValue === undefined` held unevaluated, then
+        // `newValue = []`) is evaluated before the constructions, into its
+        // temp.
+        for u in updates.iter_mut() {
+            if rexpr_contains(&u.2, &|x| matches!(x, RExpr::Var(v) if ref_defs.contains(v))) {
+                out.push(Op::Assign { var: u.0, expr: std::mem::replace(&mut u.2, RExpr::Var(u.0)) });
+            }
+        }
+        out.extend(ref_ops);
         for i in 0..updates.len() {
             let (tmp, id, expr) = updates[i].clone();
+            if expr == RExpr::Var(tmp) {
+                copies.push((id, tmp));
+                continue;
+            }
             let read_later = updates[i + 1..]
                 .iter()
                 .any(|(_, _, e)| rexpr_contains(e, &|x| matches!(x, RExpr::Var(v) if *v == id)));
@@ -23780,13 +25310,69 @@ impl Js {
         }
     }
 
+    /// Is the handler at `catch_pc` (to `end`, its exception in `exc_slot`)
+    /// one the load code needs no runtime `try` for? It only writes
+    /// constants to variables (their cells) and throws what it caught
+    /// again, as a bundler's module wrapper does (`catch (e) { throw mod =
+    /// 0, e; }`), and nothing around it catches: an exception an operation
+    /// left to runtime throws in its `try` then ends the load, as it does
+    /// through the handler, and what the handler would have written is
+    /// state of a program that did not load. (A `throw` the specializer
+    /// runs itself still goes through the handler.)
+    fn load_rethrow_handler(&self, s: &State, catch_pc: usize, exc_slot: Option<usize>, end: usize) -> bool {
+        if !self.entry.loading.get() || self.probing.get() || !self.halt_at.borrow().is_empty() || self.in_residual_body.get() || !env_flag!("PE_LOAD_RETHROW") {
+            return false;
+        }
+        if s.handlers.iter().any(|h| !h.transparent) {
+            return false;
+        }
+        let Some(exc) = exc_slot else { return false };
+        let code = &self.code[catch_pc..end.max(catch_pc)];
+        let n = code.len();
+        if n < 2 || !matches!((&code[n - 2], &code[n - 1]), (Instr::Load(e), Instr::Throw) if *e == exc) {
+            return false;
+        }
+        // (What each value on the stack is: a local's, by its slot.)
+        let mut stack: Vec<Option<usize>> = Vec::new();
+        let cell = |slot: usize| match s.top().locals.get(slot) {
+            Some(Abs::Ref(a)) => matches!(s.heap.get(a), Some(HeapObj::Object { props, proto: Abs::Undef, class: ObjClass::Ordinary | ObjClass::FinalCell { .. }, .. }) if props.len() == 1 && props[0].key == "value"),
+            _ => false,
+        };
+        for i in &code[..n - 2] {
+            match i {
+                Instr::Load(slot) => stack.push(Some(*slot)),
+                Instr::PushNum(_) | Instr::PushStr(_) | Instr::PushBool(_) | Instr::PushUndef | Instr::PushNull => stack.push(None),
+                Instr::Pop => {
+                    if stack.pop().is_none() {
+                        return false;
+                    }
+                }
+                Instr::SetPropOp(k) if k == "value" => {
+                    let (Some(_), Some(target)) = (stack.pop(), stack.pop()) else { return false };
+                    if !target.is_some_and(cell) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Is `s` in a `try` whose handler a runtime exception must reach (any
+    /// but a load-time handler that only rethrows: see
+    /// `load_rethrow_handler`)?
+    fn guarded(s: &State) -> bool {
+        s.handlers.iter().any(|h| !h.transparent)
+    }
+
     /// A residual operation inside an active `try` would, at runtime, be able to
     /// throw past our goto-based catch. The body must therefore residualize a
     /// real `try`/`catch`. During the foldability probe we only *record* that
     /// this happened (`try_taint`); the real run never reaches here on the fold
     /// path (the probe already steered it to `residualize_try`).
     fn forbid_residual_in_try(&self, s: &State, _what: &str) {
-        if !s.handlers.is_empty() {
+        if s.handlers.iter().any(|h| !h.transparent) {
             if self.probing.get() {
                 if env_flag!("TRY_DEBUG") && !self.try_taint.get() {
                     let frames: Vec<&str> = s.frames.iter().map(|f| self.names[f.func].as_str()).collect();
@@ -23823,6 +25409,120 @@ impl Js {
         self.call_unfolds(probe, Abs::Ref(f), args, this, pc)
     }
 
+    /// A self-hosted built-in met a case it does not cover (`helper` said
+    /// so): the probe asking whether its call unfolds is answered no, and
+    /// the path ends. Such code runs only under that probe: the call is
+    /// made in its place only where the probe found it to unfold.
+    fn prelude_gives_up(&self, helper: &str) {
+        assert!(
+            self.unfold_probes.get() > 0,
+            "`{helper}` gave up outside the probe of a self-hosted built-in: the probe found the call to unfold and the run did not"
+        );
+        self.unfold_gave_up.set(true);
+        if self.straight_probe.get() {
+            self.straight_failed.set(true);
+        }
+    }
+
+    /// The self-hosted version of the standard function the residual
+    /// expression `c` reads by name (`JSON.stringify`, `String`), with the
+    /// global it is read from. Adding a model of a standard function is
+    /// writing that function in the prelude, from its specification: it is
+    /// specialized like any code of the program, so it folds on known
+    /// values, and what it does to its arguments is what its code does.
+    /// (A method of a known primitive, `(5).toFixed`, is its prototype's:
+    /// `__pe_std_Number_prototype_toFixed`, run with the primitive as
+    /// `this`.)
+    fn std_prelude_of(&self, c: &RExpr) -> Option<(String, usize, Abs)> {
+        if self.std_prelude.is_empty() {
+            return None;
+        }
+        let (root, name, this) = match c {
+            RExpr::Global(g) => (g.clone(), g.clone(), Abs::Undef),
+            RExpr::Get(o, m) => match &**o {
+                RExpr::Global(g) => (g.clone(), format!("{g}.{m}"), Abs::Undef),
+                prim @ (RExpr::Str(_) | RExpr::Num(_) | RExpr::Bool(_)) => {
+                    let ty = match prim {
+                        RExpr::Str(_) => "String",
+                        RExpr::Num(_) => "Number",
+                        _ => "Boolean",
+                    };
+                    (ty.to_string(), format!("{ty}.prototype.{m}"), Abs::from_const_rexpr(prim)?)
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.std_prelude.get(&name).map(|&fid| (root, fid, this))
+    }
+
+    /// An operator (`op`: its token, `u`-prefixed when unary) over known
+    /// `operands`, one an object whose conversion runs the program's code:
+    /// the prelude's `__pe_convert_op(op, ...operands)`, which converts each
+    /// as the operator does and applies it to the primitives, run in place
+    /// of the operator where that unfolds to straight-line code. `None`
+    /// otherwise (the operator is then the runtime's).
+    fn convert_op_inline(&self, s: &mut State, op: &str, operands: Vec<Abs>, pc: usize, out: &mut Vec<Op>) -> Option<Step<Js>> {
+        if operands.iter().any(|v| v.is_dynamic()) {
+            return None;
+        }
+        let fid = self.names.iter().position(|n| n == "__pe_convert_op")?;
+        if s.frames.iter().any(|f| f.func == fid) {
+            return None;
+        }
+        let mut args = vec![Abs::Str(op.to_string())];
+        args.extend(operands);
+        if !self.prelude_unfolds(s, fid, &args, &Abs::Undef, pc) {
+            return None;
+        }
+        let f = s.alloc(HeapObj::closure(fid, vec![]));
+        let n = args.len();
+        s.top_mut().ostack.push(Abs::Ref(f));
+        s.top_mut().ostack.extend(args);
+        Some(self.do_call(s, n, pc, out, Abs::Undef, RetMode::Value, Abs::Undef))
+    }
+
+    /// The self-hosted version of the standard function `callee` to run in
+    /// place of this call of it: one there is (`std_prelude_of`), of a
+    /// built-in the program leaves standard, that unfolds to straight-line
+    /// code on these arguments (`prelude_unfolds`); elsewhere the call stays
+    /// the runtime's own. (Not from within that version itself: a call of
+    /// the function there is the runtime's.)
+    fn std_prelude_unfolding(&self, s: &State, callee: &Abs, args: &[Abs], ret: RetMode, pc: usize) -> Option<(usize, Abs)> {
+        let (Abs::Dyn(c), RetMode::Value | RetMode::Discard) = (callee, ret) else { return None };
+        let (root, fid, this) = self.std_prelude_of(c)?;
+        (!s.frames.iter().any(|f| f.func == fid) && self.pristine(&root) && self.prelude_globals_pristine(fid) && self.prelude_unfolds(s, fid, args, &this, pc)).then_some((fid, this))
+    }
+
+    /// Are the built-ins the self-hosted function `fid` uses (it and the
+    /// prelude functions it reaches, by the globals their code names) the
+    /// standard ones? Its code, unfolded, may leave calls of them in the
+    /// residual, which the original function never makes: in a program that
+    /// replaces one, they would be calls of the replacement.
+    fn prelude_globals_pristine(&self, fid: usize) -> bool {
+        let globals = {
+            let mut cache = self.prelude_globals.borrow_mut();
+            cache
+                .entry(fid)
+                .or_insert_with(|| {
+                    let mut names: Vec<String> = Vec::new();
+                    for f in std::iter::once(fid).chain(self.fn_reach[fid].iter().copied()) {
+                        let hi = self.entries.get(f + 1).copied().unwrap_or(self.code.len());
+                        for i in &self.code[self.entries[f]..hi] {
+                            if let Instr::PushGlobal(g) = i {
+                                if crate::pristine::tracked(g) && !names.contains(g) {
+                                    names.push(g.clone());
+                                }
+                            }
+                        }
+                    }
+                    std::rc::Rc::new(names)
+                })
+                .clone()
+        };
+        globals.iter().all(|g| self.pristine(g))
+    }
+
     /// Would calling `callee` (a closure in `s`) here unfold to straight-line
     /// code (see `prelude_unfolds`)?
     fn call_unfolds(&self, s: State, callee: Abs, args: &[Abs], this: &Abs, pc: usize) -> bool {
@@ -23842,11 +25542,17 @@ impl Js {
         probe.top_mut().ostack.extend(args.iter().cloned());
         let fns_before = self.residual_fns.borrow().len();
         let mut sink = Vec::new();
+        // (The probe is under way from here: the call may itself specialize
+        // the function's body, as a residual function's.)
+        let saved_gave_up = self.unfold_gave_up.replace(false);
+        self.unfold_probes.set(self.unfold_probes.get() + 1);
         let saved_known = self.probing_known_call.replace(true);
         let _ = self.do_call(&mut probe, args.len(), pc, &mut sink, this.clone(), RetMode::Value, Abs::Undef);
         self.probing_known_call.set(saved_known);
         if probe.frames.len() != 2 {
             // It became a residual call.
+            self.unfold_probes.set(self.unfold_probes.get() - 1);
+            self.unfold_gave_up.set(saved_gave_up);
             return false;
         }
         // Run until control is back in the caller (just after the call), as
@@ -23858,8 +25564,12 @@ impl Js {
         self.halt_at.borrow_mut().push(resume);
         // (It stops at the first conditional transfer: one decides it.)
         let saved_straight = (self.straight_probe.replace(true), self.straight_failed.replace(false));
+        let pending = (std::mem::take(&mut *self.pending_info.borrow_mut()), std::mem::take(&mut *self.pending_fixed.borrow_mut()));
         let prog = crate::engine::specialize(self, probe);
-        let failed = self.straight_failed.get();
+        *self.pending_info.borrow_mut() = pending.0;
+        *self.pending_fixed.borrow_mut() = pending.1;
+        self.unfold_probes.set(self.unfold_probes.get() - 1);
+        let failed = self.straight_failed.get() || self.unfold_gave_up.replace(saved_gave_up);
         self.straight_probe.set(saved_straight.0);
         self.straight_failed.set(saved_straight.1);
         self.halt_at.borrow_mut().pop();
@@ -23882,7 +25592,13 @@ impl Js {
     /// straight-line probe stops (see `prelude_unfolds`).
     fn specialize_nested(&self, start: State) -> Program<Op, Cond> {
         let saved = (self.straight_probe.replace(false), self.straight_failed.replace(false));
+        // (What the enclosing step has learned of the variables it is
+        // assigning, kept for when its operations are tracked: the nested
+        // program's steps track, and clear, their own. See `track_defs`.)
+        let pending = (std::mem::take(&mut *self.pending_info.borrow_mut()), std::mem::take(&mut *self.pending_fixed.borrow_mut()));
         let prog = crate::engine::specialize(self, start);
+        *self.pending_info.borrow_mut() = pending.0;
+        *self.pending_fixed.borrow_mut() = pending.1;
         self.straight_probe.set(saved.0);
         self.straight_failed.set(saved.1);
         prog
@@ -23918,6 +25634,7 @@ impl Js {
             exc_slot: handler.exc_slot,
             frame_depth: 1,
             ostack_depth: 0,
+            transparent: false,
         });
         // Save/restore `probing` and `try_taint`: a probed body can itself contain
         // a `try`, whose `PushHandler` re-enters `try_folds`. Without save/restore
@@ -23964,84 +25681,143 @@ impl Js {
                  enclosing loop is not yet supported (would not terminate)"
             );
         }
-        self.residual_try_stack.borrow_mut().push((catch_pc, depth));
-        // The locals that hold static primitives as the `try` starts: the
-        // body starts with them known (each local also goes to its variable
-        // below, and a store in the body writes the variable as it runs, see
-        // `eager_stores`), as does the catch for those the body never
-        // assigns.
-        let known: Vec<Option<Abs>> = s
-            .top()
-            .locals
-            .iter()
-            .map(|v| matches!(v, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null).then(|| v.clone()))
-            .collect();
-        self.materialize_all(s, out);
-        // The body writes globals in place (and may throw after some), and
-        // the catch and the code after the `try` cannot know which: tracked
-        // globals are written out and forgotten first.
-        self.sync_globals(s, true, out);
-        // Body/catch run with eager top-frame stores so their effects residualize
-        // in source order (sound under may-throw ops).
-        let prev_eager = self.eager_stores.replace(true);
-        // Body: no handler (a runtime throw is caught by the emitted `catch`),
-        // bounded at the `PopHandler` (normal completion).
+        // What the region's code (body and handler, and what they call)
+        // writes, or hands to runtime code, of the objects the state has as
+        // the `try` begins must be runtime state before it: the body may
+        // throw part way, and the handler and the code after the `try`
+        // cannot know how far it got. The rest stays as it is: known, where
+        // it was. Which objects those are is found by specializing the
+        // region while watching the writes (`REGION_WATCH`), and again with
+        // what it wrote made runtime first, until it writes nothing else.
+        // (A local holding an object, assigned in the region: that object,
+        // as the local's variable must hold it on a path that does not
+        // assign.)
         let body_pc = s.top().pc + 1;
-        let mut body_state = self.sole_frame_state(s, body_pc);
-        for (slot, v) in known.iter().enumerate() {
-            if let Some(v) = v {
-                body_state.frames[0].locals[slot] = v.clone();
+        let stored = |lo: usize, hi: usize| -> std::collections::HashSet<usize> {
+            self.code[lo..hi].iter().filter_map(|i| if let Instr::Store(k) = i { Some(*k) } else { None }).collect()
+        };
+        let mut written: std::collections::BTreeSet<usize> = stored(body_pc, end)
+            .into_iter()
+            .filter_map(|k| match s.top().locals.get(k) {
+                Some(Abs::Ref(a)) => Some(*a),
+                _ => None,
+            })
+            .collect();
+        let limit = s.next_addr;
+        let (start, n0) = (s.clone(), out.len());
+        // (Past this many rounds, the whole activation: everything it holds.)
+        const ROUNDS: usize = 6;
+        let mut round = 0;
+        // (Likewise the globals: what is known of them is kept across the
+        // `try` unless its code assigns one or runs runtime code.)
+        let mut forget_globals = false;
+        loop {
+            round += 1;
+            let whole = round > ROUNDS;
+            *s = start.clone();
+            out.truncate(n0);
+            self.residual_try_stack.borrow_mut().push((catch_pc, depth));
+            // The locals that hold static primitives as the `try` starts: the
+            // body starts with them known (each local also goes to its variable
+            // below, and a store in the body writes the variable as it runs, see
+            // `eager_stores`), as does the catch for those the body never
+            // assigns.
+            let known: Vec<Option<Abs>> = s
+                .top()
+                .locals
+                .iter()
+                .map(|v| matches!(v, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null).then(|| v.clone()))
+                .collect();
+            if whole {
+                self.materialize_all(s, out);
+            } else {
+                self.materialize_written(s, &written, out);
             }
-        }
-        self.halt_at.borrow_mut().push(body_end);
-        self.halt_locals.borrow_mut().push((body_end, None));
-        let body = self.specialize_nested(body_state);
-        let (_, mut after) = self.halt_locals.borrow_mut().pop().unwrap();
-        self.halt_at.borrow_mut().pop();
-        // Catch: the exception is a runtime value bound to a residual variable.
-        let ev = self.exc_var(catch_pc);
-        let mut catch_state = self.sole_frame_state(s, catch_pc);
-        let assigned: std::collections::HashSet<usize> =
-            self.code[body_pc..body_end].iter().filter_map(|i| if let Instr::Store(k) = i { Some(*k) } else { None }).collect();
-        for (slot, v) in known.iter().enumerate() {
-            if let (Some(v), false) = (v, assigned.contains(&slot)) {
-                catch_state.frames[0].locals[slot] = v.clone();
+            // The body writes globals in place (and may throw after some), and
+            // the catch and the code after the `try` cannot know which: tracked
+            // globals are written out first, and forgotten when the region's
+            // code may change one.
+            self.sync_globals(s, whole || forget_globals, out);
+            // (What is known of the variables just assigned, before the
+            // region's code is specialized from this state: the step's
+            // operations are tracked when it ends, see `track_defs`.)
+            if !self.facts_off && !env_flag!("PE_NO_TRACK") {
+                self.track_defs_inner(s, &out[n0..]);
             }
-        }
-        if let Some(slot) = exc_slot {
-            catch_state.frames[0].locals[slot] = Abs::Dyn(RExpr::Var(ev));
-        }
-        self.halt_at.borrow_mut().push(end);
-        self.halt_locals.borrow_mut().push((end, None));
-        let catch_body = self.specialize_nested(catch_state);
-        let (_, after_catch) = self.halt_locals.borrow_mut().pop().unwrap();
-        self.halt_at.borrow_mut().pop();
-        self.eager_stores.set(prev_eager);
-        self.residual_try_stack.borrow_mut().pop();
-        out.push(Op::Try { body, catch_slot: exc_slot.map(|_| ev), catch_body, finally_body: None });
-        s.top_mut().pc = end;
-        // A local every path out of the body and the catch left holding one
-        // static value holds it after the `try` (the exit a `TryExits`
-        // dispatch takes, when every path takes the same one).
-        match (&mut after, after_catch) {
-            (None, c) => after = c,
-            (Some(a), Some(c)) => {
-                for (x, y) in a.iter_mut().zip(c) {
-                    if *x != y {
-                        *x = None;
+            REGION_WATCH.with(|w| w.borrow_mut().push((limit, std::collections::BTreeSet::new())));
+            REGION_GLOBALS.with(|w| w.borrow_mut().push(false));
+            self.region_limits.borrow_mut().push(if whole { 0 } else { limit });
+            // Body/catch run with eager top-frame stores so their effects residualize
+            // in source order (sound under may-throw ops).
+            let prev_eager = self.eager_stores.replace(true);
+            // Body: no handler (a runtime throw is caught by the emitted `catch`),
+            // bounded at the `PopHandler` (normal completion).
+            let mut body_state = self.sole_frame_state(s, body_pc);
+            for (slot, v) in known.iter().enumerate() {
+                if let Some(v) = v {
+                    body_state.frames[0].locals[slot] = v.clone();
+                }
+            }
+            self.halt_at.borrow_mut().push(body_end);
+            self.halt_locals.borrow_mut().push((body_end, None));
+            let body = self.specialize_nested(body_state);
+            let (_, mut after) = self.halt_locals.borrow_mut().pop().unwrap();
+            self.halt_at.borrow_mut().pop();
+            // Catch: the exception is a runtime value bound to a residual variable.
+            let ev = self.exc_var(catch_pc);
+            let mut catch_state = self.sole_frame_state(s, catch_pc);
+            let assigned = stored(body_pc, body_end);
+            for (slot, v) in known.iter().enumerate() {
+                if let (Some(v), false) = (v, assigned.contains(&slot)) {
+                    catch_state.frames[0].locals[slot] = v.clone();
+                }
+            }
+            if let Some(slot) = exc_slot {
+                catch_state.frames[0].locals[slot] = Abs::Dyn(RExpr::Var(ev));
+            }
+            self.halt_at.borrow_mut().push(end);
+            self.halt_locals.borrow_mut().push((end, None));
+            let catch_body = self.specialize_nested(catch_state);
+            let (_, after_catch) = self.halt_locals.borrow_mut().pop().unwrap();
+            self.halt_at.borrow_mut().pop();
+            self.eager_stores.set(prev_eager);
+            self.region_limits.borrow_mut().pop();
+            let (_, touched) = REGION_WATCH.with(|w| w.borrow_mut().pop()).expect("the region's watch");
+            let globals_touched = REGION_GLOBALS.with(|w| w.borrow_mut().pop()).expect("the region's watch");
+            self.residual_try_stack.borrow_mut().pop();
+            // (Written this round, of what the state still held as known.)
+            let more: Vec<usize> = touched.into_iter().filter(|a| !written.contains(a) && start.heap.contains_key(a)).collect();
+            let redo_globals = globals_touched && !forget_globals;
+            if !whole && (!more.is_empty() || redo_globals) {
+                written.extend(more);
+                forget_globals |= globals_touched;
+                continue;
+            }
+            out.push(Op::Try { body, catch_slot: exc_slot.map(|_| ev), catch_body, finally_body: None });
+            s.top_mut().pc = end;
+            // A local every path out of the body and the catch left holding one
+            // static value holds it after the `try` (the exit a `TryExits`
+            // dispatch takes, when every path takes the same one).
+            match (&mut after, after_catch) {
+                (None, c) => after = c,
+                (Some(a), Some(c)) => {
+                    for (x, y) in a.iter_mut().zip(c) {
+                        if *x != y {
+                            *x = None;
+                        }
+                    }
+                }
+                (Some(_), None) => {}
+            }
+            if let Some(after) = after {
+                for (slot, v) in after.into_iter().enumerate() {
+                    if let Some(v) = v {
+                        s.top_mut().locals[slot] = v;
                     }
                 }
             }
-            (Some(_), None) => {}
+            return Step::Continue;
         }
-        if let Some(after) = after {
-            for (slot, v) in after.into_iter().enumerate() {
-                if let Some(v) = v {
-                    s.top_mut().locals[slot] = v;
-                }
-            }
-        }
-        Step::Continue
     }
 
     /// A residual `try { body } finally { .. }` for a native `finally` region
@@ -24049,7 +25825,13 @@ impl Js {
     /// `residualize_try`, the frame goes to its stable variables, then the body
     /// (to `body_end`) and the finally (to `end`) are nested programs.
     fn residualize_try_finally(&self, s: &mut State, body_end: usize, end: usize, out: &mut Vec<Op>) -> Step<Js> {
+        let n0 = out.len();
         self.materialize_all(s, out);
+        // (See `residualize_try`.)
+        if !self.facts_off && !env_flag!("PE_NO_TRACK") {
+            self.track_defs_inner(s, &out[n0..]);
+        }
+        self.region_limits.borrow_mut().push(0);
         // (Tracked globals, as for `residualize_try`.)
         self.sync_globals(s, true, out);
         let prev_eager = self.eager_stores.replace(true);
@@ -24062,6 +25844,7 @@ impl Js {
         self.halt_at.borrow_mut().push(end);
         let finally_body = self.specialize_nested(fin_state);
         self.halt_at.borrow_mut().pop();
+        self.region_limits.borrow_mut().pop();
         self.eager_stores.set(prev_eager);
         out.push(Op::Try {
             body,
@@ -24081,8 +25864,32 @@ impl Js {
     /// a given slot the same way, so a modification the body writes back at its
     /// boundary (see the `halt_at` materialize in `step`) is read by the
     /// continuation. After this the frame is entirely dynamic.
+    /// What a residual `try` needs as runtime state before it (see
+    /// `residualize_try`): the objects `written` (each with what it
+    /// reaches), and every local that holds no object, in its variable. A
+    /// local holding an object the region leaves alone keeps holding it.
+    fn materialize_written(&self, s: &mut State, written: &std::collections::BTreeSet<usize>, out: &mut Vec<Op>) {
+        let _why = self.why.merging(why::Merge::Whole);
+        let mut escaped = std::collections::HashSet::new();
+        // (In address order here, not holders first: with holders first a
+        // residual of handlebars loses a property of an object a cell holds.
+        // An order-dependent fault in `escape`, open in `split-shot-bugs`;
+        // `PE_HF_TRY=1` orders them holders first, to reproduce it.)
+        let written: Vec<usize> = written.iter().copied().collect();
+        let ordered = if env_flag!("PE_HF_TRY") { Js::holders_first(&s.heap, &written, 4) } else { written };
+        for a in ordered {
+            if s.heap.contains_key(&a) && !s.escaped.contains(&a) {
+                let _ = self.escape(s, a, &mut escaped, out);
+            }
+        }
+        let fi = s.frames.len() - 1;
+        let slots: Vec<usize> = (0..s.frames[fi].locals.len()).filter(|&k| !matches!(s.frames[fi].locals[k], Abs::Ref(_))).collect();
+        self.materialize(s, &slots, out);
+    }
+
     fn materialize_all(&self, s: &mut State, out: &mut Vec<Op>) {
         let fi = s.frames.len() - 1;
+        let _why = self.why.merging(why::Merge::Whole);
         let mut escaped = std::collections::HashSet::new();
         for slot in 0..s.frames[fi].locals.len() {
             if let Abs::Ref(addr) = s.frames[fi].locals[slot] {
@@ -25095,6 +26902,8 @@ pub fn render_opaque(op: &str, parts: &[String]) -> String {
     match parts {
         // A template literal's `ToString`.
         [a] if op == TEMPLATE_TO_STRING => format!("`${{{a}}}`"),
+        // (Its operand is rendered as a string literal of hex digits.)
+        [a] if op == ILL_FORMED_STRING => ill_formed_string_literal(a.trim_matches('"')),
         [a] if op.chars().next().is_some_and(|c| c.is_alphabetic()) => format!("({op} {a})"),
         [a] => format!("({op}{a})"),
         [a, b] => format!("({a} {op} {b})"),

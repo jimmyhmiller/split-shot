@@ -43,11 +43,45 @@ const argv = process.argv.slice(2);
 let bin = path.join(root, 'target/release/js-frontend');
 let jsonOut = null;
 let noRepeat = false;
+// `--trace`: each input that is an object is given to `main` behind a proxy
+// that records what is done to it and to every object read from it (each
+// read, test, write, deletion and listing of keys, in order), and the
+// record is compared along with the result. A residual that reads a
+// property twice, or after a write the original read it before, or not at
+// all, differs: plain data cannot tell.
+let trace = false;
+const TRACE_SRC = `
+globalThis.__traceLog = [];
+globalThis.__traceOn = false;
+globalThis.__traced = (function () {
+  var seen = new WeakMap();
+  var show = function (k) { return typeof k === "symbol" ? k.toString() : JSON.stringify(k); };
+  var note = function (what) { if (globalThis.__traceOn) globalThis.__traceLog.push(what); };
+  var wrap = function (v, path) {
+    if (v === null || typeof v !== "object") return v;
+    if (seen.has(v)) return seen.get(v);
+    var p = new Proxy(v, {
+      get: function (t, k, r) { note("get " + path + "." + show(k)); return wrap(Reflect.get(t, k), path + "." + show(k)); },
+      set: function (t, k, x) { note("set " + path + "." + show(k)); return Reflect.set(t, k, x); },
+      // (A test of a key is not recorded: the residual's \`for..in\` tests
+      // each key it visits, where the engine's own asks for the key's
+      // descriptor, which no ordinary object can tell apart.)
+      deleteProperty: function (t, k) { note("delete " + path + "." + show(k)); return Reflect.deleteProperty(t, k); },
+      ownKeys: function (t) { note("keys " + path); return Reflect.ownKeys(t); },
+      defineProperty: function (t, k, d) { note("define " + path + "." + show(k)); return Reflect.defineProperty(t, k, d); },
+    });
+    seen.set(v, p);
+    return p;
+  };
+  return function (v) { return wrap(v, "in"); };
+})();
+`;
 const filters = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--bin') bin = argv[++i];
   else if (argv[i] === '--json') jsonOut = argv[++i];
   else if (argv[i] === '--no-repeat') noRepeat = true;
+  else if (argv[i] === '--trace') trace = true;
   else filters.push(argv[i]);
 }
 
@@ -94,11 +128,17 @@ function observe(code, input, after) {
   }
   try {
     ctx.__in = JSON.parse(JSON.stringify(input));
-    vm.runInContext('globalThis.__out = __main(__in);', ctx, { timeout: TIMEOUT_MS });
+    if (trace) {
+      vm.runInContext(TRACE_SRC, ctx);
+      vm.runInContext('__in = __traced(__in); __traceOn = true; try { globalThis.__out = __main(__in); } finally { __traceOn = false; }', ctx, { timeout: TIMEOUT_MS });
+    } else {
+      vm.runInContext('globalThis.__out = __main(__in);', ctx, { timeout: TIMEOUT_MS });
+    }
     let out = vm.runInContext(
       'Object.is(__out, -0) ? "-0" : (typeof __out === "number" && !isFinite(__out)) ? String(__out) : JSON.stringify(__out) === undefined ? "<" + typeof __out + ">" : JSON.stringify(__out)',
       ctx,
     );
+    if (trace) out += ' | trace: ' + vm.runInContext('__traceLog.join("; ")', ctx);
     if (after) {
       try {
         out += ' | after: ' + JSON.stringify(vm.runInContext(after, ctx, { timeout: TIMEOUT_MS }));
@@ -111,7 +151,13 @@ function observe(code, input, after) {
     if (e && e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return { timeout: true };
     // (The error's kind and message count: a residual throwing something
     // else is wrong.)
-    return { threw: String(e && e.name) + ': ' + String(e && e.message) };
+    let t = '';
+    if (trace) {
+      try {
+        t = ' | trace: ' + vm.runInContext('__traceLog.join("; ")', ctx);
+      } catch (_) {}
+    }
+    return { threw: String(e && e.name) + ': ' + String(e && e.message) + t };
   }
 }
 

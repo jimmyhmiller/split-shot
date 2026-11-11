@@ -238,7 +238,14 @@ fn rename_op(op: &mut Op, m: &HashMap<usize, usize>) {
 
 /// Coalesce the residual variables of `prog`, leaving the `keep` variables
 /// (parameters, the input) unchanged.
-pub fn coalesce_vars(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
+pub fn coalesce_vars(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) -> HashMap<usize, usize> {
+    coalesce_vars_named(prog, keep, None)
+}
+
+/// `coalesce_vars`, where two variables share one only if they have the
+/// same name in `names` (or both none): the residual then names each
+/// variable that stands for one of the program's as the source does.
+pub fn coalesce_vars_named(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>, names_of: Option<&HashMap<usize, String>>) -> HashMap<usize, usize> {
     // Per op: uses and def. Bail out on a residual `try`.
     let mut info: Vec<Vec<(Vec<usize>, Option<usize>)>> = Vec::with_capacity(prog.blocks.len());
     for b in &prog.blocks {
@@ -246,7 +253,7 @@ pub fn coalesce_vars(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
         for op in &b.ops {
             match op_uses_def(op) {
                 Some(x) => v.push(x),
-                None => return,
+                None => return HashMap::new(),
             }
         }
         info.push(v);
@@ -275,7 +282,7 @@ pub fn coalesce_vars(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
     }
     let n = order.len();
     if n == 0 {
-        return;
+        return HashMap::new();
     }
     let idx = |v: &usize| index.get(v).copied();
     // Liveness (backward, to a fixpoint).
@@ -342,11 +349,17 @@ pub fn coalesce_vars(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
     }
     // Greedy coloring in order of first appearance.
     let mut color: Vec<usize> = vec![usize::MAX; n];
+    // (The name the variables of each color have.)
+    let mut color_name: Vec<Option<&String>> = Vec::new();
     for i in 0..n {
         let taken: HashSet<usize> = adj[i].iter().map(|&j| color[j]).collect();
+        let name = names_of.and_then(|m| m.get(&order[i]));
         let mut c = 0;
-        while taken.contains(&c) {
+        while taken.contains(&c) || (names_of.is_some() && color_name.get(c).is_some_and(|have| *have != name)) {
             c += 1;
+        }
+        if c == color_name.len() {
+            color_name.push(name);
         }
         color[i] = c;
     }
@@ -371,4 +384,5 @@ pub fn coalesce_vars(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
             rename_rexpr(e, &map);
         }
     }
+    map
 }

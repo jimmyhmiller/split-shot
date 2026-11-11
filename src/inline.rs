@@ -30,8 +30,81 @@ pub fn inline_temps(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
     let mut defs: HashMap<usize, usize> = HashMap::new();
     let mut uses: HashMap<usize, usize> = HashMap::new();
     count_program(prog, &mut defs, &mut uses);
+    let mut pairs: HashMap<usize, usize> = HashMap::new();
+    count_pairs(prog, &mut pairs);
+    let paired: HashSet<usize> = pairs.into_iter().filter(|(t, n)| defs.get(t) == Some(n) && uses.get(t) == Some(n)).map(|(t, _)| t).collect();
 
-    inline_program(prog, keep, &defs, &mut uses);
+    inline_program(prog, keep, &defs, &mut uses, &paired, false);
+}
+
+/// The size (in nodes) past which a temporary's value is not folded into
+/// its use.
+const MAX_FOLDED_NODES: usize = 40;
+
+/// Has `e` more than `limit` nodes? (Stops counting there.)
+fn larger_than(e: &RExpr, limit: usize) -> bool {
+    fn count(e: &RExpr, left: &mut usize) -> bool {
+        if *left == 0 {
+            return true;
+        }
+        *left -= 1;
+        children(e).into_iter().any(|c| count(c, left))
+    }
+    let mut left = limit;
+    count(e, &mut left)
+}
+
+/// How far past a definition `count_pairs` looks for the read of it.
+const PAIR_REACH: usize = 48;
+
+/// For each variable, its definitions that are read once later in their
+/// block before anything else mentions the variable. A variable all of whose
+/// definitions are such, and with no other read, is a temporary at each of
+/// them: each read sees the one definition before it (code the specializer
+/// wrote several times over, a call's result named by where the call is).
+fn count_pairs(prog: &Program<Op, Cond>, pairs: &mut HashMap<usize, usize>) {
+    for b in &prog.blocks {
+        for (i, op) in b.ops.iter().enumerate() {
+            if let Op::Try { body, catch_body, finally_body, .. } = op {
+                count_pairs(body, pairs);
+                count_pairs(catch_body, pairs);
+                if let Some(f) = finally_body {
+                    count_pairs(f, pairs);
+                }
+            }
+            let Some(t) = op_def(op) else { continue };
+            let reads = |e: &RExpr| {
+                let mut n = 0;
+                visit(e, &mut |x| {
+                    if matches!(x, RExpr::Var(v) if *v == t) {
+                        n += 1;
+                    }
+                });
+                n
+            };
+            let mut found = None;
+            for later in b.ops[i + 1..].iter().take(PAIR_REACH) {
+                // (A `try` may read it anywhere in its parts.)
+                if matches!(later, Op::Try { .. }) {
+                    found = Some(false);
+                    break;
+                }
+                let n: usize = op_exprs(later).iter().map(|e| reads(e)).sum();
+                if n > 0 || op_def(later) == Some(t) {
+                    found = Some(n == 1);
+                    break;
+                }
+            }
+            let found = match found {
+                Some(f) => f,
+                None if b.ops.len() - (i + 1) <= PAIR_REACH => matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(e), .. } if reads(e) == 1),
+                None => false,
+            };
+            if found {
+                *pairs.entry(t).or_insert(0) += 1;
+            }
+        }
+    }
 }
 
 /// The variables `prog` reads (anywhere, nested programs included).
@@ -384,14 +457,16 @@ fn inline_program(
     keep: &HashSet<usize>,
     defs: &HashMap<usize, usize>,
     uses: &mut HashMap<usize, usize>,
+    paired: &HashSet<usize>,
+    in_try: bool,
 ) {
     for b in &mut prog.blocks {
         for op in b.ops.iter_mut() {
             if let Op::Try { body, catch_body, finally_body, .. } = op {
-                inline_program(body, keep, defs, uses);
-                inline_program(catch_body, keep, defs, uses);
+                inline_program(body, keep, defs, uses, paired, true);
+                inline_program(catch_body, keep, defs, uses, paired, true);
                 if let Some(f) = finally_body {
-                    inline_program(f, keep, defs, uses);
+                    inline_program(f, keep, defs, uses, paired, true);
                 }
             }
         }
@@ -401,7 +476,10 @@ fn inline_program(
                 i += 1;
                 continue;
             };
-            let single = !keep.contains(&t) && defs.get(&t) == Some(&1) && uses.get(&t) == Some(&1);
+            // (Not a value already large: folded on, a chain of a thousand
+            // statements would be one expression a thousand deep.)
+            let small = op_value(&b.ops[i]).is_none_or(|v| !larger_than(&v, MAX_FOLDED_NODES));
+            let single = small && !keep.contains(&t) && (paired.contains(&t) || (defs.get(&t) == Some(&1) && uses.get(&t) == Some(&1)));
             // (A value that reads no state and makes only fresh values may go
             // anywhere in the next statement: nothing there can tell.)
             let free = op_value(&b.ops[i]).is_some_and(|v| state_free(&v));
@@ -412,6 +490,34 @@ fn inline_program(
                     matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(e), .. } if cond_use_is_first(e, t) || (free && mentions(e, t)))
                 };
             if !foldable {
+                // A single-use temporary whose use comes after definitions
+                // that read no state and make only fresh values (`m = o.f;
+                // box = {value: null}; m.call(o, box)`): those go before
+                // it, where nothing can tell, and it folds into its use
+                // (`o.f(box)`, which fails as the original call did when
+                // `o.f` is no function). Not in a `try`, whose handler
+                // would see the variables assigned early.
+                if single && !in_try {
+                    let value = op_value(&b.ops[i]);
+                    let reads = |d: usize| value.as_ref().is_some_and(|v| mentions(v, d));
+                    let mut j = i + 1;
+                    while j < b.ops.len()
+                        && op_def(&b.ops[j]).is_some_and(|d| d != t && !reads(d) && !keep.contains(&d))
+                        && op_value(&b.ops[j]).is_some_and(|v| state_free(&v) && !mentions(&v, t))
+                    {
+                        j += 1;
+                    }
+                    let lands = if j < b.ops.len() {
+                        use_is_first(&b.ops[j], t)
+                    } else {
+                        matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(e), .. } if cond_use_is_first(e, t))
+                    };
+                    if j > i + 1 && lands {
+                        b.ops[i..j].rotate_left(1);
+                        i = j - 1;
+                        continue;
+                    }
+                }
                 i += 1;
                 continue;
             }
@@ -1038,6 +1144,31 @@ pub fn fold_literals(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) -> boo
         }
     }
     let mut changed = false;
+    // (The variables certainly holding integers, for `combine_int_arith`;
+    // those certainly holding Numbers, whose arithmetic does nothing but
+    // compute.)
+    let num = number_vars(prog, keep);
+    let mut ints = int32_vars(prog, keep, &num);
+    INT_VARS.with(|v| *v.borrow_mut() = ints.clone());
+    // (And those defined once, as an integer of at most 32 bits: `x >>> 0`.)
+    for b in prog.blocks.iter() {
+        for op in &b.ops {
+            if let Op::Assign { var, expr } | Op::Eval { dst: var, expr } = op {
+                if ndefs.get(var) == Some(&1) && !keep.contains(var) && wrapped_int(expr) {
+                    ints.insert(*var);
+                    INT_VARS.with(|v| v.borrow_mut().insert(*var));
+                }
+            }
+        }
+    }
+    fn only_computes(e: &RExpr, num: &HashSet<usize>) -> bool {
+        match e {
+            RExpr::Num(_) => true,
+            RExpr::Var(v) => num.contains(v),
+            RExpr::Bin(_, a, b) => only_computes(a, num) && only_computes(b, num),
+            _ => false,
+        }
+    }
     for b in prog.blocks.iter_mut() {
         for op in b.ops.iter_mut() {
             for e in op_exprs_mut(op) {
@@ -1045,10 +1176,10 @@ pub fn fold_literals(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) -> boo
                 changed |= fold_expr(e, &objs);
             }
         }
-        // (A statement evaluated only for what it does, now a literal, does
-        // nothing.)
+        // (A statement evaluated only for what it does, now a literal, or
+        // arithmetic on Numbers, does nothing.)
         let before = b.ops.len();
-        b.ops.retain(|op| !matches!(op, Op::Effect(e) if pure_literal(e) && !matches!(e, RExpr::Var(_))));
+        b.ops.retain(|op| !matches!(op, Op::Effect(e) if (pure_literal(e) && !matches!(e, RExpr::Var(_))) || (matches!(e, RExpr::Bin(..)) && only_computes(e, &num))));
         changed |= b.ops.len() != before;
         if let Terminator::Cond { cond: Cond::Falsy(e), t, f } = &mut b.term {
             changed |= subst_consts(e, &consts);
@@ -1059,7 +1190,14 @@ pub fn fold_literals(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) -> boo
             }
         }
     }
+    INT_VARS.with(|v| v.borrow_mut().clear());
     changed
+}
+
+thread_local! {
+    /// The variables of the function `fold_literals` is at work on that
+    /// certainly hold 32-bit integers (see `wrapped_int`).
+    static INT_VARS: std::cell::RefCell<HashSet<usize>> = std::cell::RefCell::new(HashSet::new());
 }
 
 fn subst_consts(e: &mut RExpr, consts: &HashMap<usize, RExpr>) -> bool {
@@ -1123,6 +1261,10 @@ fn prim_strict_eq(a: &RExpr, b: &RExpr) -> Option<bool> {
 fn fold_expr(e: &mut RExpr, objs: &HashSet<usize>) -> bool {
     let mut changed = false;
     for_each_child_mut(e, &mut |c| changed |= fold_expr(c, objs));
+    while let Some(r) = combine_int_arith(e).or_else(|| combine_strings(e)) {
+        *e = r;
+        changed = true;
+    }
     let literal_truthy = |x: &RExpr| literal_truthy_in(x, objs);
     let folded = match e {
         RExpr::Opaque(op, xs) => match (op.as_str(), xs.as_mut_slice()) {
@@ -1267,5 +1409,245 @@ pub fn fold_global_base(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>) {
                 i += 1;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Integer arithmetic under a wrap.
+// ---------------------------------------------------------------------------
+
+/// An integer literal of at most 32 bits: sums of a few of them, and of one
+/// with a 32-bit integer, are exact (far below 2^53).
+fn small_int(e: &RExpr) -> Option<i64> {
+    let RExpr::Num(n) = e else { return None };
+    let f = n.f();
+    (f.fract() == 0.0 && f.abs() <= 4294967296.0 && !(f == 0.0 && f.is_sign_negative())).then_some(f as i64)
+}
+
+/// Is `e` certainly an integer-valued Number of small magnitude when it
+/// evaluates without throwing: a small integer literal, a bitwise
+/// operator's result with a Number literal operand (with two BigInts it
+/// would be a BigInt; mixing throws), or such a value plus or minus a small
+/// integer literal? (Its value is then exact, and so is that of adding a
+/// small integer to it.)
+fn wrapped_int(e: &RExpr) -> bool {
+    use crate::js::Bop;
+    match e {
+        RExpr::Num(_) => small_int(e).is_some(),
+        // (A variable every definition of which is a 32-bit integer.)
+        RExpr::Var(v) => INT_VARS.with(|s| s.borrow().contains(v)),
+        RExpr::Bin(Bop::BitOr | Bop::BitAnd | Bop::BitXor | Bop::Shl | Bop::Shr | Bop::UShr, a, b) => {
+            matches!(&**a, RExpr::Num(_)) || matches!(&**b, RExpr::Num(_)) || wrapped_int(a) || wrapped_int(b)
+        }
+        RExpr::Bin(Bop::Add | Bop::Sub, a, b) => wrapped_int(a) && small_int(b).is_some(),
+        _ => false,
+    }
+}
+
+/// `e` as `base + c` for a small integer literal `c` (`base - c` as `base +
+/// -c`), when `base` is an integer (`wrapped_int`).
+fn int_plus(e: &RExpr) -> Option<(&RExpr, i64)> {
+    use crate::js::Bop;
+    match e {
+        RExpr::Bin(op @ (Bop::Add | Bop::Sub), a, b) if wrapped_int(a) => {
+            let c = small_int(b)?;
+            Some((a, if *op == Bop::Add { c } else { -c }))
+        }
+        _ => None,
+    }
+}
+
+/// `base + c`, written `base - |c|` for a negative `c` and `base` for zero.
+fn plus_int(base: RExpr, c: i64) -> RExpr {
+    use crate::js::Bop;
+    use crate::jsnum::JsNum;
+    match c {
+        0 => base,
+        c if c < 0 => RExpr::Bin(Bop::Sub, Box::new(base), Box::new(RExpr::Num(JsNum::int(-c)))),
+        c => RExpr::Bin(Bop::Add, Box::new(base), Box::new(RExpr::Num(JsNum::int(c)))),
+    }
+}
+
+/// A reduction of an integer modulo a power of two (what storing into a
+/// typed array, or asm.js-style code, applies to every value): `x & (2^k -
+/// 1)`, `x << n >> n`, `x | 0`, `x >>> 0`. The operand, and the bits kept
+/// (`k`, signed or not).
+#[derive(PartialEq, Clone, Copy)]
+enum Wrap {
+    Mask(u32),
+    Signed(u32),
+    Unsigned32,
+}
+
+fn as_wrap(e: &RExpr) -> Option<(Wrap, &RExpr)> {
+    use crate::js::Bop;
+    match e {
+        RExpr::Bin(Bop::BitAnd, x, m) => {
+            let m = small_int(m)?;
+            (m > 0 && (m + 1) & m == 0).then(|| (Wrap::Mask((m + 1).trailing_zeros()), &**x))
+        }
+        RExpr::Bin(Bop::BitOr, x, z) if small_int(z) == Some(0) => Some((Wrap::Signed(32), x)),
+        RExpr::Bin(Bop::UShr, x, z) if small_int(z) == Some(0) => Some((Wrap::Unsigned32, x)),
+        RExpr::Bin(Bop::Shr, inner, n) => {
+            let n = small_int(n)?;
+            match &**inner {
+                RExpr::Bin(Bop::Shl, x, n2) if small_int(n2) == Some(n) && (1..32).contains(&n) => Some((Wrap::Signed(32 - n as u32), x)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The largest constant a combination makes (sums stay exact).
+const MAX_COMBINED: i64 = 1 << 40;
+
+/// Combine integer arithmetic at the root of `e` (its operands taken as
+/// already combined), when that changes nothing it computes:
+///
+/// - `(u + c1) + c2` is `u + (c1 + c2)` for an integer `u` and small integer
+///   literals: every sum is exact.
+/// - `W(W(t) + c)` is `W(t + c)` for a reduction `W` modulo a power of two
+///   and an integer `t`: reducing first changes the sum by a multiple of
+///   that power, which the outer reduction drops. (`& 255` after `& 65535`
+///   likewise: the inner one keeps every bit the outer one keeps.)
+///
+/// So the increments an unrolled loop applies to a byte, `((b & 255) + 1 &
+/// 255) + 1 & 255`, are one: `(b & 255) + 2 & 255`. The innermost
+/// reduction stays unless its operand is an integer: it is what makes
+/// `b` one (`b` may be a fraction, a string, an object with a `valueOf`).
+/// `None` when nothing combines.
+pub fn combine_int_arith(e: &RExpr) -> Option<RExpr> {
+    use crate::js::Bop;
+    // `(u + c1) + c2`.
+    if let RExpr::Bin(op @ (Bop::Add | Bop::Sub), a, b) = e {
+        if let (Some((u, c1)), Some(c2)) = (int_plus(a), small_int(b)) {
+            let c = c1 + if *op == Bop::Add { c2 } else { -c2 };
+            if c.abs() <= MAX_COMBINED {
+                return Some(plus_int(u.clone(), c));
+            }
+        }
+        return None;
+    }
+    // `W(W'(t) + c)`, `W(W'(t))`.
+    let (w, operand) = as_wrap(e)?;
+    let (inner, c) = match int_plus(operand) {
+        Some((x, c)) => (x, c),
+        None => (operand, 0),
+    };
+    let (w2, t) = as_wrap(inner)?;
+    // (The inner reduction keeps what the outer one does.)
+    let keeps = match (w, w2) {
+        (Wrap::Mask(k), Wrap::Mask(k2)) => k2 >= k,
+        (Wrap::Mask(k), Wrap::Signed(k2)) => k2 >= k,
+        (Wrap::Mask(_), Wrap::Unsigned32) => true,
+        (Wrap::Signed(k), Wrap::Signed(k2)) => k2 >= k,
+        (Wrap::Signed(k), Wrap::Mask(k2)) => k2 >= k,
+        (Wrap::Signed(_), Wrap::Unsigned32) => true,
+        (Wrap::Unsigned32, Wrap::Unsigned32) => true,
+        (Wrap::Unsigned32, Wrap::Signed(32)) => true,
+        (Wrap::Unsigned32, _) => false,
+    };
+    if !keeps {
+        return None;
+    }
+    // (The inner reduction goes only from an integer: then `t + c` is the
+    // exact sum, congruent to the reduced one's. From anything else it is
+    // the conversion to one. A reduction applied twice is applied once.)
+    let sum = if wrapped_int(t) {
+        let (base, c0) = int_plus(t).unwrap_or((t, 0));
+        let total = c0 + c;
+        if total.abs() > MAX_COMBINED {
+            return None;
+        }
+        // (Any constant congruent to the total does: the one nearest zero.)
+        let bits = match w {
+            Wrap::Mask(k) | Wrap::Signed(k) => k,
+            Wrap::Unsigned32 => 32,
+        };
+        let m = 1i64 << bits;
+        let mut total = total.rem_euclid(m);
+        if total > m / 2 {
+            total -= m;
+        }
+        plus_int(base.clone(), total)
+    } else if c == 0 && w == w2 {
+        return Some(inner.clone());
+    } else {
+        return None;
+    };
+    Some(rewrap(e, sum))
+}
+
+/// `e`'s reduction (see `as_wrap`), of `operand`.
+fn rewrap(e: &RExpr, operand: RExpr) -> RExpr {
+    use crate::js::Bop;
+    match e {
+        RExpr::Bin(Bop::Shr, inner, n) => match &**inner {
+            RExpr::Bin(Bop::Shl, _, n2) => RExpr::Bin(Bop::Shr, Box::new(RExpr::Bin(Bop::Shl, Box::new(operand), n2.clone())), n.clone()),
+            _ => unreachable!("a sign extension is a shift left then right"),
+        },
+        RExpr::Bin(op, _, m) => RExpr::Bin(*op, Box::new(operand), m.clone()),
+        _ => unreachable!("a reduction is a binary operator"),
+    }
+}
+
+/// `combine_int_arith`, everywhere in `e` (operands first). Whether anything
+/// changed.
+pub fn combine_int_arith_deep(e: &mut RExpr) -> bool {
+    let mut changed = false;
+    for_each_child_mut(e, &mut |c| changed |= combine_int_arith_deep(c));
+    while let Some(r) = combine_int_arith(e) {
+        *e = r;
+        changed = true;
+    }
+    changed
+}
+
+// ---------------------------------------------------------------------------
+// String concatenation.
+// ---------------------------------------------------------------------------
+
+/// Is `e` certainly a string when it evaluates without throwing: a string
+/// literal, a template's conversion, or a `+` with such an operand (which
+/// then concatenates)?
+fn is_string(e: &RExpr) -> bool {
+    use crate::js::Bop;
+    match e {
+        RExpr::Str(_) => true,
+        RExpr::Opaque(op, xs) => match (op.as_str(), xs.as_slice()) {
+            (crate::js::TEMPLATE_TO_STRING, [_]) => true,
+            ("?:", [_, a, b]) => is_string(a) && is_string(b),
+            _ => false,
+        },
+        RExpr::Bin(Bop::Add, a, b) => is_string(a) || is_string(b),
+        _ => false,
+    }
+}
+
+/// Combine string concatenation at the root of `e` (its operands taken as
+/// already combined), when that changes nothing it computes:
+///
+/// - `"" + s` and `s + ""` are `s`, and a template's conversion of `s` is
+///   `s`, for a string `s`: nothing is converted, nothing is added.
+/// - `(x + "a") + "b"` is `x + "ab"`: the left operand is a string once `x +
+///   "a"` is, so the second `+` appends.
+///
+/// `None` when nothing combines.
+pub fn combine_strings(e: &RExpr) -> Option<RExpr> {
+    use crate::js::Bop;
+    match e {
+        RExpr::Opaque(op, xs) if op == crate::js::TEMPLATE_TO_STRING && xs.len() == 1 && is_string(&xs[0]) => Some(xs[0].clone()),
+        RExpr::Bin(Bop::Add, a, b) => match (&**a, &**b) {
+            (RExpr::Str(x), RExpr::Str(y)) => Some(RExpr::Str(format!("{x}{y}"))),
+            (RExpr::Str(x), s) if x.is_empty() && is_string(s) => Some(s.clone()),
+            (s, RExpr::Str(y)) if y.is_empty() && is_string(s) => Some(s.clone()),
+            (RExpr::Bin(Bop::Add, x, mid), RExpr::Str(y)) => match &**mid {
+                RExpr::Str(m) => Some(RExpr::Bin(Bop::Add, x.clone(), Box::new(RExpr::Str(format!("{m}{y}"))))),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
     }
 }

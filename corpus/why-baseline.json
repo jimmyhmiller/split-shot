@@ -1,0 +1,998 @@
+{
+ "arguments_more.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "arguments_object.js": {
+  "merged": 0,
+  "gap": 46
+ },
+ "array_callbacks_effects_holes.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_callbacks_foreach_flatmap.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_callbacks_runtime_results.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_callbacks_throw.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_holes.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_holes_and_string_index.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_length_and_named_props.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_register_vm.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "array_register_vm_ternary.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "asm_double.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "asm_heap.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "asm_static.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "asm_sum.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "asm_table.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "asm_vm.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "async_basic.js": {
+  "merged": 39,
+  "gap": 8
+ },
+ "async_generator.js": {
+  "merged": 19,
+  "gap": 5
+ },
+ "bigint_values.js": {
+  "merged": 0,
+  "gap": 24
+ },
+ "block_fns_annexb.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "block_fns_strict.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "block_scoping.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "brainfuck_masked_increments.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "brainfuck_thousand_increments.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "builtin_bracket_keys.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "builtin_constants_fold.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "builtin_global_getter.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "builtin_method_callbacks.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "builtins_pristine.js": {
+  "merged": 0,
+  "gap": 17
+ },
+ "bundler_interop_reflection.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "call_apply_standard.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "capture_before_init.js": {
+  "merged": 0,
+  "gap": 14
+ },
+ "capture_before_lexical.js": {
+  "merged": 0,
+  "gap": 10
+ },
+ "capture_intrinsic_method.js": {
+  "merged": 0,
+  "gap": 15
+ },
+ "class_basic.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_call_without_new.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_constructor_captures.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_ctor_super_property.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_escape.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_extends_builtin.js": {
+  "merged": 0,
+  "gap": 10
+ },
+ "class_extends_null.js": {
+  "merged": 0,
+  "gap": 12
+ },
+ "class_from_source.js": {
+  "merged": 0,
+  "gap": 8
+ },
+ "class_inmain.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_modeled_members.js": {
+  "merged": 0,
+  "gap": 15
+ },
+ "class_observables.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "class_private_members.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "class_self_reference.js": {
+  "merged": 0,
+  "gap": 17
+ },
+ "closure_counter.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "closure_identity.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "closure_static_captures.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "computed_key_named_read.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "computed_key_names.js": {
+  "merged": 0,
+  "gap": 75
+ },
+ "continue_join.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "conversion_runs_once_in_place.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "conversion_runs_user_code.js": {
+  "merged": 0,
+  "gap": 6
+ },
+ "converted_if_condition_runs.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "counter_only_inner_loop.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "dead_write_only_variables.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "debugger_statement.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "decided_condition_still_runs.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "deep_static_recursion.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "define_property_false_value.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "define_property_redefine.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "delete_value.js": {
+  "merged": 3,
+  "gap": 9
+ },
+ "descent_parser.js": {
+  "merged": 98,
+  "gap": 0
+ },
+ "destructure.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "discarded_conversion_runs.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "do_while_dynamic_exit.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "duplicate_function_decls.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "entry_module_state.js": {
+  "merged": 0,
+  "gap": 13
+ },
+ "entry_object_identity.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "entry_regex_lastindex.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "entry_returned_identity.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "entry_weak_memo.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "entry_written_then_read.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "error_objects_modeled.js": {
+  "merged": 1,
+  "gap": 17
+ },
+ "esbuild_cjs_interop.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "escape_on_one_path.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "escaped_function_calls_fold.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "eval_helper_rerun.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "explicit_iterator_protocol.js": {
+  "merged": 0,
+  "gap": 30
+ },
+ "final_cells.js": {
+  "merged": 0,
+  "gap": 7
+ },
+ "float_loop.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "fn_name_length.js": {
+  "merged": 0,
+  "gap": 1
+ },
+ "fnobj_residual.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "for_await.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "forof_dynamic.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "freeze_pending_reads.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "freeze_var_still_referenced.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "fresh_identity_through_runtime.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "fresh_symbol_key_holders.js": {
+  "merged": 0,
+  "gap": 17
+ },
+ "fresh_symbol_key_read.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "frozen_and_fresh_objects.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "function_bind_modeled.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "function_name_modeled.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "function_own_prototype.js": {
+  "merged": 0,
+  "gap": 44
+ },
+ "function_source_text.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "generator_delegate_loop.js": {
+  "merged": 0,
+  "gap": 10
+ },
+ "generator_escape.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "generator_finally.js": {
+  "merged": 42,
+  "gap": 0
+ },
+ "generator_forof.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "generator_in_operator.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "generator_infinite.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "generator_suspended.js": {
+  "merged": 0,
+  "gap": 30
+ },
+ "generator_values_read_once.js": {
+  "merged": 0,
+  "gap": 17
+ },
+ "generators.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "global_holds_materialized.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "global_read_before_write.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "guarded_fact_read_stays_guarded.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "if_conversion.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "if_convert_guarded_reads.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "in_array_string_keys.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "in_global_after_write.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "indirect_eval.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "inherited_index_accessor.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "inherited_index_computed_key.js": {
+  "merged": 0,
+  "gap": 6
+ },
+ "inherited_index_object_proto.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "inherited_index_polyfill_method.js": {
+  "merged": 0,
+  "gap": 1
+ },
+ "inherited_object_proto_method.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "inlined_function_as_base.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "inlined_member_callee_this.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "instanceof_standard_ctors.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "int_arith_under_wrap.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "intrinsic_fn_props.js": {
+  "merged": 0,
+  "gap": 6
+ },
+ "intrinsic_method_identity.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "join_after_escape.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "json_parse_static.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "loop_builds_large_table.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "loop_condition_tests_known_objects.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "loop_fresh_object_in_local.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "loop_fresh_object_per_iteration.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "loop_read_only_object_static.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "loop_unread_syntax_stays_static.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "map_forof.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "map_set.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "math_float.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "merge_reads_old_value_of_object_slot.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "named_fn_expr_recursion.js": {
+  "merged": 0,
+  "gap": 15
+ },
+ "native_argument_specialization.js": {
+  "merged": 9,
+  "gap": 0
+ },
+ "native_constructor_prototypes.js": {
+  "merged": 0,
+  "gap": 31
+ },
+ "native_distinct_capture_cells.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "native_global_accessors.js": {
+  "merged": 0,
+  "gap": 18
+ },
+ "native_global_rebinding.js": {
+  "merged": 0,
+  "gap": 14
+ },
+ "native_materialized_function_identity.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "native_owned_method_list.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "native_runtime_constructor_prototypes.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "native_source_code_guards.js": {
+  "merged": 0,
+  "gap": 54
+ },
+ "new_object_and_string.js": {
+  "merged": 0,
+  "gap": 8
+ },
+ "new_proxy_typeof.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "numbers_edge.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "object_choice_dynamic_key.ts": {
+  "merged": 0,
+  "gap": 4
+ },
+ "object_choice_dynamic_write.ts": {
+  "merged": 0,
+  "gap": 40
+ },
+ "object_choices.js": {
+  "merged": 0,
+  "gap": 9
+ },
+ "object_choices_mixed.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "object_freeze_modeled.js": {
+  "merged": 16,
+  "gap": 0
+ },
+ "object_literal.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "object_literal_super.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "optional_chaining.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "path_conditions.js": {
+  "merged": 211,
+  "gap": 0
+ },
+ "plain_method_calls.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "primitive_tags_and_loose_equality.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "pristine_callback_param.js": {
+  "merged": 0,
+  "gap": 8
+ },
+ "pristine_getter_result.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "pristine_keys_to_global.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "pristine_receiver_mutation.js": {
+  "merged": 0,
+  "gap": 6
+ },
+ "pristine_reflective_by_value.js": {
+  "merged": 0,
+  "gap": 12
+ },
+ "pristine_reviver_this.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "private_class_construct.js": {
+  "merged": 0,
+  "gap": 13
+ },
+ "private_entries_sound.js": {
+  "merged": 0,
+  "gap": 10
+ },
+ "proto_chain_shell_order.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "proto_dynloop.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "proto_escape.js": {
+  "merged": 0,
+  "gap": 17
+ },
+ "proto_inmain.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "proto_key_own.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "proto_keys.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "proxy_callable_class.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "proxy_parent_cell_fill.js": {
+  "merged": 0,
+  "gap": 6
+ },
+ "pure_string_calls.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "receiver_read_once.js": {
+  "merged": 0,
+  "gap": 11
+ },
+ "recursion_after_dynamic_branch.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "recursive_static_builtins.js": {
+  "merged": 0,
+  "gap": 8
+ },
+ "redefine_keeps_attributes.js": {
+  "merged": 0,
+  "gap": 10
+ },
+ "regex_exec.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "regex_exec_facts.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "regex_loop_folds.js": {
+  "merged": 0,
+  "gap": 3
+ },
+ "regex_ops.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "regexp_absent_property.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "regexp_source_escaped.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "repeated_long_strings.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "replace_function_static.js": {
+  "merged": 0,
+  "gap": 14
+ },
+ "script_closures.js": {
+  "merged": 0,
+  "gap": 8
+ },
+ "script_config.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "script_state.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "self_ref_init.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "sort_comparator_folds.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "source_mode_closures.js": {
+  "merged": 0,
+  "gap": 14
+ },
+ "spread_assign.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "spread_runtime_iterable.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "std_array_splice_selfhosted.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "std_date_utc_selfhosted.js": {
+  "merged": 0,
+  "gap": 2
+ },
+ "std_json_stringify_selfhosted.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "std_number_format_fallback_selfhosted.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "std_number_format_selfhosted.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "std_object_group_fallback_selfhosted.js": {
+  "merged": 0,
+  "gap": 225
+ },
+ "std_object_group_selfhosted.js": {
+  "merged": 0,
+  "gap": 7
+ },
+ "std_reflect_and_descriptors_selfhosted.js": {
+  "merged": 0,
+  "gap": 12
+ },
+ "std_set_methods_fallback_selfhosted.js": {
+  "merged": 0,
+  "gap": 7
+ },
+ "std_set_methods_selfhosted.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "std_string_case_selfhosted.js": {
+  "merged": 0,
+  "gap": 42
+ },
+ "std_uri_selfhosted.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "store_escapes_value.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "string_lone_surrogate.js": {
+  "merged": 0,
+  "gap": 11
+ },
+ "string_number_multibyte.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "string_wrapper_object.js": {
+  "merged": 0,
+  "gap": 11
+ },
+ "strings_map_join.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "subclass_array_semantics.js": {
+  "merged": 0,
+  "gap": 53
+ },
+ "subclass_collection_semantics.js": {
+  "merged": 0,
+  "gap": 32
+ },
+ "super_accessor_receiver.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "symbol_keyed_members.js": {
+  "merged": 0,
+  "gap": 25
+ },
+ "symbol_keys.js": {
+  "merged": 0,
+  "gap": 23
+ },
+ "tagged_templates.js": {
+  "merged": 0,
+  "gap": 75
+ },
+ "temporal_dead_zone.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "token_table_reduce.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_converts_unknown.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_finally.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_inlined_finally_return.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_inlined_folds.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_inlined_loop_return.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_inlined_method_dynamic_loop.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_inlined_nested_rethrow.js": {
+  "merged": 0,
+  "gap": 28
+ },
+ "try_inlined_recursion.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_inlined_runtime_return.js": {
+  "merged": 0,
+  "gap": 31
+ },
+ "try_region_keeps_globals.js": {
+  "merged": 0,
+  "gap": 12
+ },
+ "try_region_keeps_unwritten.js": {
+  "merged": 7,
+  "gap": 0
+ },
+ "try_residual_break_continue.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "try_residual_labeled_continue.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "trycatch.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "ts_annotations_as_facts.ts": {
+  "merged": 0,
+  "gap": 0
+ },
+ "typed_array_loop.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "typed_arrays.js": {
+  "merged": 0,
+  "gap": 25
+ },
+ "typeof_environment_names.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "unused_captures.js": {
+  "merged": 0,
+  "gap": 8
+ },
+ "update_single_read.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "user_conversion_inline.js": {
+  "merged": 0,
+  "gap": 5
+ },
+ "verbatim_eval_function.js": {
+  "merged": 0,
+  "gap": 4
+ },
+ "vm_ternary_jz.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "weak_dead_entries.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "weak_entries_operand_key.js": {
+  "merged": 0,
+  "gap": 45
+ }
+}

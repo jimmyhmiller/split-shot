@@ -1,0 +1,838 @@
+{
+  "summary": [
+    {
+      "name": "next-route",
+      "verifiedPerProcess": 523,
+      "medianNs": {
+        "original": 964.5131530761699,
+        "assembled": 1134.9143981933576,
+        "specialized": 844.1886901855434
+      },
+      "speedup": 1.1477453690985666,
+      "processSpeedups": [
+        1.1477453690985666,
+        1.1425326639523927,
+        1.1579638185133723
+      ],
+      "minSpeedup": 1.1425326639523927,
+      "maxSpeedup": 1.1579638185133723,
+      "specializationMs": 223.840792,
+      "sourceSha256": "e775f217fcef02f785c8da91c57015bc958f30550d7c122eddad7021c042dfef",
+      "residualSha256": "2abae897ce43aad2200e8b8e5e5778847fd02607cf8f83e41c45610ad10b706e"
+    },
+    {
+      "name": "serve-rewrites",
+      "verifiedPerProcess": 524,
+      "medianNs": {
+        "original": 18976.582763671868,
+        "assembled": 19093.18017578121,
+        "specialized": 19028.737548828056
+      },
+      "speedup": 0.9972591568398924,
+      "processSpeedups": [
+        0.9972591568398924,
+        0.9951039574072001,
+        1.0043595989014031
+      ],
+      "minSpeedup": 0.9951039574072001,
+      "maxSpeedup": 1.0043595989014031,
+      "specializationMs": 26.517458000000033,
+      "sourceSha256": "6c65d7dea0a454e9b867d0a4d055fa4a43edd4e2b76f11a00f4864ab834bd646",
+      "residualSha256": "97b771e134cd0a1255b5417a7badc955f9309b7922c154c8a59449b0adb4f64f"
+    },
+    {
+      "name": "css-select",
+      "correctnessFailure": {
+        "caseIndex": 0,
+        "expected": {
+          "value": false
+        },
+        "assembled": {
+          "value": false
+        },
+        "residual": {
+          "error": {
+            "name": "ReferenceError",
+            "message": "aw is not defined"
+          }
+        }
+      },
+      "sourceSha256": "6e8b48735a4f13ef877cf26342d551320ae8c6789b42c25d3f5923ab69ad2241",
+      "residualSha256": "a0d9e687e350d541f37b6ba10faf8e9851d6a24caf37bf7413e8811cb619db4f"
+    },
+    {
+      "name": "css-select-tokens",
+      "blocked": "\nthread 'main' (156885769) panicked at src/js.rs:9412:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "name": "liquidjs",
+      "blocked": "error: `super` property outside a method\n"
+    },
+    {
+      "name": "serve-canonical",
+      "verifiedPerProcess": 523,
+      "medianNs": {
+        "original": 98.48157501220895,
+        "assembled": 108.54180526733218,
+        "specialized": 91.74601364135559
+      },
+      "speedup": 1.073415302785616,
+      "processSpeedups": [
+        1.073415302785616,
+        1.072423069391311,
+        1.088280816141989
+      ],
+      "minSpeedup": 1.072423069391311,
+      "maxSpeedup": 1.088280816141989,
+      "specializationMs": 164.02179199999998,
+      "sourceSha256": "eeb8b80f5c19dc526075300aa2751db0cd73e6b03629d1383d525fb17dd0ac7a",
+      "residualSha256": "625bc292ba87b6e4e05668bcd427da2660c46560ac999499dd31240f5223acef"
+    }
+  ],
+  "runs": [
+    {
+      "measuredAt": "2026-11-10T04:43:52.286Z",
+      "node": "v26.5.0",
+      "platform": "darwin 27.2.0 arm64",
+      "cpu": "Apple M2 Max",
+      "compilerSha256": "31deea7fb845065eead9c34da1d3f97fb5aafd6a5b079347a2953e70fe709b72",
+      "benchmarkSha256": "e9b7f88977b1057e9ba5cb883b057a007e791600f91db3d2e4fe32eb5713d8e7",
+      "lockSha256": "14aabf91091d788df43fedcdfbf4200f11cb5b4dc702282ced737fac5c0b924e",
+      "method": "Installed, preconfigured upstream oracle vs unchanged source assembly vs PE residual. Same realm; separate monomorphic timing loops; common calibrated batch; 5 warmup batches; 15 rotating-order samples; median ns/op. Setup and specialization excluded. Checksum consumption included.",
+      "results": [
+        {
+          "name": "next-route",
+          "verified": 523,
+          "inputs": 256,
+          "iterationsPerSample": 65536,
+          "medianNs": {
+            "original": 964.2442016601568,
+            "assembled": 1129.813522338867,
+            "specialized": 840.120315551758
+          },
+          "speedupVsInstalled": 1.1477453690985666,
+          "speedupVsAssembly": 1.3448234751909907,
+          "specializationMs": 223.840792,
+          "sourceSha256": "e775f217fcef02f785c8da91c57015bc958f30550d7c122eddad7021c042dfef",
+          "residualSha256": "2abae897ce43aad2200e8b8e5e5778847fd02607cf8f83e41c45610ad10b706e",
+          "samplesNs": {
+            "original": [
+              964.1971588134762,
+              964.2442016601568,
+              962.2605743408209,
+              963.8525695800787,
+              966.9367523193334,
+              958.6467742919922,
+              959.0479431152363,
+              968.2922363281263,
+              969.6680755615222,
+              966.1846160888693,
+              961.1098022460907,
+              963.8608245849598,
+              965.2169494628881,
+              965.9582824707024,
+              964.3052368164124
+            ],
+            "assembled": [
+              1135.1661682128915,
+              1129.813522338867,
+              1132.9949645996069,
+              1123.7583160400368,
+              1124.4055480957027,
+              1122.9248046874945,
+              1123.6432495117174,
+              1130.502700805662,
+              1130.9305877685583,
+              1132.2078704833968,
+              1128.9107055664076,
+              1128.5413055419913,
+              1132.1144104003909,
+              1131.6566467285127,
+              1127.581268310543
+            ],
+            "specialized": [
+              837.3133392333975,
+              839.1234130859376,
+              841.0377502441405,
+              839.0623779296856,
+              838.067367553711,
+              840.120315551758,
+              843.7678070068386,
+              844.8473663330014,
+              842.5388336181644,
+              841.4853515625042,
+              837.9109649658197,
+              838.226318359371,
+              839.9009704589886,
+              844.4690704345753,
+              856.5591278076184
+            ]
+          }
+        },
+        {
+          "name": "serve-rewrites",
+          "verified": 524,
+          "inputs": 256,
+          "iterationsPerSample": 4096,
+          "medianNs": {
+            "original": 18976.582763671868,
+            "assembled": 19093.18017578121,
+            "specialized": 19028.737548828056
+          },
+          "speedupVsInstalled": 0.9972591568398924,
+          "speedupVsAssembly": 1.0033865949744587,
+          "specializationMs": 26.517458000000033,
+          "sourceSha256": "6c65d7dea0a454e9b867d0a4d055fa4a43edd4e2b76f11a00f4864ab834bd646",
+          "residualSha256": "97b771e134cd0a1255b5417a7badc955f9309b7922c154c8a59449b0adb4f64f",
+          "samplesNs": {
+            "original": [
+              18976.582763671868,
+              18976.033447265727,
+              18959.950683593797,
+              26853.444335937616,
+              19044.952392577972,
+              18828.552246093812,
+              18788.116455078052,
+              19035.41064453118,
+              18847.69677734366,
+              18967.234130859324,
+              18989.552734374858,
+              18989.217285156235,
+              19142.679931640316,
+              19174.91674804683,
+              18975.53491210946
+            ],
+            "assembled": [
+              19017.242431640603,
+              19056.71191406233,
+              20736.643554687627,
+              18873.626708984404,
+              19274.393798828227,
+              18878.204345702976,
+              19106.03833007829,
+              19093.18017578121,
+              18988.2202148437,
+              19020.82299804686,
+              19220.713378906185,
+              19148.244140624993,
+              19160.13598632782,
+              19251.169921874924,
+              18903.645751953136
+            ],
+            "specialized": [
+              18911.38696289074,
+              18815.897705078078,
+              19016.05224609382,
+              19028.737548828056,
+              19115.8344726563,
+              18963.52124023437,
+              18881.795410156334,
+              18963.724853515494,
+              18942.728515624953,
+              19083.180664062562,
+              19555.460449218743,
+              19036.94653320298,
+              19227.8850097658,
+              19048.889160156345,
+              19452.585937499654
+            ]
+          }
+        },
+        {
+          "name": "css-select",
+          "correctnessFailure": {
+            "caseIndex": 0,
+            "expected": {
+              "value": false
+            },
+            "assembled": {
+              "value": false
+            },
+            "residual": {
+              "error": {
+                "name": "ReferenceError",
+                "message": "aw is not defined"
+              }
+            }
+          },
+          "sourceSha256": "6e8b48735a4f13ef877cf26342d551320ae8c6789b42c25d3f5923ab69ad2241",
+          "residualSha256": "a0d9e687e350d541f37b6ba10faf8e9851d6a24caf37bf7413e8811cb619db4f"
+        },
+        {
+          "name": "css-select-tokens",
+          "blocked": "\nthread 'main' (156885769) panicked at src/js.rs:9412:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "name": "liquidjs",
+          "blocked": "error: `super` property outside a method\n"
+        },
+        {
+          "name": "serve-canonical",
+          "verified": 523,
+          "inputs": 256,
+          "iterationsPerSample": 524288,
+          "medianNs": {
+            "original": 98.48157501220895,
+            "assembled": 108.54180526733218,
+            "specialized": 91.74601364135559
+          },
+          "speedupVsInstalled": 1.073415302785616,
+          "speedupVsAssembly": 1.1830683531562802,
+          "specializationMs": 164.02179199999998,
+          "sourceSha256": "eeb8b80f5c19dc526075300aa2751db0cd73e6b03629d1383d525fb17dd0ac7a",
+          "residualSha256": "625bc292ba87b6e4e05668bcd427da2660c46560ac999499dd31240f5223acef",
+          "samplesNs": {
+            "original": [
+              98.54642486572044,
+              98.63058662414394,
+              98.28519821166934,
+              98.09803962707377,
+              99.52203369140503,
+              98.97899627685572,
+              98.62963294983082,
+              98.30729293823157,
+              98.25841712951532,
+              100.03972053527696,
+              98.48157501220895,
+              98.45948219299252,
+              98.09319114684884,
+              98.8175067901595,
+              98.33025932312265
+            ],
+            "assembled": [
+              108.53115653991496,
+              108.48983001708959,
+              108.29854011535495,
+              108.79222679138073,
+              110.71840858459595,
+              108.48951339721691,
+              109.1105937957755,
+              108.8346633911115,
+              108.9472770690915,
+              108.26174354553255,
+              108.54180526733218,
+              108.64949226379456,
+              108.52829551696863,
+              108.41464996337938,
+              109.19276809692388
+            ],
+            "specialized": [
+              91.53827095031639,
+              92.24327468871849,
+              91.64993095397631,
+              92.92991828918282,
+              93.91315841674603,
+              91.83176231384108,
+              91.95717239379731,
+              91.89033508301067,
+              92.42693519592032,
+              91.24175643920873,
+              91.46443939209159,
+              90.72534179687536,
+              91.74601364135559,
+              91.3113746643067,
+              91.6300621032727
+            ]
+          }
+        }
+      ],
+      "checksum": 82578280
+    },
+    {
+      "measuredAt": "2026-11-10T04:44:04.537Z",
+      "node": "v26.5.0",
+      "platform": "darwin 27.2.0 arm64",
+      "cpu": "Apple M2 Max",
+      "compilerSha256": "31deea7fb845065eead9c34da1d3f97fb5aafd6a5b079347a2953e70fe709b72",
+      "benchmarkSha256": "e9b7f88977b1057e9ba5cb883b057a007e791600f91db3d2e4fe32eb5713d8e7",
+      "lockSha256": "14aabf91091d788df43fedcdfbf4200f11cb5b4dc702282ced737fac5c0b924e",
+      "method": "Installed, preconfigured upstream oracle vs unchanged source assembly vs PE residual. Same realm; separate monomorphic timing loops; common calibrated batch; 5 warmup batches; 15 rotating-order samples; median ns/op. Setup and specialization excluded. Checksum consumption included.",
+      "results": [
+        {
+          "name": "next-route",
+          "verified": 523,
+          "inputs": 256,
+          "iterationsPerSample": 65536,
+          "medianNs": {
+            "original": 964.5131530761699,
+            "assembled": 1134.9143981933576,
+            "specialized": 844.1886901855434
+          },
+          "speedupVsInstalled": 1.1425326639523927,
+          "speedupVsAssembly": 1.3443847464290428,
+          "specializationMs": 223.840792,
+          "sourceSha256": "e775f217fcef02f785c8da91c57015bc958f30550d7c122eddad7021c042dfef",
+          "residualSha256": "2abae897ce43aad2200e8b8e5e5778847fd02607cf8f83e41c45610ad10b706e",
+          "samplesNs": {
+            "original": [
+              963.7317657470688,
+              961.5859985351548,
+              956.9632110595708,
+              960.4562225341805,
+              969.5040435791017,
+              970.9358215332018,
+              959.7358703613279,
+              964.5131530761699,
+              969.6229248046875,
+              966.6163177490181,
+              963.9765319824218,
+              964.3999633789022,
+              967.8109436035143,
+              974.3029327392641,
+              970.1576232910153
+            ],
+            "assembled": [
+              1128.6640167236344,
+              1150.4332275390598,
+              1126.3224334716776,
+              1134.9143981933576,
+              1133.852645874022,
+              1134.138732910156,
+              1132.7247619628902,
+              1135.977416992194,
+              1134.3739776611337,
+              1137.6813354492185,
+              1140.3802185058557,
+              1134.5144805908203,
+              1137.9489898681663,
+              1339.0172271728547,
+              1140.923812866214
+            ],
+            "specialized": [
+              844.8581695556651,
+              836.3863677978492,
+              837.5123291015641,
+              844.023391723632,
+              849.8255310058628,
+              848.9239959716815,
+              844.0920562744134,
+              841.3963317871129,
+              844.1886901855434,
+              852.3489532470743,
+              839.6422119140642,
+              840.3612823486353,
+              855.6683807373066,
+              1039.3263549804688,
+              847.3351898193315
+            ]
+          }
+        },
+        {
+          "name": "serve-rewrites",
+          "verified": 524,
+          "inputs": 256,
+          "iterationsPerSample": 4096,
+          "medianNs": {
+            "original": 18781.45361328132,
+            "assembled": 18953.155517578147,
+            "specialized": 18873.860839843772
+          },
+          "speedupVsInstalled": 0.9951039574072001,
+          "speedupVsAssembly": 1.0042012960891913,
+          "specializationMs": 26.517458000000033,
+          "sourceSha256": "6c65d7dea0a454e9b867d0a4d055fa4a43edd4e2b76f11a00f4864ab834bd646",
+          "residualSha256": "97b771e134cd0a1255b5417a7badc955f9309b7922c154c8a59449b0adb4f64f",
+          "samplesNs": {
+            "original": [
+              18775.37036132826,
+              18757.69042968756,
+              18749.63378906247,
+              18787.791015624887,
+              18917.16503906249,
+              18760.640625000047,
+              18798.807861328147,
+              18828.13525390614,
+              18736.460449218615,
+              18752.899169921955,
+              18802.327392578143,
+              18777.893066406425,
+              18789.96801757804,
+              18781.45361328132,
+              18952.524658203183
+            ],
+            "assembled": [
+              18940.836669921744,
+              18906.117919921915,
+              18985.37207031259,
+              18979.329589843717,
+              18959.34057617188,
+              18948.364257812544,
+              18943.949462890465,
+              19021.769287109524,
+              18929.423095703336,
+              18916.62597656252,
+              18979.390380859273,
+              18953.155517578147,
+              19131.3576660157,
+              18885.630126953325,
+              18968.424560546813
+            ],
+            "specialized": [
+              18946.289062500065,
+              18828.786132812693,
+              18811.79809570299,
+              18873.860839843772,
+              18906.423095703227,
+              19110.443115234244,
+              18929.94189453123,
+              18860.40234374997,
+              18816.243408203092,
+              18837.17846679689,
+              18794.06738281242,
+              18910.71582031234,
+              18916.0256347658,
+              18878.2858886718,
+              18849.28369140626
+            ]
+          }
+        },
+        {
+          "name": "css-select",
+          "correctnessFailure": {
+            "caseIndex": 0,
+            "expected": {
+              "value": false
+            },
+            "assembled": {
+              "value": false
+            },
+            "residual": {
+              "error": {
+                "name": "ReferenceError",
+                "message": "aw is not defined"
+              }
+            }
+          },
+          "sourceSha256": "6e8b48735a4f13ef877cf26342d551320ae8c6789b42c25d3f5923ab69ad2241",
+          "residualSha256": "a0d9e687e350d541f37b6ba10faf8e9851d6a24caf37bf7413e8811cb619db4f"
+        },
+        {
+          "name": "css-select-tokens",
+          "blocked": "\nthread 'main' (156885769) panicked at src/js.rs:9412:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "name": "liquidjs",
+          "blocked": "error: `super` property outside a method\n"
+        },
+        {
+          "name": "serve-canonical",
+          "verified": 523,
+          "inputs": 256,
+          "iterationsPerSample": 524288,
+          "medianNs": {
+            "original": 96.62000274658286,
+            "assembled": 108.00838470459081,
+            "specialized": 90.09504318237272
+          },
+          "speedupVsInstalled": 1.072423069391311,
+          "speedupVsAssembly": 1.1988271595137308,
+          "specializationMs": 164.02179199999998,
+          "sourceSha256": "eeb8b80f5c19dc526075300aa2751db0cd73e6b03629d1383d525fb17dd0ac7a",
+          "residualSha256": "625bc292ba87b6e4e05668bcd427da2660c46560ac999499dd31240f5223acef",
+          "samplesNs": {
+            "original": [
+              96.62000274658286,
+              96.49077987670951,
+              96.44500350951962,
+              96.49419784546129,
+              96.38301658630374,
+              104.46524620056144,
+              96.5513381958015,
+              97.61683082580575,
+              96.6787338256836,
+              96.79230117797671,
+              96.43038177490487,
+              96.65608406066866,
+              96.59639930725133,
+              99.57289695739641,
+              98.6094474792476
+            ],
+            "assembled": [
+              107.7265739440926,
+              107.65472984313948,
+              108.00711250305226,
+              107.53210449218619,
+              107.73579406738246,
+              108.00838470459081,
+              110.65896415710444,
+              134.9532604217503,
+              108.14277458191107,
+              109.37698554992423,
+              109.44048500061143,
+              107.19951057433855,
+              109.71125030517435,
+              107.21150970459045,
+              108.31260681152047
+            ],
+            "specialized": [
+              89.59460258483806,
+              90.43630027770824,
+              89.77723121643064,
+              89.80123138427679,
+              89.70864677429121,
+              91.9482707977294,
+              115.83789062499794,
+              91.09918212890645,
+              90.09504318237272,
+              89.8237228393571,
+              89.92306327819735,
+              89.68297767639189,
+              91.1824703216553,
+              90.1151504516598,
+              91.48295783996743
+            ]
+          }
+        }
+      ],
+      "checksum": 82578280
+    },
+    {
+      "measuredAt": "2026-11-10T04:44:16.764Z",
+      "node": "v26.5.0",
+      "platform": "darwin 27.2.0 arm64",
+      "cpu": "Apple M2 Max",
+      "compilerSha256": "31deea7fb845065eead9c34da1d3f97fb5aafd6a5b079347a2953e70fe709b72",
+      "benchmarkSha256": "e9b7f88977b1057e9ba5cb883b057a007e791600f91db3d2e4fe32eb5713d8e7",
+      "lockSha256": "14aabf91091d788df43fedcdfbf4200f11cb5b4dc702282ced737fac5c0b924e",
+      "method": "Installed, preconfigured upstream oracle vs unchanged source assembly vs PE residual. Same realm; separate monomorphic timing loops; common calibrated batch; 5 warmup batches; 15 rotating-order samples; median ns/op. Setup and specialization excluded. Checksum consumption included.",
+      "results": [
+        {
+          "name": "next-route",
+          "verified": 523,
+          "inputs": 256,
+          "iterationsPerSample": 65536,
+          "medianNs": {
+            "original": 1003.1763763427709,
+            "assembled": 1169.8640136718757,
+            "specialized": 866.3279113769531
+          },
+          "speedupVsInstalled": 1.1579638185133723,
+          "speedupVsAssembly": 1.3503709141870752,
+          "specializationMs": 223.840792,
+          "sourceSha256": "e775f217fcef02f785c8da91c57015bc958f30550d7c122eddad7021c042dfef",
+          "residualSha256": "2abae897ce43aad2200e8b8e5e5778847fd02607cf8f83e41c45610ad10b706e",
+          "samplesNs": {
+            "original": [
+              1013.231277465821,
+              995.9354400634786,
+              1003.1763763427709,
+              987.3886108398463,
+              991.8886718750033,
+              982.8923492431612,
+              995.3683166503898,
+              1027.884170532227,
+              1017.3956451416042,
+              1028.9274902343798,
+              1010.5889587402328,
+              1025.1833648681625,
+              1036.603286743168,
+              982.6412200927698,
+              990.1466369628895
+            ],
+            "assembled": [
+              1155.35545349121,
+              1169.8640136718757,
+              1181.7010192871103,
+              1160.0252838134747,
+              1168.4201660156248,
+              1160.6152954101583,
+              1158.489868164067,
+              1164.442062377924,
+              1205.0386962890666,
+              1215.936660766602,
+              1216.9481964111328,
+              1215.5691680908187,
+              1201.218276977542,
+              1223.4656066894556,
+              1158.2024841308576
+            ],
+            "specialized": [
+              845.3070220947288,
+              866.3279113769531,
+              872.0105590820301,
+              853.8157043457006,
+              854.827880859374,
+              859.605163574223,
+              862.7230377197259,
+              881.9853515624961,
+              887.7194671630881,
+              890.2371673584,
+              888.2662506103505,
+              896.4506683349638,
+              890.732452392573,
+              850.9680328369143,
+              853.4647674560553
+            ]
+          }
+        },
+        {
+          "name": "serve-rewrites",
+          "verified": 524,
+          "inputs": 256,
+          "iterationsPerSample": 4096,
+          "medianNs": {
+            "original": 19406.778808594096,
+            "assembled": 19236.88769531262,
+            "specialized": 19322.540283203125
+          },
+          "speedupVsInstalled": 1.0043595989014031,
+          "speedupVsAssembly": 0.9955672190801453,
+          "specializationMs": 26.517458000000033,
+          "sourceSha256": "6c65d7dea0a454e9b867d0a4d055fa4a43edd4e2b76f11a00f4864ab834bd646",
+          "residualSha256": "97b771e134cd0a1255b5417a7badc955f9309b7922c154c8a59449b0adb4f64f",
+          "samplesNs": {
+            "original": [
+              18951.761718750015,
+              18979.58374023423,
+              19000.976562499884,
+              18881.896972656297,
+              19280.02929687489,
+              19338.490722656366,
+              19056.711669921846,
+              19816.884521484335,
+              19661.407470703107,
+              19721.374511718626,
+              19565.623046875036,
+              19537.48583984405,
+              19565.093994140527,
+              19406.778808594096,
+              19802.80566406245
+            ],
+            "assembled": [
+              19066.1010742188,
+              19183.70556640614,
+              18905.40576171862,
+              19229.237792968812,
+              18824.452636718725,
+              19186.462402343674,
+              19180.175781249975,
+              19236.88769531262,
+              19795.68481445293,
+              20028.299804687456,
+              19965.41357421888,
+              19783.25415039084,
+              19410.56323242174,
+              19624.62353515626,
+              19878.255126952736
+            ],
+            "specialized": [
+              19283.782958984473,
+              19050.343994140738,
+              19176.971435546973,
+              19121.37841796868,
+              19014.028076171697,
+              19191.40624999982,
+              19296.701904296886,
+              19322.540283203125,
+              19653.92065429694,
+              19749.186279296893,
+              19862.009765625022,
+              19721.679687499716,
+              19380.126953124854,
+              19450.78540039047,
+              20051.778076171977
+            ]
+          }
+        },
+        {
+          "name": "css-select",
+          "correctnessFailure": {
+            "caseIndex": 0,
+            "expected": {
+              "value": false
+            },
+            "assembled": {
+              "value": false
+            },
+            "residual": {
+              "error": {
+                "name": "ReferenceError",
+                "message": "aw is not defined"
+              }
+            }
+          },
+          "sourceSha256": "6e8b48735a4f13ef877cf26342d551320ae8c6789b42c25d3f5923ab69ad2241",
+          "residualSha256": "a0d9e687e350d541f37b6ba10faf8e9851d6a24caf37bf7413e8811cb619db4f"
+        },
+        {
+          "name": "css-select-tokens",
+          "blocked": "\nthread 'main' (156885769) panicked at src/js.rs:9412:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        },
+        {
+          "name": "liquidjs",
+          "blocked": "error: `super` property outside a method\n"
+        },
+        {
+          "name": "serve-canonical",
+          "verified": 523,
+          "inputs": 256,
+          "iterationsPerSample": 524288,
+          "medianNs": {
+            "original": 101.4470252990729,
+            "assembled": 113.42875289917231,
+            "specialized": 93.21769142150993
+          },
+          "speedupVsInstalled": 1.088280816141989,
+          "speedupVsAssembly": 1.2168157263868766,
+          "specializationMs": 164.02179199999998,
+          "sourceSha256": "eeb8b80f5c19dc526075300aa2751db0cd73e6b03629d1383d525fb17dd0ac7a",
+          "residualSha256": "625bc292ba87b6e4e05668bcd427da2660c46560ac999499dd31240f5223acef",
+          "samplesNs": {
+            "original": [
+              101.89517211914301,
+              101.4470252990729,
+              101.41301155090419,
+              101.63760185241676,
+              103.30661201476966,
+              102.57760620117212,
+              101.32257080078256,
+              101.51664543152015,
+              102.52737998962466,
+              101.40792465209921,
+              99.2377586364751,
+              99.03073310852176,
+              129.91889190673913,
+              99.73883628845367,
+              99.0095939636254
+            ],
+            "assembled": [
+              113.16370964050554,
+              113.15608024597273,
+              114.40022850036854,
+              110.78659629822074,
+              115.33514785766822,
+              113.1461467742921,
+              116.78989791870029,
+              117.6956501007069,
+              114.14480209350624,
+              114.44783210754275,
+              113.16641235351379,
+              113.42875289917231,
+              112.62233924865667,
+              113.56528663635304,
+              109.21351051330561
+            ],
+            "specialized": [
+              93.21769142150993,
+              93.00883674621605,
+              93.1860599517817,
+              92.49266052246269,
+              94.37290763854995,
+              93.59963798523039,
+              94.60226631164554,
+              95.06336975097923,
+              94.04532051086531,
+              93.46032142639251,
+              92.87619590759438,
+              91.38727188110276,
+              92.83264541625965,
+              93.6222877502453,
+              92.81500053405847
+            ]
+          }
+        }
+      ],
+      "checksum": 82578280
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+function main(input) { const prefix='_NEXTSEP_';const out=[];for(let i=0;i<input.length;i++){out.push(input[i].map(value => typeof value==='string' ? value.replace(new RegExp('^'+prefix),'') : value));}return out; }

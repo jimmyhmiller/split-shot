@@ -22,6 +22,10 @@ use crate::residual::{Block, BlockId, Program, Terminator};
 /// unaffected; small enough to guarantee termination.
 const UNROLL_BOUND: usize = 5_000;
 
+/// How many of the most recent earlier states at a point a candidate whose
+/// loop guards are static is compared with (see `whistle_candidate`).
+const WHISTLE_WINDOW: usize = 512;
+
 /// A client supplies the *meaning* of its language; the engine supplies the
 /// fixpoint, memoization, termination, and CFG-reconstruction plumbing.
 pub trait Client {
@@ -313,7 +317,18 @@ fn whistle_candidate<C: Client>(client: &C, target: &C::State, cx: &Ctx<C>) -> O
             let (by_class, unclassed) = &cx.classes[&p];
             let same = by_class.get(&c).map(Vec::as_slice).unwrap_or(&[]);
             let (mut i, mut j) = (same.len(), unclassed.len());
+            let mut looked = 0usize;
             loop {
+                // (A classed candidate is compared with the most recent
+                // states only: a loop's growth shows against its last
+                // rounds, a join's other path arrived not long before. A
+                // loop that fires against none of them goes on, to the
+                // unroll backstop if it never ends, without each round
+                // being compared with every round before it.)
+                looked += 1;
+                if looked > WHISTLE_WINDOW {
+                    break None;
+                }
                 let next = match (i.checked_sub(1).map(|x| same[x]), j.checked_sub(1).map(|x| unclassed[x])) {
                     (Some(a), Some(b)) if a > b => {
                         i -= 1;

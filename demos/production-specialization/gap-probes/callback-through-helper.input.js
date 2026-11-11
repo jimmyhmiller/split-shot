@@ -1,0 +1,1 @@
+function main(input) { const prefix='_NEXTSEP_'; function clean(values) {return values.map(value => typeof value==='string' ? value.replace(new RegExp('^'+prefix),'') : value);} return clean(input); }

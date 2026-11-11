@@ -1,0 +1,1 @@
+function main(input) { const match=/^\/teams\/([^/]+?)\/projects\/([^/]+?)\/files\/(.+?)(?:\/)?$/.exec(input); if(!match) return false; return [match.length,typeof match[1],typeof match[2],typeof match[3]]; }

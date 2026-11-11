@@ -32,6 +32,9 @@ fn main() -> ExitCode {
     // `--long-names`: keep the residual's `v<id>` variable names (and block
     // labels) instead of shortening them.
     let short_names = !raw.iter().any(|a| a == "--long-names");
+    // `--source-names`: a residual variable that stands for one variable of
+    // the program has its name.
+    let source_names = raw.iter().any(|a| a == "--source-names");
     // `--prepack-intrinsics`: the environment defines Prepack's intrinsics
     // (`__abstract(type, name)`, `__optimize(f)`, ...) with their runtime
     // meaning, and the specializer may use what they declare.
@@ -104,17 +107,33 @@ fn main() -> ExitCode {
             }
         }
     }
+    // `--why`: after the residual, on stderr, the account of what it holds
+    // and for what cause; `--why-json FILE`: the same as JSON, in FILE.
+    let why = raw.iter().any(|a| a == "--why");
+    let why_json = match raw.iter().position(|a| a == "--why-json") {
+        Some(i) if i + 1 < raw.len() => {
+            let f = raw.remove(i + 1);
+            raw.remove(i);
+            Some(f)
+        }
+        Some(_) => {
+            eprintln!("--why-json needs a file");
+            return ExitCode::FAILURE;
+        }
+        None => None,
+    };
     // `--link-only`: print the linked program (of a program of modules) and stop.
     let link_only = raw.iter().any(|a| a == "--link-only");
     // `--commonjs`: the entry is a CommonJS module (as Node runs a `.js`
     // file); without it, a `.js` file of no declared format and no module
     // syntax is a plain script.
     let commonjs = raw.iter().any(|a| a == "--commonjs");
-    let args: Vec<String> = raw.into_iter().filter(|a| a != "--js" && a != "--long-names" && a != "--prepack-intrinsics" && a != "--closed-script" && a != "--react" && a != "--ts" && a != "--no-trust-types" && a != "--link-only" && a != "--commonjs").collect();
+    let args: Vec<String> = raw.into_iter().filter(|a| a != "--js" && a != "--long-names" && a != "--source-names" && a != "--prepack-intrinsics" && a != "--closed-script" && a != "--react" && a != "--ts" && a != "--no-trust-types" && a != "--link-only" && a != "--commonjs" && a != "--why").collect();
     if args.len() < 2 {
         eprintln!("usage: {} [--js] <file.js> [input ...]", args[0]);
         eprintln!("  --js          print the residual as JavaScript instead of the IR");
         eprintln!("  --long-names  keep the residual's v<id> variable names");
+        eprintln!("  --source-names  name the residual's variables as the program names them, where one stands for one");
         eprintln!("  --prepack-intrinsics  the environment defines Prepack's intrinsics (__abstract, ...)");
         eprintln!("  --closed-script  no other script reads this one's top-level let/const/class");
         eprintln!("  --react       rely on React's contract: fold component trees (__optimizeReactComponentTree)");
@@ -125,6 +144,8 @@ fn main() -> ExitCode {
         eprintln!("  --link-only   print the linked program of a program of modules, and stop");
         eprintln!("  --commonjs    the entry is a CommonJS module (a .js file of no declared format is otherwise a plain script)");
         eprintln!("  --budget N    the specialization weight budget (K/M/G suffixes; as SPEC_WEIGHT_BUDGET)");
+        eprintln!("  --why         with --js: what the residual holds and for what cause, on stderr");
+        eprintln!("  --why-json F  with --js: the same account as JSON, written to F");
         return ExitCode::FAILURE;
     }
     let path = &args[1];
@@ -171,20 +192,32 @@ fn main() -> ExitCode {
         (src, entry)
     };
     let typescript = !module_program && (ts_flag || path.ends_with(".ts"));
-    if emit_js && (entry != "main" || typescript || module_program) {
+    if emit_js && (entry != "main" || typescript || module_program || source_names || why || why_json.is_some()) {
         // (A program of modules is linked to one script whose top-level
         // names are the linker's own: no other script reads them.)
-        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react };
+        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react, source_names };
         // (`PE_REPEAT=n`: the whole compilation run n times more first, its
         // output dropped: one process to profile.)
         let repeat: usize = std::env::var("PE_REPEAT").ok().map(|n| n.parse().expect("PE_REPEAT is a count")).unwrap_or(0);
         for _ in 0..repeat {
             let _ = js_frontend::to_js_with(&src, &entry, short_names, prepack_intrinsics, &opts);
         }
-        match js_frontend::to_js_with(&src, &entry, short_names, prepack_intrinsics, &opts) {
-            Ok(js) => {
+        match js_frontend::to_js_why(&src, &entry, short_names, prepack_intrinsics, &opts, why || why_json.is_some()) {
+            Ok((js, report)) => {
                 println!("--- residual as JavaScript ---");
                 print!("{js}");
+                if let Some(r) = report {
+                    if why {
+                        eprint!("{}", r.render(40));
+                    }
+                    if let Some(f) = &why_json {
+                        let text = serde_json::to_string(&js_frontend::why_json(&r)).expect("a report is JSON");
+                        if let Err(e) = std::fs::write(f, text) {
+                            eprintln!("cannot write {f}: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
                 return ExitCode::SUCCESS;
             }
             Err(e) => {

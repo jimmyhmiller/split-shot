@@ -101,6 +101,42 @@ pub fn simplify<Op, Cond>(prog: &mut Program<Op, Cond>) {
         }
     }
 
+    // A block whose only way in is one unconditional jump continues the
+    // block that jumps to it: one block. (A static loop unrolled leaves one
+    // per iteration, in a line, when each holds operations.)
+    let mut preds = vec![0usize; n];
+    preds[prog.entry.0] += 1;
+    for (i, b) in prog.blocks.iter().enumerate() {
+        if !reachable[i] {
+            continue;
+        }
+        match &b.term {
+            Terminator::Br(t) => preds[t.0] += 1,
+            Terminator::Cond { t, f, .. } => {
+                preds[t.0] += 1;
+                preds[f.0] += 1;
+            }
+            _ => {}
+        }
+    }
+    for a in 0..n {
+        if !reachable[a] {
+            continue;
+        }
+        loop {
+            let next = match &prog.blocks[a].term {
+                Terminator::Br(t) if t.0 != a && preds[t.0] == 1 && *t != prog.entry => *t,
+                _ => break,
+            };
+            let ops = std::mem::take(&mut prog.blocks[next.0].ops);
+            // (The merged block is left jumping to itself, reached by nothing.)
+            let term = std::mem::replace(&mut prog.blocks[next.0].term, Terminator::Br(next));
+            reachable[next.0] = false;
+            prog.blocks[a].ops.extend(ops);
+            prog.blocks[a].term = term;
+        }
+    }
+
     // Renumber, keeping only reachable blocks.
     let mut remap = vec![BlockId(0); n];
     let mut next = 0usize;

@@ -1,0 +1,17 @@
+{
+  "measuredAt": "2026-11-10T05:45:45.370Z",
+  "node": "v26.5.0",
+  "platform": "darwin 27.2.0 arm64",
+  "cpu": "Apple M2 Max",
+  "compilerSha256": "573e7966697bed09985bee9b0bed0fbe6a83faeaeb7ac8660e28210857f8f634",
+  "benchmarkSha256": "e9b7f88977b1057e9ba5cb883b057a007e791600f91db3d2e4fe32eb5713d8e7",
+  "lockSha256": "14aabf91091d788df43fedcdfbf4200f11cb5b4dc702282ced737fac5c0b924e",
+  "method": "Installed, preconfigured upstream oracle vs unchanged source assembly vs PE residual. Same realm; separate monomorphic timing loops; common calibrated batch; 5 warmup batches; 15 rotating-order samples; median ns/op. Setup and specialization excluded. Checksum consumption included.",
+  "results": [
+    {
+      "name": "css-select",
+      "blocked": "\nthread 'main' (157724334) panicked at src/js.rs:9466:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    }
+  ],
+  "checksum": 0
+}

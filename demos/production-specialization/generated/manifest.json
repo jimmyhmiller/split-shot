@@ -1,0 +1,160 @@
+{
+  "node": "v26.5.0",
+  "compilerSha256": "573e7966697bed09985bee9b0bed0fbe6a83faeaeb7ac8660e28210857f8f634",
+  "gitCommit": "35a277ece043b0e9636728eddc87312100ada862",
+  "cases": [
+    {
+      "name": "next-route",
+      "config": {
+        "route": "/teams/[team]/projects/[project]/files/[...path]"
+      },
+      "scope": "Preconfigured Next.js getRouteMatcher, including safeRouteMatcher and parameter cleaning",
+      "sourceSha256": "e775f217fcef02f785c8da91c57015bc958f30550d7c122eddad7021c042dfef",
+      "specializationMs": 223.840792,
+      "residualSha256": "2abae897ce43aad2200e8b8e5e5778847fd02607cf8f83e41c45610ad10b706e",
+      "sourceBytes": 2371,
+      "residualBytes": 3582
+    },
+    {
+      "name": "serve-rewrites",
+      "config": {
+        "rules": [
+          {
+            "source": "/legacy/:slug",
+            "destination": "/articles/:slug"
+          },
+          {
+            "source": "/docs/:section/:page",
+            "destination": "/manual/:section/:page.html"
+          },
+          {
+            "source": "/user/:id",
+            "destination": "/profiles/:id.html"
+          },
+          {
+            "source": "/download/:file",
+            "destination": "/assets/:file"
+          },
+          {
+            "source": "/articles/:slug",
+            "destination": "/content/:slug.html"
+          }
+        ]
+      },
+      "scope": "serve-handler applyRewrites, sourceMatches and toTarget; real dependencies remain runtime calls",
+      "sourceSha256": "6c65d7dea0a454e9b867d0a4d055fa4a43edd4e2b76f11a00f4864ab834bd646",
+      "specializationMs": 26.517458000000033,
+      "residualSha256": "97b771e134cd0a1255b5417a7badc955f9309b7922c154c8a59449b0adb4f64f",
+      "sourceBytes": 2521,
+      "residualBytes": 9269
+    },
+    {
+      "name": "css-select-tokens",
+      "config": {
+        "selector": "article.card[data-status=\"published\"] > a.cta[href^=\"/docs/\"]:not([aria-disabled=\"true\"])",
+        "tokens": [
+          [
+            {
+              "type": "tag",
+              "name": "article",
+              "namespace": null
+            },
+            {
+              "type": "attribute",
+              "name": "class",
+              "action": "element",
+              "value": "card",
+              "namespace": null,
+              "ignoreCase": "quirks"
+            },
+            {
+              "type": "attribute",
+              "name": "data-status",
+              "action": "equals",
+              "value": "published",
+              "namespace": null,
+              "ignoreCase": null
+            },
+            {
+              "type": "child"
+            },
+            {
+              "type": "tag",
+              "name": "a",
+              "namespace": null
+            },
+            {
+              "type": "attribute",
+              "name": "class",
+              "action": "element",
+              "value": "cta",
+              "namespace": null,
+              "ignoreCase": "quirks"
+            },
+            {
+              "type": "attribute",
+              "name": "href",
+              "action": "start",
+              "value": "/docs/",
+              "namespace": null,
+              "ignoreCase": null
+            },
+            {
+              "type": "pseudo",
+              "name": "not",
+              "data": [
+                [
+                  {
+                    "type": "attribute",
+                    "name": "aria-disabled",
+                    "action": "equals",
+                    "value": "true",
+                    "namespace": null,
+                    "ignoreCase": null
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      "scope": "css-select with build-time parsed selector tokens; installed baseline still compiles once",
+      "sourceSha256": "800f227269c0ff82e2cd64bab7b6e5fcaf521eb7ea2382f08f890442dd3d641c",
+      "specializationMs": 2560.8888339999994,
+      "failure": "\nthread 'main' (156885769) panicked at src/js.rs:9412:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "name": "liquidjs",
+      "config": {
+        "template": "<article class=\"card\"><h2>{{ title | escape }}</h2>{% if published %}<a href=\"{{ url | escape }}\">{{ label | default: \"Read more\" | escape }}</a>{% else %}<span>Draft</span>{% endif %}</article>"
+      },
+      "scope": "LiquidJS synchronous template rendering; baseline parses once",
+      "sourceSha256": "b3327beb7883e5d6247e09a978d18f3ae78b7dde6cfbc993a2a10e3a930a716e",
+      "specializationMs": 18.565707999998267,
+      "failure": "error: `super` property outside a method\n"
+    },
+    {
+      "name": "serve-canonical",
+      "config": {
+        "redirects": [],
+        "trailingSlash": false
+      },
+      "scope": "serve-handler shouldRedirect with clean URLs enabled and trailing slashes disabled; no configured redirects",
+      "sourceSha256": "eeb8b80f5c19dc526075300aa2751db0cd73e6b03629d1383d525fb17dd0ac7a",
+      "specializationMs": 164.02179199999998,
+      "residualSha256": "625bc292ba87b6e4e05668bcd427da2660c46560ac999499dd31240f5223acef",
+      "sourceBytes": 1861,
+      "residualBytes": 898
+    },
+    {
+      "name": "css-select",
+      "config": {
+        "selector": "article.card[data-status=\"published\"] > a.cta[href^=\"/docs/\"]:not([aria-disabled=\"true\"])"
+      },
+      "scope": "css-select compile and predicate, fixed selector and cacheResults:false; baseline compiles once",
+      "sourceSha256": "6e8b48735a4f13ef877cf26342d551320ae8c6789b42c25d3f5923ab69ad2241",
+      "specializationMs": 2730.888333,
+      "failure": "\nthread 'main' (157724334) panicked at src/js.rs:9466:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    }
+  ]
+}

@@ -46,6 +46,19 @@ pub fn to_js_env(src: &str, entry: &str, short_names: bool, prepack_intrinsics: 
 
 /// `to_js_env`, with all the lowering options (TypeScript input among them).
 pub fn to_js_with(src: &str, entry: &str, short_names: bool, prepack_intrinsics: bool, opts: &LowerOpts) -> Result<String, String> {
+    to_js_why(src, entry, short_names, prepack_intrinsics, opts, false).map(|(js, _)| js)
+}
+
+/// `to_js_with`, and (with `why`) the account of what the residual holds
+/// and for what cause (see the engine's `js/why.rs`).
+pub fn to_js_why(
+    src: &str,
+    entry: &str,
+    short_names: bool,
+    prepack_intrinsics: bool,
+    opts: &LowerOpts,
+    why: bool,
+) -> Result<(String, Option<partial::js::WhyReport>), String> {
     // (`PE_TIMINGS`: each phase's time, on stderr.)
     let timings = std::env::var_os("PE_TIMINGS").is_some();
     let t = std::time::Instant::now();
@@ -79,12 +92,48 @@ pub fn to_js_with(src: &str, entry: &str, short_names: bool, prepack_intrinsics:
         );
     }
     partial::residual::simplify(&mut prog);
-    vm.coalesce(&mut prog);
+    vm.clean(&mut prog);
+    vm.clean_load();
+    // (Read while the variables are still the ones specialization made.)
+    let report = why.then(|| vm.why_report(&prog));
+    vm.set_source_names(opts.source_names);
+    vm.coalesce_vars(&mut prog);
     vm.coalesce_load();
     let t = phase("cleanup", t);
+    codegen::set_source_names(opts.source_names);
     let js = codegen::program_to_js(&vm, &prog, vm.input_var(), short_names, &sources);
+    codegen::set_source_names(false);
     phase("codegen", t);
-    Ok(js)
+    Ok((js, report))
+}
+
+/// A `why` report as JSON: `{summary, sections, causes, units}`.
+pub fn why_json(report: &partial::js::WhyReport) -> serde_json::Value {
+    use partial::js::WhyReport;
+    use serde_json::json;
+    let counts = |r: &WhyReport, section: Option<&str>| {
+        use partial::js::WhyClass::*;
+        json!({
+            "units": r.units.iter().filter(|u| section.is_none_or(|s| u.section == s)).count(),
+            "needed": r.count(Needed, section),
+            "merged": r.count(Merged, section),
+            "gap": r.count(Gap, section),
+            "static": r.units.iter().filter(|u| u.is_static && section.is_none_or(|s| u.section == s)).count(),
+        })
+    };
+    let sections: serde_json::Map<String, serde_json::Value> =
+        report.sections().into_iter().map(|s| { let c = counts(report, Some(&s)); (s, c) }).collect();
+    json!({
+        "summary": counts(report, None),
+        "sections": sections,
+        "causes": report.causes.iter().map(|c| json!({
+            "class": c.class.name(), "kind": c.kind, "what": c.what, "units": c.units, "sole": c.sole,
+        })).collect::<Vec<_>>(),
+        "units": report.units.iter().map(|u| json!({
+            "section": u.section, "kind": u.kind, "text": u.text, "class": u.class.name(),
+            "static": u.is_static, "causes": u.causes,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Parse + lower + specialize a JS source file. Returns the built `Js` client
@@ -153,6 +202,9 @@ pub fn parse_ts(src: &str) -> Result<Module, String> {
     let comments = swc_common::comments::SingleThreadedComments::default();
     let lexer = Lexer::new(Syntax::Typescript(Default::default()), EsVersion::EsNext, StringInput::from(&*fm), Some(&comments));
     COMMENTS.with(|c| *c.borrow_mut() = Some(comments.clone()));
+    // (Its functions' source text is not what runs, its types erased: no
+    // map of an earlier program answers for its spans.)
+    SOURCE_MAP.with(|m| *m.borrow_mut() = None);
     let mut parser = Parser::new_from(lexer);
     let mut m = parser.parse_module().map_err(|e| format!("parse error: {:?}", e.kind()))?;
     ts::erase(&mut m)?;
@@ -168,6 +220,18 @@ pub fn parse(src: &str) -> Result<Module, String> {
 /// `COMMENTS`).
 pub fn parse_program(src: &str) -> Result<Module, String> {
     parse_impl(src, true)
+}
+
+/// Parse a model of the environment (the prelude, React's), whose
+/// functions are compiled with the program's. Its source is one more file
+/// of the program's source map, so a span of its code names its own text:
+/// a span from a map of its own would name whatever the program's source
+/// has at those offsets (or panic, where they fall inside a character).
+pub fn parse_model(src: &str) -> Result<Module, String> {
+    let cm: Lrc<SourceMap> = SOURCE_MAP.with(|m| m.borrow().clone()).unwrap_or_default();
+    let fm = cm.new_source_file(Lrc::new(FileName::Custom("model.js".into())), src.to_string());
+    let lexer = Lexer::new(Syntax::Es(Default::default()), EsVersion::EsNext, StringInput::from(&*fm), None);
+    Parser::new_from(lexer).parse_module().map_err(|e| format!("parse error: {:?}", e.kind()))
 }
 
 fn parse_impl(src: &str, record: bool) -> Result<Module, String> {
@@ -233,7 +297,12 @@ mod tests {
         // sum = x + (x+1) + 7 = 2x + 8
         let prog = check(src, &[0, 3, 10]);
         assert_eq!(run_residual(src, 3).unwrap(), DeepVal::num(2 * 3 + 8));
-        assert_eq!(prog.blocks.len(), 1, "static loop should fully unroll");
+        // (One block per iteration, in a line: each `s = s + xs[i]` is
+        // written where it runs, `x` being a value whose conversion may run
+        // code. No block branches.)
+        assert!(prog.blocks.len() <= 4, "static loop should fully unroll: {} blocks", prog.blocks.len());
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("while") && !js.contains("for (") && !js.contains("if ("), "static loop should fully unroll:\n{js}");
     }
 
     #[test]
@@ -815,9 +884,10 @@ mod tests {
     /// specialize.
     #[test]
     fn passthrough_global_call() {
-        let src = r#"function main(x) { return encodeURIComponent("a b") + x; }"#;
+        // (A host function: `encodeURIComponent` of a known string folds.)
+        let src = r#"function main(x) { return btoa("a b") + x; }"#;
         let js = to_js(src).unwrap();
-        assert!(js.contains(r#"encodeURIComponent("a b")"#), "got:\n{js}");
+        assert!(js.contains(r#"btoa("a b")"#), "got:\n{js}");
         assert_node_equiv(src, &[0, 5, -3, 100]);
     }
 
@@ -1853,7 +1923,7 @@ mod tests {
         assert!(js.contains("while (") && !js.contains("switch"), "a structured loop, not a trampoline:\n{js}");
         assert!(!js.contains("(0 + "), "the first iteration should not be peeled:\n{js}");
         let (_, prog) = specialize(src).unwrap();
-        assert!(prog.blocks.len() <= 4, "expected at most 4 blocks, got {}:\n{js}", prog.blocks.len());
+        assert!(prog.blocks.len() <= 5, "expected at most 5 blocks, got {}:\n{js}", prog.blocks.len());
         assert_node_equiv(src, &[0, 1, 2, 5, 10]);
     }
 
@@ -2469,6 +2539,139 @@ mod tests {
         assert_node_equiv(src, &[0, 1, 2]);
     }
 
+    fn why(src: &str) -> partial::js::WhyReport {
+        to_js_why(src, "main", false, false, &LowerOpts::default(), true).expect("specialize").1.expect("a report")
+    }
+
+    fn why_counts(src: &str) -> (usize, usize, usize) {
+        use partial::js::WhyClass::*;
+        let r = why(src);
+        (r.count(Needed, None), r.count(Merged, None), r.count(Gap, None))
+    }
+
+    /// Work that depends on the input only is needed: a loop over the input
+    /// (its counter and accumulator are carried, not merged), reads of it,
+    /// a call of a method of it.
+    #[test]
+    fn why_input_work_is_needed() {
+        let src = "function main(input) { var t = 0; for (var i = 0; i < input.length; i++) { t += input[i] * 2; } return t + input.name.toUpperCase(); }";
+        let (needed, merged, gap) = why_counts(src);
+        assert!(needed > 0);
+        assert_eq!((merged, gap), (0, 0), "{}", why(src).render(20));
+    }
+
+    /// A program of known values leaves no work.
+    #[test]
+    fn why_static_program_leaves_nothing() {
+        let src = "function main(input) { var o = { a: [1, 2, 3] }; return o.a.map(function (x) { return x * 2; }).join('-') + 'abc'.toUpperCase(); }";
+        let r = why(src);
+        assert!(r.units.is_empty(), "{}", r.render(20));
+    }
+
+    /// An object a runtime loop only reads stays known across it: a read of
+    /// its field is the field's value, and nothing is merged.
+    #[test]
+    fn why_read_only_object_stays_known_across_a_runtime_loop() {
+        let src = "function main(input) { var cfg = { a: 3, b: 2 }; var t = 0; for (var i = 0; i < input.length; i++) { t += input[i] * cfg.a; } return t + cfg.b; }";
+        let js = to_js(src).unwrap();
+        assert!(js.contains("* 3"), "the field read folds:\n{js}");
+        assert!(!js.contains("a: 3"), "the object is not made at runtime:\n{js}");
+        let (_, merged, gap) = why_counts(src);
+        assert_eq!((merged, gap), (0, 0), "{}", why(src).render(20));
+        assert_node_equiv(src, &[0, 1, 2]);
+    }
+
+    /// A standard built-in called on known values that nothing folds is a
+    /// gap, named.
+    #[test]
+    fn why_names_an_unfolded_builtin_on_known_values() {
+        // (`Math.sin` is left to the runtime on purpose: its last bit is the
+        // engine's.)
+        let src = "function main(input) { var t = Math.sin(1); return [t / 1000 + 1, input]; }";
+        let r = why(src);
+        let gap: Vec<&partial::js::WhyCause> = r.causes.iter().filter(|c| c.class == partial::js::WhyClass::Gap && c.units > 0).collect();
+        // (The call, and the arithmetic on its result, which is charged to it.)
+        assert!(gap.iter().any(|c| c.kind == "unmodeled-builtin" && c.what == "Math.sin" && c.units >= 3 && c.sole >= 3), "{}", r.render(20));
+        assert_eq!(r.units.iter().filter(|u| u.is_static).count(), 1, "only the call itself is static work:\n{}", r.render(20));
+    }
+
+    /// An operator on known operands that nothing folds is static work,
+    /// named by the operator; what is computed from its result is charged
+    /// to it. A value a residual function writes through a variable it
+    /// captured is the run's where it is read after the call.
+    #[test]
+    fn why_charges_derived_work_to_the_static_operation() {
+        let src = "function main(input) { var s = 0; input.list.forEach(function (x) { s += x; }); var u = (2n ** 70n) + 1n; return [s, typeof u, u > 5n]; }";
+        let r = why(src);
+        assert!(r.causes.iter().any(|c| c.kind == "static-work" && c.what == "`**`" && c.units >= 2), "{}", r.render(20));
+        let read = r.units.iter().find(|u| u.kind == "read" && u.text.ends_with(".value")).expect("the captured variable's cell is read after the loop");
+        assert_eq!(read.class, partial::js::WhyClass::Needed, "{}", r.render(20));
+    }
+
+    /// An object handed to a standard built-in the specializer has no model
+    /// of is runtime state from there on; the cause names the built-in.
+    #[test]
+    fn why_names_the_builtin_an_object_escaped_into() {
+        let src = "function main(input) { var o = { k: 1 }; var s = input ? Intl.getCanonicalLocales(o) : ''; return [s, o.k]; }";
+        let r = why(src);
+        assert!(
+            r.causes.iter().any(|c| c.units > 0 && c.sole > 0 && c.kind == "builtin-effects-unknown" && c.what == "Intl.getCanonicalLocales"),
+            "{}",
+            r.render(20)
+        );
+    }
+
+    /// A standard function with a self-hosted version in the prelude folds
+    /// through it on known values (here `JSON.stringify` with a key list,
+    /// of an object that refers to itself under a key not listed), and
+    /// leaves its arguments known.
+    #[test]
+    fn self_hosted_standard_function_folds_and_leaves_its_arguments_known() {
+        let src = "function main(input) { var o = { k: 1 }; o.self = o; var s = JSON.stringify(o, ['k'], 1); return [s, o.k, input]; }";
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("JSON.stringify"), "the call folds:\n{js}");
+        assert!(js.contains(r#""{\n \"k\": 1\n}", 1"#), "to its text, the object's field still known:\n{js}");
+        assert!(why(src).units.iter().all(|u| u.class == partial::js::WhyClass::Needed), "{}", why(src).render(20));
+        assert_node_equiv(src, &[0, 1]);
+    }
+
+    /// A runtime value a generator yields or returns is read once, where the
+    /// generator produced it: a generator-driven template engine over a known
+    /// template reads each field of a runtime scope once (a getter behind a
+    /// field ran three times for one `yield`).
+    #[test]
+    fn generator_yielded_runtime_value_is_read_once() {
+        // (All of it inside `main`: a script's top-level classes are open to
+        // other scripts, which could have changed their methods.)
+        let src = r#"
+            function main(input) {
+                function* renderAll(tpls, scope) { let out = ""; for (const t of tpls) { out += yield* t.render(scope); } return out; }
+                class Text { constructor(s) { this.s = s; } *render() { return this.s; } }
+                class Out { constructor(k) { this.k = k; } *render(scope) { const v = yield scope[this.k]; return String(v == null ? "" : v); } }
+                function toValueSync(it) { let value, done = false; do { const st = it.next(value); done = !!st.done; value = st.value; } while (!done); return value; }
+                function parse(src) { return src.split(/(\{\{\w+\}\})/).filter(Boolean).map(p => p.startsWith("{{") ? new Out(p.slice(2, -2)) : new Text(p)); }
+                function* g(scope) { return scope.title; }
+                function* h(scope) { const a = yield* g(scope); return a + scope.body; }
+                var html = toValueSync(renderAll(parse("<h1>{{title}}</h1><p>{{body}}</p>"), input));
+                var it = h(input), r = it.next();
+                return [html, r.value, r.value, r.done];
+            }"#;
+        let js = to_js(src).unwrap();
+        let main = &js[js.rfind("function main(").expect("a residual main")..];
+        assert!(!main.contains("renderAll") && !main.contains(".next("), "the engine is specialized away in main:\n{js}");
+        let checks = "for (const body of ['b', null]) { let n = 0, m = 0; const scope = { get title() { n++; return 'T' + n; }, get body() { m++; return body; } }; out.push(JSON.stringify(main(scope)), n, m); }";
+        assert_node_equiv_with(src, checks);
+    }
+
+    /// The report changes nothing: the residual is the same with it.
+    #[test]
+    fn why_report_does_not_change_the_residual() {
+        let src = "function main(input) { var m = new Map(); for (var i = 0; i < input; i++) { m.set(i, i * 2); } var o = { n: m.size }; return [o, m.get(1)]; }";
+        let with = to_js_why(src, "main", false, false, &LowerOpts::default(), true).unwrap().0;
+        let without = to_js_why(src, "main", false, false, &LowerOpts::default(), false).unwrap().0;
+        assert_eq!(with, without);
+    }
+
     /// A method-call callee that the freeze pass snapshots during argument
     /// evaluation must keep its receiver. Here the second argument
     /// (`input.toString()`) is an opaque call, so evaluating it freezes the
@@ -2480,7 +2683,9 @@ mod tests {
     fn frozen_method_callee_keeps_receiver() {
         // (A modeled `f.call(...)` now inlines `f`; a runtime callee keeps
         // the uncurried call.)
-        let src = "function main(input) { return Math.max.call(null, input.toString(), 1); }";
+        // (Of a method read from a runtime value: `Math.max.call(null, ..)`
+        // is now `Math.max(..)`, a standard function that ignores `this`.)
+        let src = "function main(input) { return input.valueOf.call(input, input.toString(), 1); }";
         let js = to_js(src).unwrap();
         assert!(js.contains(".call("), "expected an uncurried method call:\n{js}");
         assert_node_equiv(src, &[5, 0, -3]);
