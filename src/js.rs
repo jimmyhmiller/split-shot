@@ -1750,13 +1750,9 @@ struct EntrySplit {
     /// not even which function a variable holds (the paths to the
     /// boundary did not agree on that either).
     generalize_plain: std::cell::Cell<bool>,
-    /// With `generalize`: what every end state agrees on, which stays
-    /// known to `main` (see `EndAgreement`). `None`, or `generalize_whole`:
-    /// none of it.
-    agreed: std::cell::RefCell<Option<EndAgreement>>,
-    /// How many times the agreement was computed again (from end states
-    /// that did not meet with the last one).
-    agreed_tries: std::cell::Cell<usize>,
+    /// With `generalize`: what every end state agrees on stays known to
+    /// `main` (see `EndAgreement`), unless `generalize_whole`.
+    agreeing: std::cell::Cell<bool>,
     /// With `generalize`: every object the top-level code leaves is runtime
     /// state (the end states did not meet keeping what they agree on).
     generalize_whole: std::cell::Cell<bool>,
@@ -1788,19 +1784,10 @@ struct EntrySplit {
 /// are matched by where the paths hold them (the same local, global or
 /// function object, then the same field of matched objects), not by
 /// address: an object made after the branch has another on each path.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct EndAgreement {
-    /// The end states, as they arrived at the boundary: a later
-    /// specialization of the same code arrives in one of them again.
-    ends: Vec<State>,
     /// What each end state keeps.
     keep: Vec<EndKeep>,
-}
-
-impl PartialEq for EndAgreement {
-    fn eq(&self, o: &Self) -> bool {
-        self.keep == o.keep
-    }
 }
 
 /// What one end state keeps of what all of them agree on (see
@@ -1835,7 +1822,7 @@ fn liftable_field(o: &HeapObj, j: usize) -> bool {
 impl EndAgreement {
     fn of(ends: &[State]) -> EndAgreement {
         let n = ends.len();
-        let mut ag = EndAgreement { ends: ends.to_vec(), keep: vec![EndKeep::default(); n] };
+        let mut ag = EndAgreement { keep: vec![EndKeep::default(); n] };
         if ends.iter().any(|e| e.frames.len() != 1 || e.top().locals.len() != ends[0].top().locals.len()) {
             return ag;
         }
@@ -1845,7 +1832,19 @@ impl EndAgreement {
         let mut of: Vec<HashMap<usize, usize>> = vec![HashMap::new(); n];
         let mut bad: std::collections::HashSet<usize> = std::collections::HashSet::new();
         // (Path i's objects that are made runtime state, whatever matches.)
-        let mut runtime: Vec<std::collections::HashSet<usize>> = ends.iter().map(|e| e.escaped.iter().copied().collect()).collect();
+        // (And an object a global the path has not written out holds:
+        // writing it out at the boundary makes it runtime state.)
+        let mut runtime: Vec<std::collections::HashSet<usize>> = ends
+            .iter()
+            .map(|e| {
+                let mut r: std::collections::HashSet<usize> = e.escaped.iter().copied().collect();
+                r.extend(e.globals.values().filter_map(|(v, dirty)| match v {
+                    Abs::Ref(a) if *dirty => Some(*a),
+                    _ => None,
+                }));
+                r
+            })
+            .collect();
         let mut work: Vec<usize> = Vec::new();
         // The values the paths hold at one place: the match of their
         // objects (`Some`), `None` when they are no objects; an object only
@@ -7869,10 +7868,15 @@ impl Js {
             return whole(self);
         }
         self.entry.loading.set(true);
-        let load = crate::engine::specialize(self, self.start());
+        self.entry.raw_ends.borrow_mut().clear();
+        let mut load = crate::engine::specialize(self, self.start());
         self.entry.loading.set(false);
+        let deferred = self.entry.generalize.get() && self.entry.agreeing.get() && !self.entry.generalize_whole.get() && !self.entry.generalize_plain.get();
+        if deferred {
+            self.finish_agreeing_boundaries(&mut load);
+        }
         let mut ends = std::mem::take(&mut *self.entry.boundary.borrow_mut());
-        let raw_ends = std::mem::take(&mut *self.entry.raw_ends.borrow_mut());
+        self.entry.raw_ends.borrow_mut().clear();
         let names_input = program_names_var(&load, self.input_var());
         if names_input && env_flag!("ENTRY_DEBUG") {
             let v = self.input_var();
@@ -7926,26 +7930,22 @@ impl Js {
                 eprintln!("[ENTRY]   heap sizes {} | {}; exports {:?} | {:?}", a.heap.len(), b.heap.len(), ends[0].1.len(), ends[1].1.len());
             }
             self.entry.generalize.set(true);
-            if raw_ends.len() > 1 && !env_flag!("PE_ENTRY_NO_AGREE") {
-                *self.entry.agreed.borrow_mut() = Some(EndAgreement::of(&raw_ends));
-            }
+            self.entry.agreeing.set(!env_flag!("PE_ENTRY_NO_AGREE"));
             self.reset_for_respecialization();
             return self.specialize_entry();
         }
         if self.entry.generalize.get() && ends.len() > 1 {
             let key = self.key(&ends[0].0);
-            let using_agreement = self.entry.agreed.borrow().is_some() && !self.entry.generalize_whole.get() && !self.entry.generalize_plain.get();
             if ends.iter().all(|(st, ex, _)| self.key(st) == key && *ex == ends[0].1) {
                 ends.truncate(1);
-            } else if using_agreement && !names_input {
+            } else if deferred && !names_input {
                 // (Kept what the paths agreed on, and they still did not
-                // meet: what they agree on this time, if that is new;
-                // otherwise none of it.)
-                let again = (raw_ends.len() > 1).then(|| EndAgreement::of(&raw_ends));
-                let tries = self.entry.agreed_tries.get();
+                // meet: once more, none of it.)
                 if env_flag!("ENTRY_DEBUG") {
-                    eprintln!("[ENTRY] {} end states keeping what they agree on did not meet (try {tries})", ends.len());
-                    let (a, b) = (&ends[0], &ends[1]);
+                    eprintln!("[ENTRY] {} end states keeping what they agree on did not meet", ends.len());
+                    let other = ends.iter().position(|(st, ex, _)| self.key(st) != key || *ex != ends[0].1).unwrap_or(1);
+                    eprintln!("[ENTRY]   end state 0 and {other}:");
+                    let (a, b) = (&ends[0], &ends[other]);
                     let (ka, kb) = (self.key(&a.0), self.key(&b.0));
                     if a.1 != b.1 {
                         eprintln!("[ENTRY]   exports {:?} | {:?}", a.1, b.1);
@@ -7969,12 +7969,7 @@ impl Js {
                         }
                     }
                 }
-                if again.is_some() && again != *self.entry.agreed.borrow() && tries < 3 {
-                    self.entry.agreed_tries.set(tries + 1);
-                    *self.entry.agreed.borrow_mut() = again;
-                } else {
-                    self.entry.generalize_whole.set(true);
-                }
+                self.entry.generalize_whole.set(true);
                 self.reset_for_respecialization();
                 return self.specialize_entry();
             } else if !self.entry.generalize_plain.get() && !names_input {
@@ -12962,6 +12957,9 @@ impl Js {
                             let frames: Vec<&str> = s.frames.iter().map(|f| self.names[f.func].as_str()).collect();
                             let before: Vec<String> = (pc.saturating_sub(6)..pc).map(|i| format!("{:?}", self.code[i])).collect();
                             eprintln!("[DYNBR] pc={} cond={:?} in {}\n        after {}", pc, r, frames.join(" > "), before.join("; "));
+                            if env_flag!("DYNBR_LOCALS") {
+                                eprintln!("        locals {:?}", s.top().locals.iter().take(6).map(|v| format!("{v:?}").chars().take(80).collect::<String>()).collect::<Vec<_>>());
+                            }
                         }
                         // Every inlined activation on the stack has now branched
                         // dynamically: remember its context (see `do_call`).
@@ -13361,6 +13359,13 @@ impl Js {
                         _ if self.standard_prototype_of(e) == Some("Function") => Some(crate::facts::T_FUNC),
                         _ if self.standard_method_read(s, e) => Some(crate::facts::T_FUNC),
                         _ if self.standard_prototype_of(e).is_some() => Some(crate::facts::T_OBJ),
+                        // (Any standard constructor's `prototype`: an object,
+                        // `Map.prototype` tested before use, object-inspect's.)
+                        RExpr::Global(g) if m == "prototype" && self.pristine(g) => match builtin_prototype_typeof(g) {
+                            Some("function") => Some(crate::facts::T_FUNC),
+                            Some("object") => Some(crate::facts::T_OBJ),
+                            _ => None,
+                        },
                         _ => None,
                     },
                     _ => None,
@@ -18365,6 +18370,11 @@ impl Js {
                             ("String", Abs::Str(_)) | ("Number", Abs::Num(_)) | ("Boolean", Abs::Bool(_)) => {
                                 Some(Target::Value(Abs::Dyn(RExpr::Get(Box::new(recv.to_rexpr()), m.clone()))))
                             }
+                            // (A modeled RegExp's `exec`/`test`, as `re.exec(s)`
+                            // reads them: a call-bound `$exec(re, s)`.)
+                            ("RegExp", Abs::Ref(r)) if matches!(&s.heap[r], HeapObj::Builtin { kind, .. } if kind == "RegExp") && matches!(m.as_str(), "exec" | "test") => {
+                                Some(Target::Value(Abs::Ref(s.alloc(HeapObj::Builtin { kind: format!("RegExp.prototype.{m}"), data: vec![].into(), ext: None }))))
+                            }
                             ("Array", Abs::Ref(r)) => match &s.heap[r] {
                                 HeapObj::Array(a) if a.standard() && is_array_proto_member(m) && !a.props.iter().any(|q| q.key == *m) => {
                                     Some(Target::Value(Abs::Ref(s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{m}"), data: vec![].into(), ext: None }))))
@@ -20120,36 +20130,19 @@ impl Js {
         if !self.entry.loading.get() || !at_top {
             return self.advance(s);
         }
-        self.entry.raw_ends.borrow_mut().push(s.clone());
         // (Everything the top-level code leaves, as runtime state: its
         // locals and what they reach, its globals, nothing known of any;
-        // but what every path to here agrees on, when they may.)
+        // or, keeping what every path to here agrees on, what this path
+        // does here waits until every path has come: see
+        // `finish_agreeing_boundaries`.)
         let generalize = self.entry.generalize.get();
-        // (This path's part of the agreement: the end state it arrives in,
-        // among those the agreement was made of.)
-        let keep: Option<EndKeep> = if generalize && !self.entry.generalize_whole.get() && !self.entry.generalize_plain.get() {
-            self.entry.agreed.borrow().as_ref().and_then(|ag| {
-                let at = ag.ends.iter().position(|e| e == &*s);
-                if env_flag!("ENTRY_DEBUG") {
-                    match at {
-                        Some(i) => eprintln!(
-                            "[ENTRY] end state {i}: keeps {} objects ({} with fields to variables), locals {:?}",
-                            ag.keep[i].objects.len(),
-                            ag.keep[i].objects.values().filter(|(_, l)| !l.is_empty()).count(),
-                            ag.keep[i].same_locals
-                        ),
-                        None => eprintln!("[ENTRY] an end state none of the agreement's"),
-                    }
-                }
-                at.map(|i| ag.keep[i].clone())
-            })
-        } else {
-            None
-        };
-        let agreeing = keep.is_some();
-        if let Some(keep) = keep {
-            self.generalize_agreeing(s, &keep, out);
-        } else if generalize {
+        if generalize && self.entry.agreeing.get() && !self.entry.generalize_whole.get() && !self.entry.generalize_plain.get() {
+            let k = self.entry.raw_ends.borrow().len();
+            self.entry.raw_ends.borrow_mut().push(s.clone());
+            out.push(Op::Effect(RExpr::Verbatim(boundary_placeholder(k), vec![])));
+            return Step::Halt;
+        }
+        if generalize {
             // (But the entry's input, a runtime value already, which the
             // load code may not name.)
             let _why = self.why.merging(why::Merge::Whole);
@@ -20179,6 +20172,18 @@ impl Js {
                     .collect()
             };
         }
+        self.boundary_finish(s, generalize, false, out);
+        Step::Halt
+    }
+
+    /// The rest of what the end of the top-level code does (see
+    /// `entry_boundary`), once its state is what `main` starts from: the
+    /// objects a call may change made at runtime, the globals written out,
+    /// every runtime value the state names given a variable of its own,
+    /// and the state and those variables recorded as an end state.
+    /// (`agreeing`: the paths kept what they agree on, and name those
+    /// variables by where the state holds them.)
+    fn boundary_finish(&self, s: &mut State, generalize: bool, agreeing: bool, out: &mut Vec<Op>) {
         let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
         let mut escaped = std::collections::HashSet::new();
         for a in Js::holders_first(&s.heap, &dynamic, 2) {
@@ -20309,7 +20314,60 @@ impl Js {
         }
         s.top_mut().pc += 1;
         self.entry.boundary.borrow_mut().push((s.clone(), exports, hoisted));
-        Step::Halt
+    }
+
+    /// The end states the top-level code reached, keeping what they agree
+    /// on (`EntrySplit::agreeing`): what each path does at the end, now
+    /// that every path has come (see `entry_boundary`), in place of its
+    /// placeholder in the load code.
+    fn finish_agreeing_boundaries(&self, load: &mut Program<Op, Cond>) {
+        // (Only those whose place the load code has: a path a probe
+        // followed to the end, whose code it then dropped, is none.)
+        let marks: std::collections::HashSet<String> = load
+            .blocks
+            .iter()
+            .flat_map(|b| b.ops.iter())
+            .filter_map(|op| match op {
+                Op::Effect(RExpr::Verbatim(text, _)) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        let raw: Vec<(usize, State)> = self.entry.raw_ends.borrow().iter().cloned().enumerate().filter(|(k, _)| marks.contains(&boundary_placeholder(*k))).collect();
+        let states: Vec<State> = raw.iter().map(|(_, st)| st.clone()).collect();
+        let ag = EndAgreement::of(&states);
+        let mut made: HashMap<String, Vec<Op>> = HashMap::new();
+        for (j, (k, st)) in raw.iter().enumerate() {
+            let k = *k;
+            let mut st = st.clone();
+            let mut ops = Vec::new();
+            if env_flag!("ENTRY_DEBUG") {
+                let keep = &ag.keep[j];
+                eprintln!(
+                    "[ENTRY] end state {k}: keeps {} objects ({} with fields to variables), locals {:?}",
+                    keep.objects.len(),
+                    keep.objects.values().filter(|(_, l)| !l.is_empty()).count(),
+                    keep.same_locals
+                );
+            }
+            self.generalize_agreeing(&mut st, &ag.keep[j], &mut ops);
+            self.boundary_finish(&mut st, true, true, &mut ops);
+            made.insert(boundary_placeholder(k), ops);
+        }
+        for b in load.blocks.iter_mut() {
+            let mut i = 0;
+            while i < b.ops.len() {
+                if let Op::Effect(RExpr::Verbatim(text, _)) = &b.ops[i] {
+                    if let Some(ops) = made.remove(text) {
+                        let n = ops.len();
+                        b.ops.splice(i..=i, ops);
+                        i += n;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+        }
+        assert!(made.is_empty(), "the load code lost the place of {} end state(s) of its top-level code", made.len());
     }
 
     /// The state the top-level code leaves at its end, as runtime state
@@ -27222,6 +27280,12 @@ fn as_ref_addr(v: &Abs) -> Option<usize> {
 /// share a residual block. Without this a loop that allocates fresh objects each
 /// iteration never memo-ties (the addresses always differ). `next_addr`,
 /// `pending_joins`, and `handlers` carry no heap addresses to renumber.
+/// The load code's mark of where end state `k` of the top-level code is to
+/// be made runtime state (see `Js::finish_agreeing_boundaries`).
+fn boundary_placeholder(k: usize) -> String {
+    format!("/* end state {k} of the top-level code */")
+}
+
 /// The variables `s` names, in the order a walk of its canonical form
 /// (`canonicalize_state`) meets them: two states that differ only in
 /// their objects' addresses and their variables' names list theirs in
