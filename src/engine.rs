@@ -42,6 +42,11 @@ pub trait Client {
     type Cond;
 
     fn key(&self, s: &Self::State) -> Self::Key;
+    /// Is `k` the key of `s`? (`key(s) == k`, which a client may answer
+    /// without making the key.)
+    fn key_matches(&self, s: &Self::State, k: &Self::Key) -> bool {
+        self.key(s) == *k
+    }
     fn point(&self, s: &Self::State) -> Self::Point;
 
     /// Advance the state by one source construct.
@@ -257,7 +262,7 @@ fn create_or_get<C: Client>(client: &C, st: C::State, cx: &mut Ctx<C>) -> BlockI
 /// The block memoized with key `k`, if any: one whose key has `k`'s hash and,
 /// recomputed from its state, equals `k`.
 fn memo_get<C: Client>(client: &C, cx: &Ctx<C>, k: &Hashed<C::Key>) -> Option<BlockId> {
-    cx.memo.get(&k.hash)?.iter().copied().find(|b| client.key(&cx.block_states[b.0]) == k.key)
+    cx.memo.get(&k.hash)?.iter().copied().find(|b| client.key_matches(&cx.block_states[b.0], &k.key))
 }
 
 /// `create_or_get`, with `st`'s key already computed.

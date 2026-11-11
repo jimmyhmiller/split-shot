@@ -7986,7 +7986,7 @@ impl Js {
                     let other = ends.iter().position(|(st, ex, _)| self.key(st) != key || *ex != ends[0].1).unwrap_or(1);
                     eprintln!("[ENTRY]   end state 0 and {other}:");
                     let (a, b) = (&ends[0], &ends[other]);
-                    let (ka, kb) = (self.key(&a.0), self.key(&b.0));
+                    let (ka, kb) = (canonicalize_state(&a.0), canonicalize_state(&b.0));
                     if a.1 != b.1 {
                         eprintln!("[ENTRY]   exports {:?} | {:?}", a.1, b.1);
                     }
@@ -10982,22 +10982,27 @@ impl Client for Js {
     }
 
     type State = State;
-    type Key = State;
+    type Key = IsoKey;
     type Point = Vec<usize>;
     type Op = Op;
     type Cond = Cond;
 
-    fn key(&self, s: &State) -> State {
+    fn key(&self, s: &State) -> IsoKey {
         // Memoize UP TO HEAP ISOMORPHISM: two states whose reachable heaps have the
         // same shape but different concrete addresses (or differ only by unreachable
         // garbage) are behaviorally identical and must share a residual block. A raw
         // address comparison treats them as distinct, so a loop that allocates fresh
         // objects each iteration (e.g. a partial-evaluator-in-the-subset building
         // code, where the input constant `["rin"]` drifts in and out of the live set)
-        // never memo-ties and unrolls forever. Canonicalizing addresses by
-        // reachability order — and dropping unreachable objects — makes those
-        // isomorphic states equal keys, so the loop ties.
-        canonicalize_state(s)
+        // never memo-ties and unrolls forever. Numbering addresses by
+        // reachability order — and ignoring unreachable objects — makes those
+        // isomorphic states equal keys, so the loop ties. (The key is the state:
+        // `IsoKey` compares and hashes it as its canonical form, see
+        // `canonicalize_state`, without making that form.)
+        IsoKey(s.clone())
+    }
+    fn key_matches(&self, s: &State, k: &IsoKey) -> bool {
+        states_iso(s, &k.0)
     }
     fn point(&self, s: &State) -> Vec<usize> {
         if !env_flag!("PE_CONTEXT_POINTS") {
@@ -22662,11 +22667,11 @@ impl Js {
         let gb = self.join_generalize(a, b, &mut scratch);
         *self.materialized_fids.borrow_mut() = saved_materialized;
         *self.shared_fn_objects.borrow_mut() = saved_shared;
-        let (ca, cb) = (canonicalize_state(&ga), canonicalize_state(&gb));
-        if env_flag!("JOIN_DEBUG") && ca != cb {
-            eprintln!("[JOIN-MISS]\n  A={:?}\n  B={:?}", ca, cb);
+        let same = states_iso(&ga, &gb);
+        if env_flag!("JOIN_DEBUG") && !same {
+            eprintln!("[JOIN-MISS]\n  A={:?}\n  B={:?}", canonicalize_state(&ga), canonicalize_state(&gb));
         }
-        ca == cb
+        same
     }
 
     /// Weaken `from` toward `seen` at a forward join (two paths reaching one
@@ -28742,7 +28747,8 @@ fn canonicalize_state(s: &State) -> State {
         }
     };
     let mut new_heap: Heap = Heap::new();
-    for (old, &new) in mapping.iter() {
+    // (In the new addresses' order, `order`'s: each insert is at the end.)
+    for (new, old) in order.iter().enumerate() {
         if let Some(shared) = s.heap.get_shared(old) {
             // (One the renumbering leaves as it is is shared.)
             let unchanged = match &**shared {
@@ -28796,6 +28802,213 @@ fn canonicalize_state(s: &State) -> State {
     }
 }
 
+/// `canonicalize_state(a) == canonicalize_state(b)`, without making either:
+/// the two states are walked in the order the canonical numbering follows
+/// (the roots, then each object's references breadth first), pairing the
+/// objects each reaches at the same step, and each pair is compared with
+/// its references erased (they are compared by the pairing).
+fn iso_equal(a: &State, b: &State) -> bool {
+    use std::collections::HashMap;
+    if a.frames.len() != b.frames.len()
+        || a.pending_joins != b.pending_joins
+        || a.handlers != b.handlers
+        || a.facts != b.facts
+        || a.fns.len() != b.fns.len()
+        || a.globals.len() != b.globals.len()
+    {
+        return false;
+    }
+    for (fa, fb) in a.frames.iter().zip(&b.frames) {
+        if fa.pc != fb.pc || fa.func != fb.func || fa.ret != fb.ret || fa.locals.len() != fb.locals.len() || fa.ostack.len() != fb.ostack.len() {
+            return false;
+        }
+    }
+    if !a.fns.keys().eq(b.fns.keys()) || !a.globals.iter().map(|(k, (_, d))| (k, d)).eq(b.globals.iter().map(|(k, (_, d))| (k, d))) {
+        return false;
+    }
+    let mut ia: HashMap<usize, usize> = HashMap::new();
+    let mut ib: HashMap<usize, usize> = HashMap::new();
+    let mut queue: Vec<(usize, usize)> = Vec::new();
+    // (Two values in the same place: the same primitive or runtime value,
+    // or objects reached at the same step.)
+    let mut pair = |x: &Abs, y: &Abs, queue: &mut Vec<(usize, usize)>| -> bool {
+        match (x, y) {
+            (Abs::Ref(p), Abs::Ref(q)) => match (ia.get(p), ib.get(q)) {
+                (None, None) => {
+                    let n = ia.len();
+                    ia.insert(*p, n);
+                    ib.insert(*q, n);
+                    queue.push((*p, *q));
+                    true
+                }
+                (Some(i), Some(j)) => i == j,
+                _ => false,
+            },
+            (Abs::Ref(_), _) | (_, Abs::Ref(_)) => false,
+            _ => x == y,
+        }
+    };
+    let roots_a = a.fns.values().chain(a.globals.values().map(|(v, _)| v)).chain(a.frames.iter().flat_map(|f| f.values()));
+    let roots_b = b.fns.values().chain(b.globals.values().map(|(v, _)| v)).chain(b.frames.iter().flat_map(|f| f.values()));
+    for (x, y) in roots_a.zip(roots_b) {
+        if !pair(x, y, &mut queue) {
+            return false;
+        }
+    }
+    let erase = |c: &Abs| if matches!(c, Abs::Ref(_)) { Abs::Ref(0) } else { c.clone() };
+    let mut i = 0;
+    while i < queue.len() {
+        let (p, q) = queue[i];
+        i += 1;
+        let (x, y) = match (a.heap.get(&p), b.heap.get(&q)) {
+            (Some(x), Some(y)) => (x, y),
+            (None, None) => continue,
+            _ => return false,
+        };
+        if std::mem::discriminant(x) != std::mem::discriminant(y) {
+            return false;
+        }
+        let (refs_x, refs_y) = (x.child_refs(), y.child_refs());
+        if refs_x.len() != refs_y.len() {
+            return false;
+        }
+        if refs_x.is_empty() {
+            if x != y {
+                return false;
+            }
+            continue;
+        }
+        let (cx, cy) = (x.children(), y.children());
+        if cx.len() != cy.len() {
+            return false;
+        }
+        for (u, v) in cx.into_iter().zip(cy) {
+            if !pair(u, v, &mut queue) {
+                return false;
+            }
+        }
+        let same = match same_but_children(x, y) {
+            Some(same) => same,
+            None => x.map_children(&erase) == y.map_children(&erase),
+        };
+        if !same {
+            return false;
+        }
+    }
+    true
+}
+
+/// Are `x` and `y` equal but for their child values (`HeapObj::children`,
+/// in the same places)? `None` for a generator (compare it whole).
+fn same_but_children(x: &HeapObj, y: &HeapObj) -> Option<bool> {
+    let props = |a: &[Prop], b: &[Prop]| {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|(p, q)| p.key == q.key && p.attrs == q.attrs && std::mem::discriminant(&p.val) == std::mem::discriminant(&q.val))
+    };
+    Some(match (x, y) {
+        (
+            HeapObj::Object { props: pa, class: ca, private: va, extensible: ea, .. },
+            HeapObj::Object { props: pb, class: cb, private: vb, extensible: eb, .. },
+        ) => {
+            props(pa, pb)
+                && ca == cb
+                && ea == eb
+                && va.len() == vb.len()
+                && va.iter().zip(vb).all(|(e, f)| e.store == f.store && e.val.is_some() == f.val.is_some())
+        }
+        (HeapObj::Array(a), HeapObj::Array(b)) => a.elems.len() == b.elems.len() && props(&a.props, &b.props) && a.holes == b.holes && a.frozen == b.frozen,
+        (HeapObj::Builtin { kind: ka, data: da, ext: xa }, HeapObj::Builtin { kind: kb, data: db, ext: xb }) => {
+            ka == kb
+                && da.len() == db.len()
+                && match (xa, xb) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => props(&a.props, &b.props),
+                    _ => false,
+                }
+        }
+        (
+            HeapObj::Closure { fid: fa, captured: ca, props: pa, known: ka, once: oa, ident: ia, .. },
+            HeapObj::Closure { fid: fb, captured: cb, props: pb, known: kb, once: ob, ident: ib, .. },
+        ) => fa == fb && ka == kb && oa == ob && ia == ib && ca.len() == cb.len() && props(pa, pb),
+        (HeapObj::Choice { .. }, HeapObj::Choice { .. }) => true,
+        (HeapObj::Log { writes: wa, .. }, HeapObj::Log { writes: wb, .. }) => wa.len() == wb.len(),
+        (HeapObj::Generator { .. }, HeapObj::Generator { .. }) => return None,
+        _ => false,
+    })
+}
+
+/// A state as a memo key: equal to another when their canonical forms are
+/// (`iso_equal`), hashed as its canonical form is walked (`iso_hash`),
+/// without making that form.
+#[derive(Clone)]
+pub struct IsoKey(State);
+
+impl PartialEq for IsoKey {
+    fn eq(&self, o: &Self) -> bool {
+        states_iso(&self.0, &o.0)
+    }
+}
+impl Eq for IsoKey {}
+impl std::hash::Hash for IsoKey {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        iso_hash(&self.0, h);
+    }
+}
+
+/// A hash of `s` that two states `iso_equal` share: what `iso_equal`
+/// compares directly, then its values in the canonical walk's order, an
+/// object reference as the step it is first reached at.
+fn iso_hash<H: std::hash::Hasher>(s: &State, h: &mut H) {
+    use std::collections::HashMap;
+    use std::hash::Hash;
+    s.frames.len().hash(h);
+    for f in &s.frames {
+        (f.pc, f.func, f.locals.len(), f.ostack.len()).hash(h);
+        f.ret.hash(h);
+    }
+    s.pending_joins.hash(h);
+    s.handlers.hash(h);
+    s.facts.hash(h);
+    for k in s.fns.keys() {
+        k.hash(h);
+    }
+    for (k, (_, d)) in s.globals.iter() {
+        (k, d).hash(h);
+    }
+    let mut index: HashMap<usize, usize> = HashMap::new();
+    let mut queue: Vec<usize> = Vec::new();
+    let mut value = |v: &Abs, h: &mut H, queue: &mut Vec<usize>| match v {
+        Abs::Ref(a) => {
+            let n = index.len();
+            let i = *index.entry(*a).or_insert_with(|| {
+                queue.push(*a);
+                n
+            });
+            h.write_u8(0xA5);
+            h.write_usize(i);
+        }
+        v => v.hash(h),
+    };
+    for v in s.fns.values().chain(s.globals.values().map(|(v, _)| v)).chain(s.frames.iter().flat_map(|f| f.values())) {
+        value(v, h, &mut queue);
+    }
+    let mut i = 0;
+    while i < queue.len() {
+        let a = queue[i];
+        i += 1;
+        let Some(o) = s.heap.get(&a) else {
+            h.write_u8(0);
+            continue;
+        };
+        if o.child_refs().is_empty() {
+            o.hash(h);
+            continue;
+        }
+        std::mem::discriminant(o).hash(h);
+        o.for_each_child(&mut |c| value(c, h, &mut queue));
+    }
+}
+
 /// Two states equal but for their facts.
 fn same_but_facts(a: &State, b: &State) -> bool {
     if a.facts == b.facts {
@@ -28803,7 +29016,26 @@ fn same_but_facts(a: &State, b: &State) -> bool {
     }
     let mut a2 = a.clone();
     a2.facts = b.facts.clone();
-    a2 == *b || canonicalize_state(&a2) == canonicalize_state(b)
+    a2 == *b || states_iso(&a2, b)
+}
+
+/// `iso_equal`, checked against comparing the canonical states when
+/// `PE_CHECK_ISO` is set.
+fn states_iso(a: &State, b: &State) -> bool {
+    let r = iso_equal(a, b);
+    if env_flag!("PE_CHECK_ISO") {
+        let c = canonicalize_state(a) == canonicalize_state(b);
+        assert_eq!(r, c, "iso_equal disagrees with canonical comparison");
+        if r {
+            let hash = |s: &State| {
+                let mut h = FxHasher::default();
+                iso_hash(s, &mut h);
+                std::hash::Hasher::finish(&h)
+            };
+            assert_eq!(hash(a), hash(b), "iso_hash differs for states iso_equal");
+        }
+    }
+    r
 }
 
 /// Call `f` on `e` and every expression inside it.
