@@ -2601,9 +2601,9 @@ mod tests {
     /// captured is the run's where it is read after the call.
     #[test]
     fn why_charges_derived_work_to_the_static_operation() {
-        let src = "function main(input) { var s = 0; input.list.forEach(function (x) { s += x; }); var u = new String(\"ab\") == \"ab\"; return [s, typeof u, !u]; }";
+        let src = "function main(input) { var s = 0; input.list.forEach(function (x) { s += x; }); var u = \"x\" + Symbol(\"s\"); return [s, typeof u, !u]; }";
         let r = why(src);
-        assert!(r.causes.iter().any(|c| c.kind == "static-work" && c.what == "`==`" && c.units >= 2), "{}", r.render(20));
+        assert!(r.causes.iter().any(|c| c.kind == "static-work" && c.what == "`+`" && c.units >= 2), "{}", r.render(20));
         let read = r.units.iter().find(|u| u.kind == "read" && u.text.ends_with(".value")).expect("the captured variable's cell is read after the loop");
         assert_eq!(read.class, partial::js::WhyClass::Needed, "{}", r.render(20));
     }

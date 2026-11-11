@@ -16912,6 +16912,15 @@ impl Js {
                     return None;
                 }
                 let out = match &s.heap[addr] {
+                    // A wrapper object: its primitive's string (`valueOf`
+                    // and `toString` the standard ones). An invalid Date:
+                    // "Invalid Date", whatever the time zone.
+                    HeapObj::Builtin { kind, data, ext: None } if (kind == "StringObject" && self.pristine("String") || kind == "NumberObject" && self.pristine("Number")) && self.pristine("Object") => {
+                        self.to_string_rec(s, &data[0], on_stack)?
+                    }
+                    HeapObj::Builtin { kind, data, ext: None } if kind == "Date" && self.pristine("Date") && self.pristine("Object") && matches!(&data[0], Abs::Num(n) if n.f().is_nan()) => {
+                        "Invalid Date".to_string()
+                    }
                     // A RegExp as its own instances are (`RegExp.prototype`'s
                     // `toString`, `source` and `flags`): `/source/flags`.
                     HeapObj::Builtin { kind, data, ext: None } if kind == "RegExp" && self.pristine("RegExp") && self.pristine("Object") => {
@@ -17039,6 +17048,10 @@ impl Js {
             // (A Date's number is its time value: `ToPrimitive` with the
             // number hint calls its `valueOf`.)
             Abs::Ref(a) if self.pristine("Date") && self.pristine("Object") && date_tv(&s.heap, *a).is_some() => date_tv(&s.heap, *a).map(JsNum),
+            Abs::Ref(a) if matches!(s.heap.get(a), Some(HeapObj::Builtin { kind, ext: None, .. }) if kind == "NumberObject") && self.pristine("Number") && self.pristine("Object") => match &s.heap[a] {
+                HeapObj::Builtin { data, .. } => prim_to_number(&data[0]),
+                _ => unreachable!(),
+            },
             Abs::Ref(_) => Some(JsNum::parse(&self.to_string_static(s, v)?)),
             other => prim_to_number(other),
         }
@@ -17049,8 +17062,13 @@ impl Js {
     fn to_primitive_static(&self, s: &State, v: &Abs) -> Option<Abs> {
         match v {
             // (A Date's default hint is a string: of its local time, the
-            // runtime's time zone's.)
-            Abs::Ref(a) if date_tv(&s.heap, *a).is_some() => None,
+            // runtime's time zone's; "Invalid Date" for an invalid one.)
+            Abs::Ref(a) if date_tv(&s.heap, *a).is_some() => date_tv(&s.heap, *a).filter(|t| t.is_nan()).and_then(|_| self.to_string_static(s, v)).map(Abs::Str),
+            // (A Number object's is its number, `valueOf`'s.)
+            Abs::Ref(a) if matches!(s.heap.get(a), Some(HeapObj::Builtin { kind, ext: None, .. }) if kind == "NumberObject") && self.pristine("Number") && self.pristine("Object") => match &s.heap[a] {
+                HeapObj::Builtin { data, .. } => Some(data[0].clone()),
+                _ => unreachable!(),
+            },
             Abs::Ref(_) => Some(Abs::Str(self.to_string_static(s, v)?)),
             Abs::Dyn(_) => None,
             prim => Some(prim.clone()),
@@ -17174,6 +17192,7 @@ impl Js {
             "WeakSet" if matches!(callee, Abs::Dyn(_)) => Some("WeakSet"),
             "Object" if matches!(callee, Abs::Dyn(_)) => Some("Object"),
             "String" if matches!(callee, Abs::Dyn(_)) => Some("String"),
+            "Number" if matches!(callee, Abs::Dyn(_)) => Some("Number"),
             "Proxy" if matches!(callee, Abs::Dyn(_)) => Some(PROXY),
             e if matches!(callee, Abs::Dyn(_)) => STANDARD_ERRORS.iter().copied().find(|x| *x == e),
             _ => None,
@@ -17246,6 +17265,15 @@ impl Js {
                     _ => return None,
                 };
                 Some(Abs::Ref(s.alloc(HeapObj::Builtin { kind: "Date".into(), data: vec![Abs::Num(JsNum(tv))].into(), ext: None })))
+            }
+            // `new Number(v)` of a static primitive: a Number object.
+            "Number" => {
+                let n = match args.first() {
+                    None => JsNum::int(0),
+                    Some(v @ (Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Undef | Abs::Null)) => prim_to_number(v)?,
+                    _ => return None,
+                };
+                Some(Abs::Ref(s.alloc(HeapObj::Builtin { kind: "NumberObject".into(), data: vec![Abs::Num(n)].into(), ext: None })))
             }
             "TextDecoder" => {
                 let addr = s.alloc(HeapObj::Builtin { kind: "TextDecoder".into(), data: vec![].into(), ext: None });
@@ -23670,6 +23698,9 @@ impl Js {
             HeapObj::Builtin { kind, data, .. } if kind == "Date" => {
                 out.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Date".into())), vec![data[0].to_rexpr()]) });
             }
+            HeapObj::Builtin { kind, data, .. } if kind == "NumberObject" => {
+                out.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Number".into())), vec![data[0].to_rexpr()]) });
+            }
             HeapObj::Builtin { kind, data, .. } if kind == "RegExp" => {
                 let data = data.clone();
                 // A literal: a fresh intrinsic RegExp whatever `RegExp` names.
@@ -24570,6 +24601,9 @@ impl Js {
             }
             HeapObj::Builtin { kind, data, .. } if kind == "Date" => {
                 shells.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Date".into())), vec![data[0].to_rexpr()]) });
+            }
+            HeapObj::Builtin { kind, data, .. } if kind == "NumberObject" => {
+                shells.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Number".into())), vec![data[0].to_rexpr()]) });
             }
             HeapObj::Builtin { kind, data, .. } if kind == "TypedArray" => {
                 let data = data.clone();

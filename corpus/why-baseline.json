@@ -633,9 +633,13 @@
  },
  "new_object_and_string.js": {
   "merged": 0,
-  "gap": 8
+  "gap": 5
  },
  "new_proxy_typeof.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "number_wrapper_invalid_date.js": {
   "merged": 0,
   "gap": 0
  },
@@ -909,7 +913,7 @@
  },
  "string_wrapper_object.js": {
   "merged": 0,
-  "gap": 11
+  "gap": 9
  },
  "strings_map_join.js": {
   "merged": 0,
