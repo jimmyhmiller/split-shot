@@ -153,7 +153,7 @@
  },
  "capture_intrinsic_method.js": {
   "merged": 0,
-  "gap": 15
+  "gap": 11
  },
  "class_basic.js": {
   "merged": 0,
@@ -254,6 +254,10 @@
  "counter_only_inner_loop.js": {
   "merged": 0,
   "gap": 0
+ },
+ "cyclic_graph_leaves_as_literals.js": {
+  "merged": 0,
+  "gap": 6
  },
  "date_parse_iso_modeled.js": {
   "merged": 0,
@@ -429,7 +433,7 @@
  },
  "function_own_prototype.js": {
   "merged": 0,
-  "gap": 44
+  "gap": 43
  },
  "function_source_text.js": {
   "merged": 0,
@@ -1073,6 +1077,6 @@
  },
  "weak_entries_operand_key.js": {
   "merged": 0,
-  "gap": 45
+  "gap": 44
  }
 }

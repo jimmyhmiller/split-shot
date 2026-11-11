@@ -4475,6 +4475,10 @@ pub struct Js {
     /// way): an object inheriting from one cannot be `Object.create` of it
     /// yet (see `mat_obj_now`).
     mat_pending: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// In a two-phase materialization of a cyclic graph: the heap's address
+    /// and the objects of it that reach a cycle (see `cycle_reach`). Any
+    /// other is made as a literal of what it holds (see `mat_value`).
+    mat_cyclic: std::cell::RefCell<Option<(usize, std::collections::HashSet<usize>)>>,
     /// (`ESCAPE_DEBUG`: the callee of the call being made.)
     debug_callee: std::cell::RefCell<Option<String>>,
     /// The objects of each class just defined (by its constructor's address:
@@ -5426,6 +5430,7 @@ impl Js {
             mat_deferred: std::cell::RefCell::new(Vec::new()),
             mat_in_progress: std::cell::RefCell::new(std::collections::HashSet::new()),
             mat_pending: std::cell::RefCell::new(std::collections::HashSet::new()),
+            mat_cyclic: std::cell::RefCell::new(None),
             debug_callee: std::cell::RefCell::new(None),
             class_snapshots: std::cell::RefCell::new(HashMap::new()),
             shared_fn_objects: std::cell::RefCell::new(HashMap::new()),
@@ -8068,7 +8073,7 @@ impl Js {
         }
         if Self::graph_cyclic(heap, addr) {
             let (mut shells, mut fills) = (Vec::new(), Vec::new());
-            self.mat_value(&Abs::Ref(addr), heap, &mut shells, &mut fills, seen);
+            self.with_cycle_reach(heap, addr, || self.mat_value(&Abs::Ref(addr), heap, &mut shells, &mut fills, seen));
             out.append(&mut shells);
             out.append(&mut fills);
             return seen[&addr];
@@ -23603,10 +23608,14 @@ impl Js {
         let mut seen = HashMap::new();
         // Acyclic graphs use the compact inline form (`{a: 1}`, `[1, 2]`); only a
         // genuinely cyclic graph needs the verbose two-phase shell+fill form.
-        let r = if matches!(v, Abs::Ref(a) if Self::graph_cyclic(heap, *a)) {
+        let cyclic_root = match v {
+            Abs::Ref(a) if Self::graph_cyclic(heap, *a) => Some(*a),
+            _ => None,
+        };
+        let r = if let Some(a) = cyclic_root {
             let mut shells = Vec::new();
             let mut fills = Vec::new();
-            let r = self.mat_value(v, heap, &mut shells, &mut fills, &mut seen);
+            let r = self.with_cycle_reach(heap, a, || self.mat_value(v, heap, &mut shells, &mut fills, &mut seen));
             out.append(&mut shells);
             out.append(&mut fills);
             r
@@ -23635,7 +23644,7 @@ impl Js {
                 seen.insert(*addr, dst); // a cycle back to this object reuses `dst`
                 let mut shells = Vec::new();
                 let mut fills = Vec::new();
-                self.mat_obj(dst, *addr, heap, &mut shells, &mut fills, seen);
+                self.with_cycle_reach(heap, *addr, || self.mat_obj(dst, *addr, heap, &mut shells, &mut fills, seen));
                 out.append(&mut shells);
                 out.append(&mut fills);
             }
@@ -23645,6 +23654,84 @@ impl Js {
             }
             _ => out.push(Op::Assign { var: dst, expr: v.to_rexpr() }),
         }
+    }
+
+    /// Run `f` (a two-phase materialization of what `root` reaches in
+    /// `heap`) knowing which of those objects reach a cycle (`mat_cyclic`).
+    fn with_cycle_reach<R>(&self, heap: &Heap, root: usize, f: impl FnOnce() -> R) -> R {
+        let reach = Self::cycle_reach(heap, root);
+        let prev = self.mat_cyclic.replace(Some((heap as *const Heap as usize, reach)));
+        let r = f();
+        *self.mat_cyclic.borrow_mut() = prev;
+        r
+    }
+
+    /// The objects `root` reaches in `heap` that are on a cycle or reach
+    /// one (Tarjan's strongly connected components, which come out each
+    /// after the ones it reaches).
+    fn cycle_reach(heap: &Heap, root: usize) -> std::collections::HashSet<usize> {
+        use std::collections::{HashMap, HashSet};
+        let mut reach: HashSet<usize> = HashSet::new();
+        if !heap.contains_key(&root) {
+            return reach;
+        }
+        let kids = |a: usize| -> Vec<usize> { heap[&a].child_refs().into_iter().filter(|k| heap.contains_key(k)).collect() };
+        let mut index: HashMap<usize, (usize, usize)> = HashMap::new(); // (index, lowlink)
+        let mut stack: Vec<usize> = Vec::new();
+        let mut on_stack: HashSet<usize> = HashSet::new();
+        let mut calls: Vec<(usize, Vec<usize>, usize)> = Vec::new();
+        index.insert(root, (0, 0));
+        stack.push(root);
+        on_stack.insert(root);
+        calls.push((root, kids(root), 0));
+        let mut next = 1;
+        while let Some((v, ks, i)) = calls.last_mut() {
+            let v = *v;
+            if *i < ks.len() {
+                let w = ks[*i];
+                *i += 1;
+                match index.get(&w).copied() {
+                    None => {
+                        index.insert(w, (next, next));
+                        next += 1;
+                        stack.push(w);
+                        on_stack.insert(w);
+                        calls.push((w, kids(w), 0));
+                    }
+                    Some((wi, _)) if on_stack.contains(&w) => {
+                        let e = index.get_mut(&v).unwrap();
+                        e.1 = e.1.min(wi);
+                    }
+                    Some(_) => {}
+                }
+                continue;
+            }
+            calls.pop();
+            let (vi, vl) = index[&v];
+            if let Some((p, _, _)) = calls.last() {
+                let p = *p;
+                let e = index.get_mut(&p).unwrap();
+                e.1 = e.1.min(vl);
+            }
+            if vl == vi {
+                let mut scc = Vec::new();
+                loop {
+                    let w = stack.pop().unwrap();
+                    on_stack.remove(&w);
+                    scc.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                let members: HashSet<usize> = scc.iter().copied().collect();
+                let cyclic = scc.len() > 1 || kids(v).contains(&v);
+                let reaches = cyclic || scc.iter().any(|&n| kids(n).iter().any(|k| !members.contains(k) && reach.contains(k)));
+                if reaches {
+                    reach.extend(scc);
+                }
+            }
+        }
+        reach
     }
 
     /// Is the heap graph rooted at `start` cyclic? (Then materialization must be
@@ -24148,6 +24235,12 @@ impl Js {
                 // root's body is given: that value.)
                 if let Some(e) = Js::handle_expr(heap, *addr).or_else(|| self.react_element_ident(*addr)).or_else(|| self.react_hoist(heap, *addr)) {
                     return e;
+                }
+                // (An object that reaches no cycle: a literal of what it
+                // holds, made before the fills that refer to it.)
+                let acyclic = matches!(&*self.mat_cyclic.borrow(), Some((h, cyclic)) if *h == heap as *const Heap as usize && !cyclic.contains(addr));
+                if acyclic {
+                    return self.mat_inline(v, heap, shells, seen);
                 }
                 let dst = self.escape_var(*addr);
                 seen.insert(*addr, dst);
