@@ -108,7 +108,16 @@ pub fn compile_full_opts(src: &str, entry: &str, opts: &LowerOpts) -> R<(Vec<Fun
         return Err("ES module imports/exports are not supported".into());
     }
     // (An entry function the script declares; other top-level code.)
-    let explicit_main = module.body.iter().any(|i| matches!(i, ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(f))) if &*f.ident.sym == entry));
+    // (Or a variable the script declares, `var main = (function () { ...
+    // return function main(input) {...} })()`: its value when the
+    // top-level code is done.)
+    let explicit_main = module.body.iter().any(|i| match i {
+        ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(f))) => &*f.ident.sym == entry,
+        ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(v))) => {
+            v.decls.iter().any(|d| matches!(&d.name, ast::Pat::Ident(b) if &*b.id.sym == entry))
+        }
+        _ => false,
+    });
     let top_code = module.body.iter().any(|i| !matches!(i, ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(_)) | ast::Stmt::Empty(_))));
     // (A name of a function the script declares that some code assigns: its
     // binding is a variable, the function object only its first value.)

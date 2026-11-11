@@ -1750,6 +1750,19 @@ struct EntrySplit {
     /// not even which function a variable holds (the paths to the
     /// boundary did not agree on that either).
     generalize_plain: std::cell::Cell<bool>,
+    /// With `generalize`: what every end state agrees on, which stays
+    /// known to `main` (see `EndAgreement`). `None`, or `generalize_whole`:
+    /// none of it.
+    agreed: std::cell::RefCell<Option<EndAgreement>>,
+    /// How many times the agreement was computed again (from end states
+    /// that did not meet with the last one).
+    agreed_tries: std::cell::Cell<usize>,
+    /// With `generalize`: every object the top-level code leaves is runtime
+    /// state (the end states did not meet keeping what they agree on).
+    generalize_whole: std::cell::Cell<bool>,
+    /// The states the top-level code reached its end in, as they arrived
+    /// (before anything was made runtime state there).
+    raw_ends: std::cell::RefCell<Vec<State>>,
     /// No other script reads the top-level lexical bindings (see
     /// `Js::set_closed_script`).
     closed: std::cell::Cell<bool>,
@@ -1765,6 +1778,302 @@ struct EntrySplit {
     stable: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// What the last split pass watched, and the boundary's objects.
     watched: std::cell::RefCell<Option<(EntryWatch, std::collections::BTreeSet<usize>)>>,
+}
+
+/// What the end states of a script's top-level code (several, after a
+/// runtime branch in it: a UMD wrapper's `typeof define`, a library's
+/// `typeof window` test) agree on: what is the same on every path stays
+/// known to `main` when they are made one at the boundary (see
+/// `Js::entry_boundary`); the rest is made runtime state there. Objects
+/// are matched by where the paths hold them (the same local, global or
+/// function object, then the same field of matched objects), not by
+/// address: an object made after the branch has another on each path.
+#[derive(Clone, Debug, Default)]
+struct EndAgreement {
+    /// The end states, as they arrived at the boundary: a later
+    /// specialization of the same code arrives in one of them again.
+    ends: Vec<State>,
+    /// What each end state keeps.
+    keep: Vec<EndKeep>,
+}
+
+impl PartialEq for EndAgreement {
+    fn eq(&self, o: &Self) -> bool {
+        self.keep == o.keep
+    }
+}
+
+/// What one end state keeps of what all of them agree on (see
+/// `EndAgreement`).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EndKeep {
+    /// The top-level frame's slots holding the same value, or the matched
+    /// object, on every path.
+    same_locals: Vec<bool>,
+    /// The objects that stay known (by this path's address): the number
+    /// of their match, and the fields the paths gave different runtime
+    /// values (or objects made runtime state), which go to one variable
+    /// each, named by that number.
+    objects: std::collections::BTreeMap<usize, (usize, Vec<usize>)>,
+    /// The tracked globals the same on every path.
+    same_globals: std::collections::BTreeSet<String>,
+    /// The variables every path knows the same of.
+    same_facts: std::collections::BTreeSet<usize>,
+}
+
+/// Can field `j` of `o` (in `HeapObj::children` order) hold a runtime
+/// value in place of the one it has: a property or element of an object
+/// or array, or a closure's captured value.
+fn liftable_field(o: &HeapObj, j: usize) -> bool {
+    match o {
+        HeapObj::Object { .. } | HeapObj::Array(_) => true,
+        HeapObj::Closure { captured, .. } => j < captured.len(),
+        _ => false,
+    }
+}
+
+impl EndAgreement {
+    fn of(ends: &[State]) -> EndAgreement {
+        let n = ends.len();
+        let mut ag = EndAgreement { ends: ends.to_vec(), keep: vec![EndKeep::default(); n] };
+        if ends.iter().any(|e| e.frames.len() != 1 || e.top().locals.len() != ends[0].top().locals.len()) {
+            return ag;
+        }
+        // (Matches: one address per path. `of[i]`: path i's address to its
+        // match.)
+        let mut matches: Vec<Vec<usize>> = Vec::new();
+        let mut of: Vec<HashMap<usize, usize>> = vec![HashMap::new(); n];
+        let mut bad: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        // (Path i's objects that are made runtime state, whatever matches.)
+        let mut runtime: Vec<std::collections::HashSet<usize>> = ends.iter().map(|e| e.escaped.iter().copied().collect()).collect();
+        let mut work: Vec<usize> = Vec::new();
+        // The values the paths hold at one place: the match of their
+        // objects (`Some`), `None` when they are no objects; an object only
+        // some hold, or objects matched elsewhere differently, are made
+        // runtime state.
+        let mut meet = |vals: &[&Abs], matches: &mut Vec<Vec<usize>>, of: &mut Vec<HashMap<usize, usize>>, bad: &mut std::collections::HashSet<usize>, runtime: &mut Vec<std::collections::HashSet<usize>>, work: &mut Vec<usize>| -> Option<usize> {
+            let addrs: Vec<Option<usize>> = vals.iter().map(|v| if let Abs::Ref(a) = v { Some(*a) } else { None }).collect();
+            if addrs.iter().all(|a| a.is_none()) {
+                return None;
+            }
+            if addrs.iter().any(|a| a.is_none()) {
+                for (i, a) in addrs.iter().enumerate() {
+                    if let Some(a) = a {
+                        runtime[i].insert(*a);
+                    }
+                }
+                return None;
+            }
+            let addrs: Vec<usize> = addrs.into_iter().map(|a| a.unwrap()).collect();
+            let known: Vec<Option<usize>> = addrs.iter().enumerate().map(|(i, a)| of[i].get(a).copied()).collect();
+            if known.iter().all(|m| m.is_none()) {
+                let m = matches.len();
+                for (i, a) in addrs.iter().enumerate() {
+                    of[i].insert(*a, m);
+                }
+                matches.push(addrs);
+                work.push(m);
+                return Some(m);
+            }
+            if known.iter().all(|m| *m == known[0]) {
+                return known[0];
+            }
+            for m in known.into_iter().flatten() {
+                bad.insert(m);
+            }
+            for (i, a) in addrs.iter().enumerate() {
+                runtime[i].insert(*a);
+            }
+            None
+        };
+        let nlocals = ends[0].top().locals.len();
+        for k in 0..nlocals {
+            let vals: Vec<&Abs> = ends.iter().map(|e| &e.top().locals[k]).collect();
+            meet(&vals, &mut matches, &mut of, &mut bad, &mut runtime, &mut work);
+        }
+        let names: std::collections::BTreeSet<String> = ends.iter().flat_map(|e| e.globals.keys().cloned()).collect();
+        for g in &names {
+            let vals: Option<Vec<&Abs>> = ends.iter().map(|e| e.globals.get(g).map(|(v, _)| v)).collect();
+            match vals {
+                Some(vals) => {
+                    meet(&vals, &mut matches, &mut of, &mut bad, &mut runtime, &mut work);
+                }
+                None => {
+                    for (i, e) in ends.iter().enumerate() {
+                        if let Some((Abs::Ref(a), _)) = e.globals.get(g) {
+                            runtime[i].insert(*a);
+                        }
+                    }
+                }
+            }
+        }
+        let fids: std::collections::BTreeSet<usize> = ends.iter().flat_map(|e| e.fns.keys().copied()).collect();
+        for f in &fids {
+            let vals: Option<Vec<&Abs>> = ends.iter().map(|e| e.fns.get(f)).collect();
+            if let Some(vals) = vals {
+                meet(&vals, &mut matches, &mut of, &mut bad, &mut runtime, &mut work);
+            }
+        }
+        // (Each match: the same object on every path, but for fields whose
+        // values are no objects, or objects matched in turn.)
+        let mut lifts: HashMap<usize, Vec<usize>> = HashMap::new();
+        while let Some(m) = work.pop() {
+            let objs: Option<Vec<&HeapObj>> = matches[m].iter().enumerate().map(|(i, a)| ends[i].heap.get(a).filter(|_| !ends[i].escaped.contains(a))).collect();
+            let Some(objs) = objs else {
+                bad.insert(m);
+                continue;
+            };
+            let kids: Vec<Vec<&Abs>> = objs.iter().map(|o| o.children()).collect();
+            if kids.iter().any(|k| k.len() != kids[0].len()) {
+                bad.insert(m);
+                continue;
+            }
+            let mut lift = Vec::new();
+            let mut blank: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+            for j in 0..kids[0].len() {
+                let vals: Vec<&Abs> = kids.iter().map(|k| k[j]).collect();
+                if vals.iter().any(|v| matches!(v, Abs::Ref(_))) {
+                    blank.insert(j);
+                    if meet(&vals, &mut matches, &mut of, &mut bad, &mut runtime, &mut work).is_none() {
+                        lift.push(j);
+                    }
+                } else if vals.iter().any(|v| *v != vals[0]) {
+                    blank.insert(j);
+                    lift.push(j);
+                }
+            }
+            if lift.iter().any(|&j| !liftable_field(objs[0], j)) {
+                if env_flag!("ENTRY_DEBUG") {
+                    eprintln!("[ENTRY] agreement: match {m} has fields {lift:?} to variables, and is no object: {}", objs.iter().map(|o| format!("{o:?}").chars().take(200).collect::<String>()).collect::<Vec<_>>().join(" | "));
+                }
+                bad.insert(m);
+                continue;
+            }
+            let blanked = |o: &HeapObj| {
+                let mut o = o.clone();
+                for (j, c) in o.children_mut().into_iter().enumerate() {
+                    if blank.contains(&j) {
+                        *c = Abs::Undef;
+                    }
+                }
+                o
+            };
+            let b0 = blanked(objs[0]);
+            if objs[1..].iter().any(|o| blanked(o) != b0) {
+                if env_flag!("ENTRY_DEBUG") {
+                    eprintln!("[ENTRY] agreement: match {m} differs: {}", objs.iter().map(|o| format!("{o:?}").chars().take(200).collect::<String>()).collect::<Vec<_>>().join(" | "));
+                }
+                bad.insert(m);
+                continue;
+            }
+            lifts.insert(m, lift);
+        }
+        // (A match made runtime state on one path is on all; and what
+        // anything made runtime state reaches, on that path. A field
+        // holding one goes to a variable, which only an object's or an
+        // array's can: anything else holding one is made runtime state
+        // too, and so on.)
+        let base_lifts = lifts.clone();
+        loop {
+            loop {
+                for &m in &bad {
+                    for (i, a) in matches[m].iter().enumerate() {
+                        runtime[i].insert(*a);
+                    }
+                }
+                let mut changed = false;
+                for i in 0..n {
+                    let mut reach = std::collections::HashSet::new();
+                    for &a in &runtime[i] {
+                        if ends[i].heap.get(&a).is_some() {
+                            Js::reachable(&ends[i].heap, a, &mut reach);
+                        }
+                    }
+                    for a in reach {
+                        if runtime[i].insert(a) {
+                            changed = true;
+                        }
+                        if let Some(&m) = of[i].get(&a) {
+                            if bad.insert(m) {
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                for m in 0..matches.len() {
+                    if !bad.contains(&m) && matches[m].iter().enumerate().any(|(i, a)| runtime[i].contains(a)) {
+                        bad.insert(m);
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+            let mut more_bad = false;
+            for (m, lift) in lifts.iter_mut() {
+                if bad.contains(m) {
+                    continue;
+                }
+                *lift = base_lifts[m].clone();
+                let objs: Vec<&HeapObj> = matches[*m].iter().enumerate().map(|(i, a)| &ends[i].heap[a]).collect();
+                let kids: Vec<Vec<&Abs>> = objs.iter().map(|o| o.children()).collect();
+                for j in 0..kids[0].len() {
+                    let to_runtime = kids.iter().enumerate().any(|(i, k)| matches!(k[j], Abs::Ref(a) if runtime[i].contains(a)));
+                    if to_runtime && !lift.contains(&j) {
+                        lift.push(j);
+                    }
+                }
+                lift.sort_unstable();
+                if lift.iter().any(|&j| !liftable_field(objs[0], j)) {
+                    more_bad = true;
+                }
+            }
+            let newly: Vec<usize> = lifts
+                .iter()
+                .filter(|(m, l)| !bad.contains(*m) && l.iter().any(|&j| !liftable_field(&ends[0].heap[&matches[**m][0]], j)))
+                .map(|(m, _)| *m)
+                .collect();
+            bad.extend(newly);
+            if !more_bad {
+                break;
+            }
+        }
+        // (A match never examined, its objects on no path: none.)
+        for m in 0..matches.len() {
+            if !lifts.contains_key(&m) {
+                bad.insert(m);
+            }
+        }
+        for i in 0..n {
+            let e = &ends[i];
+            let k = &mut ag.keep[i];
+            for (m, addrs) in matches.iter().enumerate() {
+                if !bad.contains(&m) {
+                    k.objects.insert(addrs[i], (m, lifts.get(&m).cloned().unwrap_or_default()));
+                }
+            }
+            let same_val = |vals: &[&Abs]| match vals[0] {
+                Abs::Ref(_) => vals.iter().enumerate().all(|(j, v)| match v {
+                    Abs::Ref(a) => of[j].get(a).is_some_and(|m| !bad.contains(m) && Some(*m) == of[0].get(match vals[0] { Abs::Ref(a0) => a0, _ => unreachable!() }).copied()),
+                    _ => false,
+                }),
+                v0 => vals.iter().all(|v| *v == v0),
+            };
+            k.same_locals = (0..nlocals).map(|s| same_val(&ends.iter().map(|x| &x.top().locals[s]).collect::<Vec<_>>())).collect();
+            k.same_globals = names
+                .iter()
+                .filter(|g| {
+                    let vals: Option<Vec<&Abs>> = ends.iter().map(|x| x.globals.get(*g).map(|(v, _)| v)).collect();
+                    let dirty: std::collections::BTreeSet<bool> = ends.iter().filter_map(|x| x.globals.get(*g).map(|(_, d)| *d)).collect();
+                    vals.is_some_and(|v| same_val(&v)) && dirty.len() == 1
+                })
+                .cloned()
+                .collect();
+            k.same_facts = e.facts.iter().filter(|(v, inf)| ends.iter().all(|x| x.facts.get(v) == Some(*inf))).map(|(v, _)| *v).collect();
+        }
+        ag
+    }
 }
 
 /// What specializing `main` did to the state a script's top-level code left
@@ -7563,6 +7872,7 @@ impl Js {
         let load = crate::engine::specialize(self, self.start());
         self.entry.loading.set(false);
         let mut ends = std::mem::take(&mut *self.entry.boundary.borrow_mut());
+        let raw_ends = std::mem::take(&mut *self.entry.raw_ends.borrow_mut());
         let names_input = program_names_var(&load, self.input_var());
         if names_input && env_flag!("ENTRY_DEBUG") {
             let v = self.input_var();
@@ -7616,13 +7926,57 @@ impl Js {
                 eprintln!("[ENTRY]   heap sizes {} | {}; exports {:?} | {:?}", a.heap.len(), b.heap.len(), ends[0].1.len(), ends[1].1.len());
             }
             self.entry.generalize.set(true);
+            if raw_ends.len() > 1 && !env_flag!("PE_ENTRY_NO_AGREE") {
+                *self.entry.agreed.borrow_mut() = Some(EndAgreement::of(&raw_ends));
+            }
             self.reset_for_respecialization();
             return self.specialize_entry();
         }
         if self.entry.generalize.get() && ends.len() > 1 {
             let key = self.key(&ends[0].0);
+            let using_agreement = self.entry.agreed.borrow().is_some() && !self.entry.generalize_whole.get() && !self.entry.generalize_plain.get();
             if ends.iter().all(|(st, ex, _)| self.key(st) == key && *ex == ends[0].1) {
                 ends.truncate(1);
+            } else if using_agreement && !names_input {
+                // (Kept what the paths agreed on, and they still did not
+                // meet: what they agree on this time, if that is new;
+                // otherwise none of it.)
+                let again = (raw_ends.len() > 1).then(|| EndAgreement::of(&raw_ends));
+                let tries = self.entry.agreed_tries.get();
+                if env_flag!("ENTRY_DEBUG") {
+                    eprintln!("[ENTRY] {} end states keeping what they agree on did not meet (try {tries})", ends.len());
+                    let (a, b) = (&ends[0], &ends[1]);
+                    let (ka, kb) = (self.key(&a.0), self.key(&b.0));
+                    if a.1 != b.1 {
+                        eprintln!("[ENTRY]   exports {:?} | {:?}", a.1, b.1);
+                    }
+                    for (i, (x, y)) in ka.top().locals.iter().zip(kb.top().locals.iter()).enumerate() {
+                        if x != y {
+                            eprintln!("[ENTRY]   local {i}: {x:?} | {y:?}");
+                        }
+                    }
+                    if ka.globals != kb.globals {
+                        eprintln!("[ENTRY]   globals {:?} | {:?}", ka.globals.keys().collect::<Vec<_>>(), kb.globals.keys().collect::<Vec<_>>());
+                    }
+                    if ka.facts != kb.facts {
+                        eprintln!("[ENTRY]   facts {} | {}", ka.facts.len(), kb.facts.len());
+                    }
+                    let mut shown = 0;
+                    for (addr, o) in ka.heap.iter() {
+                        if kb.heap.get(addr) != Some(o) && shown < 6 {
+                            shown += 1;
+                            eprintln!("[ENTRY]   heap @{addr}: {} | {}", format!("{o:?}").chars().take(220).collect::<String>(), format!("{:?}", kb.heap.get(addr)).chars().take(220).collect::<String>());
+                        }
+                    }
+                }
+                if again.is_some() && again != *self.entry.agreed.borrow() && tries < 3 {
+                    self.entry.agreed_tries.set(tries + 1);
+                    *self.entry.agreed.borrow_mut() = again;
+                } else {
+                    self.entry.generalize_whole.set(true);
+                }
+                self.reset_for_respecialization();
+                return self.specialize_entry();
             } else if !self.entry.generalize_plain.get() && !names_input {
                 // (The paths did not agree on which functions the
                 // variables hold: once more, with nothing known.)
@@ -8470,7 +8824,7 @@ fn static_unroll_inline() -> usize {
 /// object, `split`/`match`.)
 const PURE_STRING_METHODS: &[&str] = &[
     "at", "charAt", "charCodeAt", "codePointAt", "endsWith", "startsWith", "includes", "indexOf", "lastIndexOf", "slice",
-    "substring", "substr", "toLowerCase", "toUpperCase", "trim", "trimStart", "trimEnd", "concat", "toString", "valueOf",
+    "substring", "substr", "toLowerCase", "toUpperCase", "trim", "trimStart", "trimEnd", "trimLeft", "trimRight", "concat", "toString", "valueOf",
 ];
 
 /// A standard global function that reads only its first `n` arguments:
@@ -9548,6 +9902,88 @@ fn standard_static_method(g: &str, m: &str) -> bool {
         _ => &[],
     };
     ms.contains(&m)
+}
+
+/// Is `m` a method `G.prototype` has (itself, not inherited) in every
+/// current engine, for a standard constructor `G`? (The standard through
+/// ES2022, the line `standard_static_method` draws, and Annex B's string
+/// methods, which every engine has: a library testing for one,
+/// `typeof String.prototype.trimLeft === "function"`, is answered.)
+fn standard_prototype_method(g: &str, m: &str) -> bool {
+    let ms: &[&str] = match g {
+        "Object" => &[
+            "constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "toString",
+            "valueOf", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__",
+        ],
+        "Function" => &["apply", "bind", "call", "toString", "constructor"],
+        "Array" => &[
+            "at", "concat", "copyWithin", "entries", "every", "fill", "filter", "find", "findIndex", "flat", "flatMap",
+            "forEach", "includes", "indexOf", "join", "keys", "lastIndexOf", "map", "pop", "push", "reduce",
+            "reduceRight", "reverse", "shift", "slice", "some", "sort", "splice", "toLocaleString", "toString",
+            "unshift", "values", "constructor",
+        ],
+        "String" => &[
+            "at", "charAt", "charCodeAt", "codePointAt", "concat", "endsWith", "includes", "indexOf", "lastIndexOf",
+            "localeCompare", "match", "matchAll", "normalize", "padEnd", "padStart", "repeat", "replace", "replaceAll",
+            "search", "slice", "split", "startsWith", "substring", "toLocaleLowerCase", "toLocaleUpperCase",
+            "toLowerCase", "toString", "toUpperCase", "trim", "trimEnd", "trimStart", "valueOf", "constructor",
+            "substr", "trimLeft", "trimRight", "anchor", "big", "blink", "bold", "fixed", "fontcolor", "fontsize",
+            "italics", "link", "small", "strike", "sub", "sup",
+        ],
+        "Number" => &["toExponential", "toFixed", "toLocaleString", "toPrecision", "toString", "valueOf", "constructor"],
+        "Boolean" => &["toString", "valueOf", "constructor"],
+        "Symbol" => &["toString", "valueOf", "constructor"],
+        "BigInt" => &["toLocaleString", "toString", "valueOf", "constructor"],
+        "RegExp" => &["exec", "test", "toString", "compile", "constructor"],
+        "Date" => &[
+            "getDate", "getDay", "getFullYear", "getHours", "getMilliseconds", "getMinutes", "getMonth", "getSeconds",
+            "getTime", "getTimezoneOffset", "getUTCDate", "getUTCDay", "getUTCFullYear", "getUTCHours",
+            "getUTCMilliseconds", "getUTCMinutes", "getUTCMonth", "getUTCSeconds", "setDate", "setFullYear",
+            "setHours", "setMilliseconds", "setMinutes", "setMonth", "setSeconds", "setTime", "setUTCDate",
+            "setUTCFullYear", "setUTCHours", "setUTCMilliseconds", "setUTCMinutes", "setUTCMonth", "setUTCSeconds",
+            "toDateString", "toISOString", "toJSON", "toLocaleDateString", "toLocaleString", "toLocaleTimeString",
+            "toString", "toTimeString", "toUTCString", "valueOf", "getYear", "setYear", "toGMTString", "constructor",
+        ],
+        "Map" => &["clear", "delete", "entries", "forEach", "get", "has", "keys", "set", "values", "constructor"],
+        "Set" => &["add", "clear", "delete", "entries", "forEach", "has", "keys", "values", "constructor"],
+        "WeakMap" => &["delete", "get", "has", "set", "constructor"],
+        "WeakSet" => &["add", "delete", "has", "constructor"],
+        "Promise" => &["catch", "finally", "then", "constructor"],
+        "Error" => &["toString", "constructor"],
+        "EvalError" | "RangeError" | "ReferenceError" | "SyntaxError" | "TypeError" | "URIError" => &["constructor"],
+        _ => &[],
+    };
+    ms.contains(&m)
+}
+
+/// The standard constructors whose prototypes `G.prototype`'s chain passes
+/// through, nearest first, `G` included (`TypeError`, `Error`, `Object`).
+fn standard_prototype_chain(g: &str) -> &'static [&'static str] {
+    match g {
+        "Object" => &["Object"],
+        "Function" => &["Function", "Object"],
+        "Array" => &["Array", "Object"],
+        "String" => &["String", "Object"],
+        "Number" => &["Number", "Object"],
+        "Boolean" => &["Boolean", "Object"],
+        "Symbol" => &["Symbol", "Object"],
+        "BigInt" => &["BigInt", "Object"],
+        "RegExp" => &["RegExp", "Object"],
+        "Date" => &["Date", "Object"],
+        "Map" => &["Map", "Object"],
+        "Set" => &["Set", "Object"],
+        "WeakMap" => &["WeakMap", "Object"],
+        "WeakSet" => &["WeakSet", "Object"],
+        "Promise" => &["Promise", "Object"],
+        "Error" => &["Error", "Object"],
+        "EvalError" => &["EvalError", "Error", "Object"],
+        "RangeError" => &["RangeError", "Error", "Object"],
+        "ReferenceError" => &["ReferenceError", "Error", "Object"],
+        "SyntaxError" => &["SyntaxError", "Error", "Object"],
+        "TypeError" => &["TypeError", "Error", "Object"],
+        "URIError" => &["URIError", "Error", "Object"],
+        _ => &[],
+    }
 }
 
 /// Does some value of `s` (a frame's, a heap object's, a tracked global's)
@@ -12318,6 +12754,13 @@ impl Js {
                             }
                         }
                     }
+                    // A method of a standard prototype (`String.prototype.trimLeft`),
+                    // or one a primitive finds on its own (`"s".padStart`).
+                    if let Abs::Dyn(e) = &operands[0] {
+                        if self.standard_method_read(s, e) {
+                            return self.push(s, Abs::Str("function".into()));
+                        }
+                    }
                     // (`globalThis`'s: the global object. Not of `window`,
                     // `global` or `self`, names an environment may lack.)
                     if matches!(&operands[0], Abs::Dyn(RExpr::Global(g)) if g == "globalThis") {
@@ -12862,6 +13305,39 @@ impl Js {
     }
 
     /// The facts' info about an abstract value (`None` for a heap object).
+    /// Is `e` the read of a method of a standard prototype
+    /// (`String.prototype.trimLeft`), or of one a primitive finds on its
+    /// own (`"s".padStart`, `n.toFixed`), where no prototype on the way is
+    /// one the program writes?
+    fn standard_method_read(&self, s: &State, e: &RExpr) -> bool {
+        let RExpr::Get(o, m) = e else { return false };
+        let from: Option<&str> = match &**o {
+            RExpr::Get(c, p) if p == "prototype" => match &**c {
+                RExpr::Global(g) => Some(g.as_str()),
+                _ => None,
+            },
+            o => {
+                let types = match rexpr_typeof(o) {
+                    Some("string") => crate::facts::T_STR,
+                    Some("number") => crate::facts::T_NUM,
+                    Some("boolean") => crate::facts::T_BOOL,
+                    _ => self.info_abs(s, &Abs::Dyn(o.clone())).map_or(0, |i| i.types),
+                };
+                match types {
+                    crate::facts::T_STR => Some("String"),
+                    crate::facts::T_NUM => Some("Number"),
+                    crate::facts::T_BOOL => Some("Boolean"),
+                    _ => None,
+                }
+            }
+        };
+        let Some(g) = from else { return false };
+        let chain = standard_prototype_chain(g);
+        // (The nearest prototype on the chain that has it; each up to it as
+        // the standard one.)
+        chain.iter().position(|c| standard_prototype_method(c, m)).is_some_and(|k| chain[..=k].iter().all(|c| self.pristine(c)))
+    }
+
     fn info_abs(&self, s: &State, v: &Abs) -> Option<crate::facts::Info> {
         match v {
             Abs::Ref(_) => None,
@@ -12883,6 +13359,7 @@ impl Js {
                     RExpr::Get(o, m) => match &**o {
                         RExpr::Global(g) if standard_static_method(g, m) && self.pristine(g) => Some(crate::facts::T_FUNC),
                         _ if self.standard_prototype_of(e) == Some("Function") => Some(crate::facts::T_FUNC),
+                        _ if self.standard_method_read(s, e) => Some(crate::facts::T_FUNC),
                         _ if self.standard_prototype_of(e).is_some() => Some(crate::facts::T_OBJ),
                         _ => None,
                     },
@@ -16920,8 +17397,8 @@ impl Js {
                 recv.to_ascii_lowercase()
             }),
             "trim" => Abs::Str(recv.trim_matches(crate::jsnum::is_js_whitespace).to_string()),
-            "trimStart" => Abs::Str(recv.trim_start_matches(crate::jsnum::is_js_whitespace).to_string()),
-            "trimEnd" => Abs::Str(recv.trim_end_matches(crate::jsnum::is_js_whitespace).to_string()),
+            "trimStart" | "trimLeft" => Abs::Str(recv.trim_start_matches(crate::jsnum::is_js_whitespace).to_string()),
+            "trimEnd" | "trimRight" => Abs::Str(recv.trim_end_matches(crate::jsnum::is_js_whitespace).to_string()),
             "indexOf" => {
                 let needle = str_arg(0)?;
                 let from = clamp(int_arg(1, 0.0)?);
@@ -17640,6 +18117,13 @@ impl Js {
                                     own_or("name", Abs::Str(self.names[*fid].clone())).zip(own_or("length", Abs::Num(JsNum::int(self.lengths[*fid] as i64))))
                                 }
                                 HeapObj::Builtin { kind, data, .. } if kind == BOUND_FUNCTION => Some((data[2].clone(), data[3].clone())),
+                                // (`Function.prototype.call` and its kin: their
+                                // standard `name` and `length`.)
+                                HeapObj::Builtin { kind, .. } => match kind.strip_prefix("Function.prototype.") {
+                                    Some(m @ ("call" | "bind")) => Some((Abs::Str(m.into()), Abs::Num(JsNum::int(1)))),
+                                    Some("apply") => Some((Abs::Str("apply".into()), Abs::Num(JsNum::int(2)))),
+                                    _ => None,
+                                },
                                 _ => None,
                             };
                             let bound = match name_len {
@@ -17658,6 +18142,18 @@ impl Js {
                                 self.finish_call(s, Abs::Ref(b), Abs::Undef, ret, pc, out);
                                 return Step::Continue;
                             }
+                        }
+                    }
+                    // `Function.prototype.call` called on a standard
+                    // prototype's method (`call.call(String.prototype.slice,
+                    // s, 1)`, a call-bound method): `F.call(s, 1)`, which
+                    // reads no property of `F` but `Function.prototype`'s.
+                    if let (Abs::Dyn(e), "call" | "apply") = (&this, method) {
+                        if self.standard_method_read(s, e) && self.pristine("Function") {
+                            let n = args.len();
+                            s.top_mut().ostack.push(Abs::Dyn(RExpr::Get(Box::new(e.clone()), method.to_string())));
+                            s.top_mut().ostack.extend(args);
+                            return self.do_call(s, n, pc, out, this.clone(), ret, Abs::Undef);
                         }
                     }
                     // `Object.prototype.m.call(t, ...args)`: the intrinsic on `t`.
@@ -19624,10 +20120,36 @@ impl Js {
         if !self.entry.loading.get() || !at_top {
             return self.advance(s);
         }
+        self.entry.raw_ends.borrow_mut().push(s.clone());
         // (Everything the top-level code leaves, as runtime state: its
-        // locals and what they reach, its globals, nothing known of any.)
+        // locals and what they reach, its globals, nothing known of any;
+        // but what every path to here agrees on, when they may.)
         let generalize = self.entry.generalize.get();
-        if generalize {
+        // (This path's part of the agreement: the end state it arrives in,
+        // among those the agreement was made of.)
+        let keep: Option<EndKeep> = if generalize && !self.entry.generalize_whole.get() && !self.entry.generalize_plain.get() {
+            self.entry.agreed.borrow().as_ref().and_then(|ag| {
+                let at = ag.ends.iter().position(|e| e == &*s);
+                if env_flag!("ENTRY_DEBUG") {
+                    match at {
+                        Some(i) => eprintln!(
+                            "[ENTRY] end state {i}: keeps {} objects ({} with fields to variables), locals {:?}",
+                            ag.keep[i].objects.len(),
+                            ag.keep[i].objects.values().filter(|(_, l)| !l.is_empty()).count(),
+                            ag.keep[i].same_locals
+                        ),
+                        None => eprintln!("[ENTRY] an end state none of the agreement's"),
+                    }
+                }
+                at.map(|i| ag.keep[i].clone())
+            })
+        } else {
+            None
+        };
+        let agreeing = keep.is_some();
+        if let Some(keep) = keep {
+            self.generalize_agreeing(s, &keep, out);
+        } else if generalize {
             // (But the entry's input, a runtime value already, which the
             // load code may not name.)
             let _why = self.why.merging(why::Merge::Whole);
@@ -19748,13 +20270,22 @@ impl Js {
                 exports.push(*v);
             }
         }
+        // (Keeping what the paths agree on, a variable is named by where
+        // the state holds it, which is the same on every path, not by
+        // itself: one an object made after the branch is in is another on
+        // each.)
+        let rank: HashMap<usize, usize> = if agreeing { canonical_var_order(s).into_iter().enumerate().map(|(i, v)| (v, i)).collect() } else { HashMap::new() };
         for v in vars {
             if pinned.contains(&v) {
                 continue;
             }
             // (One variable per variable named, the same on every path to
             // the boundary, when the paths are to meet there.)
-            let n = if generalize { self.aux_var(120, v, 0) } else { self.fresh_var() };
+            let n = match rank.get(&v) {
+                Some(&i) => self.aux_var(122, i, 0),
+                None if generalize => self.aux_var(120, v, 0),
+                None => self.fresh_var(),
+            };
             out.push(Op::Assign { var: n, expr: RExpr::Var(v) });
             rename.insert(v, n);
             exports.push(n);
@@ -19779,6 +20310,98 @@ impl Js {
         s.top_mut().pc += 1;
         self.entry.boundary.borrow_mut().push((s.clone(), exports, hoisted));
         Step::Halt
+    }
+
+    /// The state the top-level code leaves at its end, as runtime state
+    /// but for what every path there agrees on (`keep`, this path's part
+    /// of the agreement): the objects matched on every path stay known, as
+    /// do the locals and the globals the same on all, and what is known
+    /// of the variables; a field the paths gave different runtime values
+    /// goes to one variable; everything else is made at runtime here.
+    /// Every path does the same, so they meet.
+    fn generalize_agreeing(&self, s: &mut State, keep: &EndKeep, out: &mut Vec<Op>) {
+        let _why = self.why.merging(why::Merge::Whole);
+        s.gc();
+        let fi = s.frames.len() - 1;
+        let input = Abs::Dyn(RExpr::Var(self.input_var()));
+        let runtime: Vec<usize> = s.heap.keys().copied().filter(|a| !s.escaped.contains(a) && !keep.objects.contains_key(a)).collect();
+        let mut escaped = std::collections::HashSet::new();
+        for a in Js::holders_first(&s.heap, &runtime, 5) {
+            if s.heap.contains_key(&a) && !s.escaped.contains(&a) {
+                let _ = self.escape(s, a, &mut escaped, out);
+            }
+        }
+        // (The fields, before the locals: their values may read a slot's
+        // variable the locals' assignment below gives a new value.)
+        for (&addr, (m, idxs)) in &keep.objects {
+            for &idx in idxs {
+                let var = self.aux_var(121, *m, idx);
+                let cell: Option<&mut Abs> = match s.heap.get_mut_quiet(&addr) {
+                    Some(o) if liftable_field(o, idx) => o.children_mut().into_iter().nth(idx),
+                    _ => None,
+                };
+                let cell = cell.expect("a field the end states agree to give one variable is an object's or array's, or a closure's capture");
+                // (An object this path made runtime state before: its
+                // variable.)
+                let expr = match std::mem::replace(cell, Abs::Dyn(RExpr::Var(var))) {
+                    Abs::Ref(a) if s.escaped.contains(&a) => RExpr::Var(self.escape_var(a)),
+                    Abs::Ref(a) => panic!("a field the end states agree to give one variable holds an object still (@{a}, kept on this path)"),
+                    v => v.to_rexpr(),
+                };
+                out.push(Op::Assign { var, expr });
+            }
+        }
+        let slots: Vec<usize> = (0..s.frames[fi].locals.len())
+            .filter(|&k| s.frames[fi].locals[k] != input && !keep.same_locals.get(k).copied().unwrap_or(false))
+            .collect();
+        self.materialize(s, &slots, out);
+        // (Tracked globals: written out; those the paths disagree on
+        // forgotten.)
+        self.sync_globals(s, false, out);
+        // (A reference still held to an object made runtime state: its
+        // variable, so no object made runtime state stays in the state, to
+        // be named by its address, another on each path.)
+        let gone: std::collections::HashSet<usize> = s.escaped.iter().copied().collect();
+        for f in s.frames.iter_mut() {
+            f.values_mut().for_each(|v| invalidate_abs(self, v, &gone));
+        }
+        let addrs: Vec<usize> = s.heap.keys().copied().collect();
+        for a in addrs {
+            if gone.contains(&a) {
+                continue;
+            }
+            if let Some(o) = s.heap.get_mut_quiet(&a) {
+                o.children_mut().into_iter().for_each(|v| invalidate_abs(self, v, &gone));
+            }
+        }
+        s.fns = s.fns.iter().map(|(f, v)| {
+            let mut v = v.clone();
+            invalidate_abs(self, &mut v, &gone);
+            (*f, v)
+        }).collect();
+        region_note_globals();
+        s.globals = s.globals.iter().map(|(k, (v, d))| {
+            let mut v = v.clone();
+            invalidate_abs(self, &mut v, &gone);
+            (k.clone(), (v, *d))
+        }).collect();
+        s.gc();
+        let names: Vec<String> = s.globals.keys().filter(|g| !keep.same_globals.contains(*g)).cloned().collect();
+        for g in names {
+            region_note_globals();
+            s.globals.remove(&g);
+        }
+        s.facts = s
+            .facts
+            .iter()
+            .filter_map(|(v, i)| {
+                if keep.same_facts.contains(v) {
+                    return Some((*v, i.clone()));
+                }
+                let callee = i.callee.clone()?;
+                Some((*v, Info { types: crate::facts::T_FUNC, truthy: Some(true), callee: Some(callee), ..Info::top() }))
+            })
+            .collect();
     }
 
     /// `Instr::GetProp(k)`: read property `k` of the value on top of the stack.
@@ -19901,6 +20524,17 @@ impl Js {
                 let b = s.alloc(HeapObj::Builtin { kind: format!("Object.prototype.{k}"), data: vec![].into(), ext: None });
                 return self.push(s, Abs::Ref(b));
             }
+            // (`Function.prototype.call`, `apply`, `bind`, likewise: the
+            // call-bind idiom, `bind.call(Function.prototype.call,
+            // String.prototype.replace)`.)
+            if p == "prototype"
+                && matches!(&**base, RExpr::Global(g) if g == "Function")
+                && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str())
+                && self.pristine("Function")
+            {
+                let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
+                return self.push(s, Abs::Ref(b));
+            }
         }
         // `G.m` for a standard constructor G (pristine) and `m` a method of
         // `Object.prototype` that `Function.prototype` does not shadow: G has
@@ -19921,7 +20555,8 @@ impl Js {
         if let Abs::Ref(a) = &o {
             if let HeapObj::Builtin { kind, .. } = &s.heap[a] {
                 let iterator_method = kind == ITERATOR_SELF_METHOD || kind.strip_suffix(".prototype.next").is_some_and(is_iterator_kind);
-                if (intrinsic_method_expr(kind).is_some() || iterator_method) && (k == "call" || k == "apply") && self.pristine("Function") {
+                let function_intrinsic = kind.strip_prefix("Function.prototype.").is_some_and(|m| MODELED_FUNCTION_PROTO_METHODS.contains(&m));
+                if (intrinsic_method_expr(kind).is_some() || iterator_method) && (k == "call" || k == "apply" || (k == "bind" && function_intrinsic)) && self.pristine("Function") {
                     let b = s.alloc(HeapObj::Builtin { kind: format!("Function.prototype.{k}"), data: vec![].into(), ext: None });
                     return self.push(s, Abs::Ref(b));
                 }
@@ -21420,6 +22055,15 @@ impl Js {
         }
         if let Some(of) = kind.strip_suffix(".prototype.next").filter(|k| is_iterator_kind(k)) {
             return this.is_some_and(|t| iterator(t, Some(of)));
+        }
+        // (`call`, `apply` and `bind` themselves, on a function: what
+        // calling them does with it is modeled, see `do_call`.)
+        if kind.strip_prefix("Function.prototype.").is_some_and(|m| MODELED_FUNCTION_PROTO_METHODS.contains(&m)) {
+            return match this {
+                Some(Abs::Ref(t)) => matches!(&s.heap[t], HeapObj::Closure { .. }) || matches!(&s.heap[t], HeapObj::Builtin { kind, .. } if builtin_kind_is_function(kind)),
+                Some(Abs::Dyn(e)) => self.standard_method_read(s, e),
+                _ => false,
+            };
         }
         let Some(Abs::Ref(t)) = this else { return false };
         let Some((base, _)) = kind.split_once(".prototype.") else { return false };
@@ -26578,6 +27222,50 @@ fn as_ref_addr(v: &Abs) -> Option<usize> {
 /// share a residual block. Without this a loop that allocates fresh objects each
 /// iteration never memo-ties (the addresses always differ). `next_addr`,
 /// `pending_joins`, and `handlers` carry no heap addresses to renumber.
+/// The variables `s` names, in the order a walk of its canonical form
+/// (`canonicalize_state`) meets them: two states that differ only in
+/// their objects' addresses and their variables' names list theirs in
+/// corresponding order. (Its values, then its objects' and what is known
+/// of each variable, in that order.)
+fn canonical_var_order(s: &State) -> Vec<usize> {
+    let c = canonicalize_state(s);
+    let mut vars: Vec<usize> = Vec::new();
+    let add = |v: &Abs, vars: &mut Vec<usize>| {
+        if let Abs::Dyn(e) = v {
+            crate::coalesce::rexpr_vars(e, vars);
+        }
+    };
+    for v in c.frames.iter().flat_map(|f| f.values()).chain(c.fns.values()).chain(c.globals.values().map(|(v, _)| v)) {
+        add(v, &mut vars);
+    }
+    for (_, o) in c.heap.iter() {
+        if let HeapObj::Closure { ident: Some(v), .. } | HeapObj::Object { class: ObjClass::FinalCell { made: Some(v) }, .. } = o {
+            vars.push(*v);
+        }
+        for ch in o.children() {
+            add(ch, &mut vars);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut order: Vec<usize> = vars.into_iter().filter(|v| seen.insert(*v)).collect();
+    // (What is known of each, in that order: the variables only that
+    // names, after.)
+    let mut i = 0;
+    while i < order.len() {
+        if let Some(info) = c.facts.get(&order[i]) {
+            let mut named = Vec::new();
+            info.vars(&mut named);
+            for v in named {
+                if seen.insert(v) {
+                    order.push(v);
+                }
+            }
+        }
+        i += 1;
+    }
+    order
+}
+
 fn canonicalize_state(s: &State) -> State {
     use std::collections::HashMap;
     let mut mapping: HashMap<usize, usize> = HashMap::new();

@@ -127,6 +127,10 @@
   "merged": 0,
   "gap": 0
  },
+ "call_bound_standard_methods.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "capture_before_init.js": {
   "merged": 0,
   "gap": 14
@@ -327,6 +331,10 @@
   "merged": 0,
   "gap": 30
  },
+ "feature_tests_on_standard_prototypes.js": {
+  "merged": 0,
+  "gap": 2
+ },
  "final_cells.js": {
   "merged": 0,
   "gap": 7
@@ -365,7 +373,7 @@
  },
  "fresh_symbol_key_holders.js": {
   "merged": 0,
-  "gap": 17
+  "gap": 19
  },
  "fresh_symbol_key_read.js": {
   "merged": 0,
@@ -510,6 +518,10 @@
  "json_parse_static.js": {
   "merged": 0,
   "gap": 3
+ },
+ "load_branch_keeps_agreed_state.js": {
+  "merged": 0,
+  "gap": 0
  },
  "loop_builds_large_table.js": {
   "merged": 0,
@@ -752,6 +764,10 @@
   "gap": 0
  },
  "regexp_source_escaped.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "region_reassigns_outer_read.js": {
   "merged": 0,
   "gap": 0
  },
