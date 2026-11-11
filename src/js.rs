@@ -25793,6 +25793,7 @@ impl Js {
                 forget_globals |= globals_touched;
                 continue;
             }
+            self.freeze_region_defs(s, &[&body, &catch_body], out);
             out.push(Op::Try { body, catch_slot: exc_slot.map(|_| ev), catch_body, finally_body: None });
             s.top_mut().pc = end;
             // A local every path out of the body and the catch left holding one
@@ -25846,6 +25847,7 @@ impl Js {
         self.halt_at.borrow_mut().pop();
         self.region_limits.borrow_mut().pop();
         self.eager_stores.set(prev_eager);
+        self.freeze_region_defs(s, &[&body, &finally_body], out);
         out.push(Op::Try {
             body,
             catch_slot: None,
@@ -25871,13 +25873,8 @@ impl Js {
     fn materialize_written(&self, s: &mut State, written: &std::collections::BTreeSet<usize>, out: &mut Vec<Op>) {
         let _why = self.why.merging(why::Merge::Whole);
         let mut escaped = std::collections::HashSet::new();
-        // (In address order here, not holders first: with holders first a
-        // residual of handlebars loses a property of an object a cell holds.
-        // An order-dependent fault in `escape`, open in `split-shot-bugs`;
-        // `PE_HF_TRY=1` orders them holders first, to reproduce it.)
         let written: Vec<usize> = written.iter().copied().collect();
-        let ordered = if env_flag!("PE_HF_TRY") { Js::holders_first(&s.heap, &written, 4) } else { written };
-        for a in ordered {
+        for a in Js::holders_first(&s.heap, &written, 4) {
             if s.heap.contains_key(&a) && !s.escaped.contains(&a) {
                 let _ = self.escape(s, a, &mut escaped, out);
             }
@@ -25937,6 +25934,34 @@ impl Js {
             }
         }
         f.cleared_at = f.pc;
+    }
+
+    /// Before a residual region (`try` body, handler, `finally`): what the
+    /// state outside it holds that reads a variable the region assigns is
+    /// copied to a variable of its own. The region is specialized from the
+    /// region's frame alone (`sole_frame_state`), so a value only the
+    /// frames below hold, or an object only they reach, is out of its sight:
+    /// a function inlined there names its locals as it did when inlined
+    /// before the `try` (`a = require_x(); try { b = require_y(); } ...`,
+    /// both results one variable), and a cell holding the first one's
+    /// result would read the second's after the `try`. (The region's own
+    /// frame's locals are its stable variables, which the region is meant
+    /// to update.)
+    fn freeze_region_defs(&self, s: &mut State, region: &[&Program<Op, Cond>], out: &mut Vec<Op>) {
+        let mut defs = Vec::new();
+        for p in region {
+            for b in &p.blocks {
+                for o in &b.ops {
+                    op_defs_deep(o, &mut defs);
+                }
+            }
+        }
+        defs.sort_unstable();
+        defs.dedup();
+        let fi = s.frames.len() - 1;
+        let own: Vec<(usize, usize)> = (0..s.frames[fi].locals.len()).map(|k| (fi, k)).collect();
+        let pc = s.top().pc;
+        self.freeze_refs_to(s, &defs, &own, &[], pc, out);
     }
 
     fn stable_id(&self, func: usize, slot: usize) -> usize {

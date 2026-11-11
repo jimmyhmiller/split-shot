@@ -14,3 +14,4 @@ dist/
 !corpus-modules/**/node_modules/**
 corpus-modules/**/.residual.js
 corpus-modules/**/.linked.js
+target-alt/
