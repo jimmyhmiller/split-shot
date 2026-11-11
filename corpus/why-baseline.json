@@ -889,7 +889,7 @@
  },
  "string_lone_surrogate.js": {
   "merged": 0,
-  "gap": 11
+  "gap": 2
  },
  "string_number_multibyte.js": {
   "merged": 0,

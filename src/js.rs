@@ -8534,6 +8534,91 @@ pub fn ill_formed_string_literal(hex: &str) -> String {
     out
 }
 
+/// The UTF-16 code units of a string value: a known string's, or an
+/// ill-formed string literal's (`ILL_FORMED_STRING`).
+fn string_units(v: &Abs) -> Option<Vec<u16>> {
+    match v {
+        Abs::Str(t) => Some(t.encode_utf16().collect()),
+        Abs::Dyn(RExpr::Opaque(op, xs)) if op == ILL_FORMED_STRING => match xs.as_slice() {
+            [RExpr::Str(hex)] => (0..hex.len()).step_by(4).map(|i| u16::from_str_radix(hex.get(i..i + 4)?, 16).ok()).collect(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Is `v` an ill-formed string literal (see `ILL_FORMED_STRING`)?
+fn is_ill_formed_string(v: &Abs) -> bool {
+    matches!(v, Abs::Dyn(RExpr::Opaque(op, _)) if op == ILL_FORMED_STRING)
+}
+
+/// The string value of code units `units`: a known string when they are
+/// well-formed, else the ill-formed string literal of them.
+fn string_of_units(units: &[u16]) -> Abs {
+    match String::from_utf16(units) {
+        Ok(t) => Abs::Str(t),
+        Err(_) => Abs::Dyn(RExpr::Opaque(ILL_FORMED_STRING.into(), vec![RExpr::Str(units.iter().map(|u| format!("{u:04x}")).collect())])),
+    }
+}
+
+/// `units` with each lone surrogate replaced by U+FFFD (`toWellFormed`).
+fn well_formed_units(units: &[u16]) -> Vec<u16> {
+    let mut out = Vec::with_capacity(units.len());
+    let mut i = 0;
+    while i < units.len() {
+        let u = units[i];
+        if (0xD800..0xDC00).contains(&u) && units.get(i + 1).is_some_and(|n| (0xDC00..0xE000).contains(n)) {
+            out.push(u);
+            out.push(units[i + 1]);
+            i += 2;
+        } else if (0xD800..0xE000).contains(&u) {
+            out.push(0xFFFD);
+            i += 1;
+        } else {
+            out.push(u);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// A method of a string value an ill-formed literal is part of (see
+/// `string_units`), over its code units: the ones a lone surrogate does not
+/// make the runtime's own business (`normalize`, case mapping and the like
+/// are left to it).
+fn ill_formed_string_method(units: &[u16], m: &str, args: &[Abs]) -> Option<Abs> {
+    let index = |i: usize| -> Option<f64> {
+        match args.get(i) {
+            None | Some(Abs::Undef) => Some(0.0),
+            Some(v @ (Abs::Num(_) | Abs::Bool(_) | Abs::Null)) => prim_to_number(v).map(|n| n.f()).map(|f| if f.is_nan() { 0.0 } else { f.trunc() }),
+            _ => None,
+        }
+    };
+    let n = units.len() as f64;
+    match m {
+        "charCodeAt" => {
+            let i = index(0)?;
+            Some(Abs::Num(JsNum(if i >= 0.0 && i < n { units[i as usize] as f64 } else { f64::NAN })))
+        }
+        "codePointAt" => {
+            let i = index(0)?;
+            if !(i >= 0.0 && i < n) {
+                return Some(Abs::Undef);
+            }
+            let (i, u) = (i as usize, units[i as usize]);
+            let cp = match units.get(i + 1) {
+                Some(&l) if (0xD800..0xDC00).contains(&u) && (0xDC00..0xE000).contains(&l) => 0x10000 + ((u as u32 - 0xD800) << 10) + (l as u32 - 0xDC00),
+                _ => u as u32,
+            };
+            Some(Abs::Num(JsNum(cp as f64)))
+        }
+        "isWellFormed" => Some(Abs::Bool(String::from_utf16(units).is_ok())),
+        "toWellFormed" => Some(string_of_units(&well_formed_units(units))),
+        "toString" | "valueOf" => Some(string_of_units(units)),
+        _ => None,
+    }
+}
+
 /// What a property lookup along the prototype chain found.
 #[derive(Debug)]
 enum Found {
@@ -11246,6 +11331,37 @@ impl Js {
                     }
                     if empty(&b) && self.makes_string(s, &a) {
                         return self.push(s, a);
+                    }
+                }
+                // A string with a lone surrogate (`ILL_FORMED_STRING`): `+` of
+                // it and another known string is their code units, and `===`
+                // compares them.
+                if (is_ill_formed_string(&a) || is_ill_formed_string(&b)) && self.pristine("String") {
+                    let as_text = |v: &Abs| -> Option<Vec<u16>> {
+                        string_units(v).or_else(|| {
+                            let t = match v {
+                                Abs::Num(n) => n.to_js_string(),
+                                Abs::Bool(b) => b.to_string(),
+                                Abs::Undef => "undefined".into(),
+                                Abs::Null => "null".into(),
+                                _ => return None,
+                            };
+                            Some(t.encode_utf16().collect())
+                        })
+                    };
+                    match op {
+                        Bop::Add => {
+                            if let (Some(mut x), Some(y)) = (as_text(&a), as_text(&b)) {
+                                x.extend(y);
+                                return self.push(s, string_of_units(&x));
+                            }
+                        }
+                        Bop::Eq | Bop::Ne => {
+                            if let (Some(x), Some(y)) = (string_units(&a), string_units(&b)) {
+                                return self.push(s, Abs::Bool((x == y) == (*op == Bop::Eq)));
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 // First try to fold with full JS coercion over static operands
@@ -18688,6 +18804,16 @@ impl Js {
                     return Step::Continue;
                 }
             }
+            // (A string with a lone surrogate: over its code units.)
+            if self.pristine("String") {
+                if let Some(units) = string_units(&Abs::Dyn((**obj).clone())).filter(|_| matches!(&**obj, RExpr::Opaque(op, _) if op == ILL_FORMED_STRING)) {
+                    if let Some(v) = ill_formed_string_method(&units, method, &args) {
+                        s.top_mut().pc += 1;
+                        s.top_mut().ostack.push(v);
+                        return Step::Continue;
+                    }
+                }
+            }
             if let (RExpr::Str(recv), true) = (&**obj, self.pristine("String")) {
                 let recv = recv.clone();
                 let method = method.clone();
@@ -20601,6 +20727,13 @@ impl Js {
 
     /// `Instr::GetProp(k)`: read property `k` of the value on top of the stack.
     fn get_prop_step(&self, s: &mut State, k: &String, pc: usize, out: &mut Vec<Op>) -> Step<Js> {
+        // (A string with a lone surrogate: its length in code units.)
+        if k == "length" && self.pristine("String") {
+            if let Some(v) = s.top().ostack.last().filter(|v| is_ill_formed_string(v)).and_then(string_units) {
+                s.top_mut().ostack.pop();
+                return self.push(s, Abs::Num(JsNum::int(v.len() as i64)));
+            }
+        }
         // A choice of objects: the property of each, chosen.
         if let Some(c) = Js::choice_at(s, 0) {
             if let Some(r) = self.choice_read(s, c, k) {
