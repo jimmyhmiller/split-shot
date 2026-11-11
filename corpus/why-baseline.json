@@ -915,6 +915,10 @@
   "merged": 0,
   "gap": 0
  },
+ "string_replace_dollar_patterns.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "string_wrapper_object.js": {
   "merged": 0,
   "gap": 9

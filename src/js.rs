@@ -17892,7 +17892,52 @@ impl Js {
                     a => self.to_string_static(s, a)?,
                 };
                 if rep.contains('$') {
-                    return None;
+                    // (GetSubstitution with no captures: `$$`, `$&`, `` $` ``,
+                    // `$'`; `$1` and `$<` stay as they are, as does a `$`
+                    // before anything else.)
+                    let subst = |at: usize| -> String {
+                        let mut out = String::new();
+                        let mut it = rep.char_indices().peekable();
+                        while let Some((_, c)) = it.next() {
+                            if c != '$' {
+                                out.push(c);
+                                continue;
+                            }
+                            match it.peek().map(|(_, n)| *n) {
+                                Some('$') => {
+                                    it.next();
+                                    out.push('$');
+                                }
+                                Some('&') => {
+                                    it.next();
+                                    out.push_str(&pat);
+                                }
+                                Some('`') => {
+                                    it.next();
+                                    out.push_str(&recv[..at]);
+                                }
+                                Some('\'') => {
+                                    it.next();
+                                    out.push_str(&recv[at + pat.len()..]);
+                                }
+                                _ => out.push('$'),
+                            }
+                        }
+                        out
+                    };
+                    if pat.is_empty() && method == "replaceAll" {
+                        return None;
+                    }
+                    let starts: Vec<usize> = if method == "replace" { recv.find(&pat).into_iter().collect() } else { recv.match_indices(&pat).map(|(i, _)| i).collect() };
+                    let mut out = String::new();
+                    let mut last = 0;
+                    for at in starts {
+                        out.push_str(&recv[last..at]);
+                        out.push_str(&subst(at));
+                        last = at + pat.len();
+                    }
+                    out.push_str(&recv[last..]);
+                    return Some(Abs::Str(out));
                 }
                 Abs::Str(if method == "replace" { recv.replacen(&pat, &rep, 1) } else if pat.is_empty() {
                     // `"ab".replaceAll("", "-")` is "-a-b-" (between units).
@@ -19247,6 +19292,7 @@ impl Js {
                     .object_assign_info(s, &callee, &args)
                     .or_else(|| self.react_call_result_info(s, &callee))
                     .or_else(|| self.standard_call_info(&callee))
+                    .or_else(|| self.string_method_result_info(s, &callee))
                     .or_else(|| self.regex_exec_info(s, &callee, &this));
                 let nonthrow = matches!(&callee, Abs::Dyn(e) if self.call_nonthrowing(s, e, &args));
                 let symbol_call = matches!(&callee, Abs::Dyn(e) if self.is_symbol_call(e, &args)) && this == Abs::Undef;
@@ -25302,6 +25348,31 @@ impl Js {
         self.pristine(g).then(|| Info::of_types(types))
     }
 
+    /// The type of what a standard `String.prototype` method called on a
+    /// string returns (`s.replace(...)` is a string), when it returns.
+    fn string_method_result_info(&self, s: &State, callee: &Abs) -> Option<Info> {
+        use crate::facts::{T_BOOL, T_NUM, T_STR};
+        let Abs::Dyn(e @ RExpr::Get(o, m)) = callee else { return None };
+        if !self.standard_method_read(s, e) {
+            return None;
+        }
+        let on_string = match &**o {
+            RExpr::Str(_) => true,
+            o => rexpr_typeof(o) == Some("string") || self.info_abs(s, &Abs::Dyn(o.clone())).is_some_and(|i| i.types == T_STR),
+        };
+        if !on_string {
+            return None;
+        }
+        let types = match m.as_str() {
+            "replace" | "replaceAll" | "slice" | "substring" | "substr" | "toUpperCase" | "toLowerCase" | "toLocaleUpperCase" | "toLocaleLowerCase" | "trim" | "trimStart"
+            | "trimEnd" | "trimLeft" | "trimRight" | "padStart" | "padEnd" | "repeat" | "concat" | "charAt" | "normalize" | "toWellFormed" | "toString" | "valueOf" => T_STR,
+            "indexOf" | "lastIndexOf" | "charCodeAt" | "localeCompare" | "search" => T_NUM,
+            "includes" | "startsWith" | "endsWith" | "isWellFormed" => T_BOOL,
+            _ => return None,
+        };
+        Some(Info::of_types(types))
+    }
+
     fn object_assign_info(&self, s: &State, callee: &Abs, args: &[Abs]) -> Option<Info> {
         if self.facts_off || !self.pristine("Object") {
             return None;
@@ -25760,12 +25831,18 @@ impl Js {
         // (Nor what a host model's module exports, which its contract keeps:
         // `React.Fragment`, see `react_module_values`.)
         let modules = self.react_module_values(s);
+        // (What is known of the values read, for the reads that change
+        // with nothing: see below.)
+        let view = s.clone();
         self.freeze_readers(s, pc, out, &|e| {
             matches!(e, RExpr::Get(..) | RExpr::Index(..) | RExpr::Global(..))
                 && !builtin_path(self, e)
                 && !matches!(e, RExpr::Get(b, _) if modules.contains(b))
                 && !matches!(e, RExpr::Global(g) if (g == "globalThis" && self.pristine("globalThis")) || g == "new.target")
                 && !matches!(e, RExpr::Get(c, k) if k == "prototype" && matches!(&**c, RExpr::Var(v) if classes.contains(v)))
+                // (Nor a standard method a primitive finds on its prototype,
+                // `"s".replace`: no call changes either.)
+                && !self.standard_method_read(&view, e)
         });
     }
 
