@@ -7564,6 +7564,11 @@ impl Js {
         }
         let RExpr::Get(o, m) = &**c else { return false };
         let RExpr::Global(g) = &**o else { return false };
+        // `Symbol.for(text)`: the registered symbol, registering it again
+        // changes nothing anyone can see.
+        if g == "Symbol" && m == "for" && self.pristine("Symbol") && matches!(args.as_slice(), [RExpr::Str(_)]) {
+            return true;
+        }
         // `Object.assign({...}, simple...)`: copies own data properties of
         // objects without getters into a fresh object (sources null or
         // undefined are skipped): nothing runs.

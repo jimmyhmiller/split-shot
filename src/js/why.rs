@@ -1012,6 +1012,9 @@ impl Units<'_, '_> {
                     self.work("read", &work_label(e), None, fmt_rexpr(e), r)
                 }
             }
+            // (A registered symbol, `Symbol.for("k")`: how the residual
+            // writes that value, there being no literal of it. No work.)
+            RExpr::Call(c, args) if builtin_callee(c).as_deref() == Some("Symbol.for") && matches!(args.as_slice(), [RExpr::Str(_)]) => Roots::new(),
             RExpr::Call(c, args) | RExpr::New(c, args) => {
                 let new = matches!(e, RExpr::New(..));
                 let mut r = self.expr(c, true, None);

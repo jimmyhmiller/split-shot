@@ -753,7 +753,7 @@
  },
  "proxy_callable_class.js": {
   "merged": 0,
-  "gap": 2
+  "gap": 0
  },
  "proxy_get_trap_inlined.js": {
   "merged": 0,
