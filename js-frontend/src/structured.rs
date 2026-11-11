@@ -251,6 +251,12 @@ impl<'a> Graph<'a> {
     }
 
     fn do_tree(&self, x: usize, halt: &Stmt<'a>) -> Vec<Stmt<'a>> {
+        // (A long chain of blocks is a deep dominator tree: as deep a
+        // recursion here.)
+        stacker::maybe_grow(partial::engine::STACK_RED_ZONE, partial::engine::STACK_GROWTH, || self.do_tree_here(x, halt))
+    }
+
+    fn do_tree_here(&self, x: usize, halt: &Stmt<'a>) -> Vec<Stmt<'a>> {
         let mut ys: Vec<usize> = self.children[x].iter().copied().filter(|&c| self.merge[c]).collect();
         // The merge child latest in RPO gets the outermost block, so the code
         // after each block is in RPO order.
@@ -675,6 +681,18 @@ fn cleanup<'a>(stmts: Vec<Stmt<'a>>, changed: &mut bool) -> Vec<Stmt<'a>> {
 /// Maximum statement nesting depth for structured output.
 const MAX_NESTING: usize = 64;
 
+/// Do `stmts` nest more than `limit` deep? (It looks no deeper than that.)
+fn nests_deeper(stmts: &[Stmt], limit: usize) -> bool {
+    if limit == 0 {
+        return stmts.iter().any(|s| !matches!(s, Stmt::Op(_) | Stmt::Exit(_) | Stmt::Eval(_) | Stmt::Break(_) | Stmt::Continue(_)));
+    }
+    stmts.iter().any(|s| match s {
+        Stmt::If { then, els, .. } => nests_deeper(then, limit - 1) || nests_deeper(els, limit - 1),
+        Stmt::Block { body, .. } | Stmt::Loop { body, .. } => nests_deeper(body, limit - 1),
+        _ => false,
+    })
+}
+
 fn nesting(stmts: &[Stmt]) -> usize {
     stmts
         .iter()
@@ -812,6 +830,12 @@ pub(crate) fn render_structured(prog: &Program<Op, Cond>, ind: &str, in_try: boo
             }
             _ => {}
         }
+    }
+    // (Before cleanup, which recurses as deep as the statements nest: a
+    // graph that nests far past MAX_NESTING keeps the trampoline anyway,
+    // see below. Cleanup only shallows the nesting.)
+    if nests_deeper(&stmts, 4 * MAX_NESTING) {
+        return None;
     }
     loop {
         let mut changed = false;

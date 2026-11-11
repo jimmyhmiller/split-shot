@@ -25386,6 +25386,24 @@ impl Js {
                     let v = probe.top().ostack.last().cloned().unwrap_or(Abs::Undef);
                     probe.top_mut().ostack.push(v);
                 }
+                // (A jump inside the condition, a `?:` or `&&` in it, not the
+                // loop's own test: followed when its test is known, as the
+                // step would; a runtime one makes the condition a runtime
+                // value.)
+                Instr::JmpIfFalsy(t) if self.loop_cond_of.get(&pc) != Some(&s.top().pc) => {
+                    let cond = probe.top_mut().ostack.pop();
+                    match cond.as_ref().and_then(|v| v.truthy()) {
+                        Some(truthy) => {
+                            probe.top_mut().pc = if truthy { pc + 1 } else { *t };
+                            continue;
+                        }
+                        None => return true,
+                    }
+                }
+                Instr::Jmp(t) => {
+                    probe.top_mut().pc = *t;
+                    continue;
+                }
                 Instr::JmpIfFalsy(_) => {
                     let cond = probe.top().ostack.last().cloned();
                     let dyn_ = cond.as_ref().map(|v| v.is_dynamic()).unwrap_or(true);

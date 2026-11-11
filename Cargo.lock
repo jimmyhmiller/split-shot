@@ -433,6 +433,7 @@ dependencies = [
  "mimalloc",
  "partial",
  "serde_json",
+ "stacker",
  "swc_atoms",
  "swc_common",
  "swc_ecma_ast",

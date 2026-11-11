@@ -539,6 +539,10 @@
   "merged": 0,
   "gap": 0
  },
+ "loop_condition_with_known_choice.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "loop_fresh_object_in_local.js": {
   "merged": 0,
   "gap": 0
