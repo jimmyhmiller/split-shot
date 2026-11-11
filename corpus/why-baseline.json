@@ -843,6 +843,10 @@
   "merged": 0,
   "gap": 0
  },
+ "rest_param_arrow_residual.js": {
+  "merged": 0,
+  "gap": 5
+ },
  "script_closures.js": {
   "merged": 0,
   "gap": 8

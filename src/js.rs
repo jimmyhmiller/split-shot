@@ -5000,6 +5000,11 @@ pub struct ResidualFn {
     /// form binds it to the native `arguments`. (A capture-free function reads
     /// the native `arguments` itself.)
     pub args_var: Option<usize>,
+    /// Its body reads the arguments it is called with (its source's
+    /// `arguments`, or, for an arrow, its rest parameter's): an arrow
+    /// is then made as a method, which has them (an arrow's `arguments` is
+    /// its enclosing function's).
+    pub own_arguments: bool,
     /// Some value of it is a fresh function object (`RExpr::NewFn`): it has
     /// a factory of no captures.
     pub fresh_values: bool,
@@ -6784,6 +6789,7 @@ impl Js {
             is_async: self.is_async[fid],
             strict: self.fn_strict[fid],
             args_var: source.and_then(|f| self.args_var(f, rfid)),
+            own_arguments: source.is_some_and(|f| self.arguments_slot[f].is_some()),
             fresh_values: false,
             as_class: false,
             as_function: false,
@@ -7254,6 +7260,7 @@ impl Js {
             is_async: false,
             strict: self.fn_strict[fid],
             args_var: None,
+            own_arguments: self.arguments_slot[fid].is_some(),
             fresh_values: false,
             as_class: false,
             as_function: false,

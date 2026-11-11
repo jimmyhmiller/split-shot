@@ -403,8 +403,10 @@ pub fn program_to_js(
             // `prototype`: a method of a literal is the same kind of function,
             // and its key gives it any name.
             // (An arrow stays one, named by its property definition: its
-            // body has no `this` or `arguments` of its own.)
-            FnKind::Arrow if !rf.generator => {
+            // body has no `this` or `arguments` of its own. But for one whose
+            // body reads the arguments it was called with, its rest
+            // parameter's: a method, which has them.)
+            FnKind::Arrow if !rf.generator && !rf.own_arguments => {
                 let (key, access) = method_key(name);
                 let f = render_arrow(asy, &params, len, &rf.body, short_names, rf.strict);
                 if name.is_empty() {
@@ -633,7 +635,7 @@ fn nested_factory(rfid: usize, rf: &ResidualFn, short_names: bool) -> String {
         // the factory's strictness.)
         out.push_str("  \"use strict\";\n");
     }
-    if matches!(rf.kind, FnKind::Arrow) && !rf.generator && rf.args_var.is_none() {
+    if matches!(rf.kind, FnKind::Arrow) && !rf.generator && !rf.own_arguments {
         // (An arrow stays one, named by its property definition.)
         if name.is_empty() {
             let _ = write!(out, "  return {asy}({ps}) => {{\n{body}  }};\n");
