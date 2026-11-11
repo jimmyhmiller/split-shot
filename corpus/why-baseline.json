@@ -75,9 +75,13 @@
   "merged": 19,
   "gap": 5
  },
+ "bigint_literals_fold.js": {
+  "merged": 0,
+  "gap": 21
+ },
  "bigint_values.js": {
   "merged": 0,
-  "gap": 24
+  "gap": 17
  },
  "block_fns_annexb.js": {
   "merged": 0,

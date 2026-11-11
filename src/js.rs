@@ -8538,6 +8538,172 @@ pub fn ill_formed_string_literal(hex: &str) -> String {
     out
 }
 
+// ───────────── BigInt ─────────────
+//
+// A known BigInt is its literal (`RExpr::BigInt`, decimal digits), a runtime
+// value the residual writes as it is; the operators on known ones compute
+// the literal of the result. One that throws (a mixed `1n + 1`, a division
+// by `0n`, a negative exponent, `>>>`) or makes a number too large to write
+// stays the runtime's.
+
+/// The value of a known BigInt.
+fn bigint_of(v: &Abs) -> Option<num_bigint::BigInt> {
+    match v {
+        Abs::Dyn(RExpr::BigInt(d)) => d.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The literal of BigInt `b`, if it is small enough to write.
+fn bigint_abs(b: num_bigint::BigInt) -> Option<Abs> {
+    (b.bits() <= 1 << 16).then(|| Abs::Dyn(RExpr::BigInt(b.to_string())))
+}
+
+/// `a` compared with the Number `n`, exactly (`None`: NaN).
+fn bigint_cmp_num(a: &num_bigint::BigInt, n: f64) -> Option<std::cmp::Ordering> {
+    use num_traits::FromPrimitive;
+    use std::cmp::Ordering::*;
+    if n.is_nan() {
+        return None;
+    }
+    if n.is_infinite() {
+        return Some(if n > 0.0 { Less } else { Greater });
+    }
+    let fl = num_bigint::BigInt::from_f64(n.floor())?;
+    Some(match a.cmp(&fl) {
+        Less => Less,
+        Greater => Greater,
+        Equal if n == n.floor() => Equal,
+        Equal => Less,
+    })
+}
+
+/// StringToBigInt of a decimal (or `0x`/`0o`/`0b`) text, whitespace
+/// around it; the empty text is `0n`. `None` when it is no BigInt.
+fn string_to_bigint(t: &str) -> Option<num_bigint::BigInt> {
+    let t = t.trim_matches(crate::jsnum::is_js_whitespace);
+    if t.is_empty() {
+        return Some(num_bigint::BigInt::from(0));
+    }
+    let (radix, digits) = match t.get(..2) {
+        Some("0x" | "0X") => (16, &t[2..]),
+        Some("0o" | "0O") => (8, &t[2..]),
+        Some("0b" | "0B") => (2, &t[2..]),
+        _ => (10, t),
+    };
+    let (neg, digits) = match digits.strip_prefix('-').or_else(|| digits.strip_prefix('+')) {
+        Some(rest) if radix == 10 => (digits.starts_with('-'), rest),
+        _ => (false, digits),
+    };
+    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+        return None;
+    }
+    let v = num_bigint::BigInt::parse_bytes(digits.as_bytes(), radix)?;
+    Some(if neg { -v } else { v })
+}
+
+/// A binary operator on two known BigInts (or a comparison of one with a
+/// Number): the result, or `None` when it throws or is too large.
+fn bigint_bin(op: Bop, a: &Abs, b: &Abs) -> Option<Abs> {
+    use std::cmp::Ordering::*;
+    let rel = |o: Option<std::cmp::Ordering>| -> Option<Abs> {
+        Some(Abs::Bool(match (op, o) {
+            (_, None) => false,
+            (Bop::Lt, Some(o)) => o == Less,
+            (Bop::Le, Some(o)) => o != Greater,
+            (Bop::Gt, Some(o)) => o == Greater,
+            (Bop::Ge, Some(o)) => o != Less,
+            _ => return None,
+        }))
+    };
+    match (bigint_of(a), bigint_of(b)) {
+        (Some(x), Some(y)) => match op {
+            Bop::Add => bigint_abs(x + y),
+            Bop::Sub => bigint_abs(x - y),
+            Bop::Mul if x.bits() + y.bits() <= 1 << 16 => bigint_abs(x * y),
+            Bop::Lt | Bop::Le | Bop::Gt | Bop::Ge => rel(Some(x.cmp(&y))),
+            Bop::Eq => Some(Abs::Bool(x == y)),
+            Bop::Ne => Some(Abs::Bool(x != y)),
+            Bop::BitAnd => bigint_abs(x & y),
+            Bop::BitOr => bigint_abs(x | y),
+            Bop::BitXor => bigint_abs(x ^ y),
+            Bop::Shl | Bop::Shr => {
+                use num_traits::ToPrimitive;
+                let n = y.to_i64()?;
+                let left = if op == Bop::Shl { n } else { n.checked_neg()? };
+                if left >= 0 {
+                    if x.bits() + left as u64 > 1 << 16 {
+                        return None;
+                    }
+                    bigint_abs(x << left as usize)
+                } else {
+                    // (Rounds toward negative infinity, as JS's `>>` does.)
+                    let r = (-left).min(1 << 20) as usize;
+                    bigint_abs(x >> r)
+                }
+            }
+            _ => None,
+        },
+        // (A comparison across the two types is exact; `===` is false.)
+        (Some(x), None) => match (op, b) {
+            (Bop::Eq | Bop::Ne, v) if !v.is_dynamic() => Some(Abs::Bool(op == Bop::Ne)),
+            (Bop::Lt | Bop::Le | Bop::Gt | Bop::Ge, Abs::Num(n)) => rel(bigint_cmp_num(&x, n.f())),
+            _ => None,
+        },
+        (None, Some(y)) => match (op, a) {
+            (Bop::Eq | Bop::Ne, v) if !v.is_dynamic() => Some(Abs::Bool(op == Bop::Ne)),
+            (Bop::Lt | Bop::Le | Bop::Gt | Bop::Ge, Abs::Num(n)) => rel(bigint_cmp_num(&y, n.f()).map(|o| o.reverse())),
+            _ => None,
+        },
+        (None, None) => None,
+    }
+}
+
+/// An opaque operator with a known BigInt operand: `/`, `%`, `**`, unary
+/// `-` and `~`, `==`/`!=`, `!`, a template's `ToString`, `typeof`.
+fn bigint_opaque(op: &str, xs: &[Abs]) -> Option<Abs> {
+    use num_traits::{Signed, ToPrimitive, Zero};
+    match (op, xs) {
+        ("/" | "%" | "**", [a, b]) => {
+            let (x, y) = (bigint_of(a)?, bigint_of(b)?);
+            match op {
+                "/" if !y.is_zero() => bigint_abs(x / y),
+                "%" if !y.is_zero() => bigint_abs(x % y),
+                "**" if !y.is_negative() => {
+                    let e = y.to_u32()?;
+                    if (x.bits().max(1)) * e as u64 > 1 << 16 {
+                        return None;
+                    }
+                    bigint_abs(num_traits::Pow::pow(x, e))
+                }
+                _ => None,
+            }
+        }
+        ("-", [a]) => bigint_abs(-bigint_of(a)?),
+        ("~", [a]) => bigint_abs(-(bigint_of(a)? + num_bigint::BigInt::from(1))),
+        ("!", [a]) => Some(Abs::Bool(bigint_of(a)?.is_zero())),
+        (TEMPLATE_TO_STRING, [a]) => Some(Abs::Str(bigint_of(a)?.to_string())),
+        ("==" | "!=", [a, b]) => {
+            let eq = match (bigint_of(a), bigint_of(b)) {
+                (Some(x), Some(y)) => x == y,
+                (Some(x), None) | (None, Some(x)) => {
+                    let other = if bigint_of(a).is_some() { b } else { a };
+                    match other {
+                        Abs::Num(n) => bigint_cmp_num(&x, n.f()) == Some(std::cmp::Ordering::Equal),
+                        Abs::Bool(t) => x == num_bigint::BigInt::from(*t as i32),
+                        Abs::Str(t) => string_to_bigint(t).is_some_and(|v| v == x),
+                        Abs::Undef | Abs::Null => false,
+                        _ => return None,
+                    }
+                }
+                (None, None) => return None,
+            };
+            Some(Abs::Bool(eq == (op == "==")))
+        }
+        _ => None,
+    }
+}
+
 /// The UTF-16 code units of a string value: a known string's, or an
 /// ill-formed string literal's (`ILL_FORMED_STRING`).
 fn string_units(v: &Abs) -> Option<Vec<u16>> {
@@ -11337,6 +11503,20 @@ impl Js {
                         return self.push(s, a);
                     }
                 }
+                // Known BigInts: the result's literal.
+                if (bigint_of(&a).is_some() || bigint_of(&b).is_some()) && self.pristine("BigInt") {
+                    if let Some(v) = bigint_bin(*op, &a, &b) {
+                        return self.push(s, v);
+                    }
+                    // (`+` of one and a string: its digits.)
+                    if *op == Bop::Add {
+                        match (&a, &b, bigint_of(&a), bigint_of(&b)) {
+                            (Abs::Str(t), _, _, Some(y)) => return self.push(s, Abs::Str(format!("{t}{y}"))),
+                            (_, Abs::Str(t), Some(x), _) => return self.push(s, Abs::Str(format!("{x}{t}"))),
+                            _ => {}
+                        }
+                    }
+                }
                 // Two fresh symbols' variables: the same symbol when they are
                 // one variable (read at once), different ones otherwise (each
                 // a `Symbol()`'s own result).
@@ -12749,6 +12929,12 @@ impl Js {
                 }
                 let base = s.top().ostack.len() - *arity;
                 let operands: Vec<Abs> = s.top_mut().ostack.split_off(base);
+                // (Known BigInts: see `bigint_opaque`.)
+                if operands.iter().any(|v| bigint_of(v).is_some()) && self.pristine("BigInt") {
+                    if let Some(v) = bigint_opaque(op, &operands) {
+                        return self.push(s, v);
+                    }
+                }
                 // ToNumeric of a modeled object: its ToPrimitive, as `x - 0`
                 // would (a number either way).
                 if op == "tonumeric" && matches!(operands.as_slice(), [Abs::Ref(_)]) {
@@ -16798,8 +16984,29 @@ impl Js {
     /// `Boolean(v)`, `parseInt`, `parseFloat`, `isNaN`, `isFinite`, not
     /// constructed) when its result is static.
     fn fold_global_call(&self, s: &State, g: &str, args: &[Abs]) -> Option<Abs> {
-        if !matches!(g, "String" | "Number" | "Boolean" | "parseInt" | "parseFloat" | "isNaN" | "isFinite") || !self.pristine(g) {
+        if !matches!(g, "String" | "Number" | "Boolean" | "parseInt" | "parseFloat" | "isNaN" | "isFinite" | "BigInt") || !self.pristine(g) {
             return None;
+        }
+        // (A known BigInt: its digits, its Number (rounded to nearest),
+        // itself; `BigInt(v)` of an integral Number, a boolean, a text.)
+        if let Some(x) = args.first().and_then(bigint_of) {
+            use num_traits::ToPrimitive;
+            return match g {
+                "String" => Some(Abs::Str(x.to_string())),
+                "Number" => x.to_f64().map(|f| Abs::Num(JsNum(f))),
+                "Boolean" => Some(Abs::Bool(x != num_bigint::BigInt::from(0))),
+                "BigInt" => args.first().cloned(),
+                _ => None,
+            };
+        }
+        if g == "BigInt" {
+            use num_traits::FromPrimitive;
+            return match args.first() {
+                Some(Abs::Num(n)) if n.f().is_finite() && n.f() == n.f().trunc() => num_bigint::BigInt::from_f64(n.f()).and_then(bigint_abs),
+                Some(Abs::Bool(t)) => bigint_abs(num_bigint::BigInt::from(*t as i32)),
+                Some(Abs::Str(t)) => string_to_bigint(t).and_then(bigint_abs),
+                _ => None,
+            };
         }
         match (g, args.first()) {
             ("String", None) => Some(Abs::Str(String::new())),
@@ -18773,6 +18980,21 @@ impl Js {
                     ("Number", "isNaN") => is_num(|f| f.is_nan()),
                     ("Number", "isFinite") => is_num(|f| f.is_finite()),
                     ("Number", "isInteger") => is_num(|f| f.is_finite() && f.trunc() == f),
+                    ("BigInt", "asUintN" | "asIntN") => match (a0, args.get(1).and_then(bigint_of)) {
+                        (Abs::Num(bits), Some(x)) if bits.f() >= 0.0 && bits.f() <= 65536.0 && bits.f() == bits.f().trunc() => {
+                            let bits = bits.f() as usize;
+                            let m = num_bigint::BigInt::from(1) << bits;
+                            let mut r = ((x % &m) + &m) % &m;
+                            if method == "asIntN" && bits > 0 && r >= (&m >> 1) {
+                                r -= &m;
+                            }
+                            if method == "asIntN" && bits == 0 {
+                                r = num_bigint::BigInt::from(0);
+                            }
+                            bigint_abs(r)
+                        }
+                        _ => None,
+                    },
                     ("Date", "parse") => match a0 {
                         Abs::Str(t) => parse_iso_date(t).map(|v| Abs::Num(JsNum(v))),
                         _ => None,
@@ -18807,6 +19029,18 @@ impl Js {
             // `n.toString(radix)` of a static number: its digits in that
             // radix, for an integer exactly (a fraction's are the
             // implementation's own in another radix than 10).
+            if let (RExpr::BigInt(d), true, "toString") = (&**obj, self.pristine("BigInt"), method.as_str()) {
+                let radix = match args.first() {
+                    None | Some(Abs::Undef) => Some(10),
+                    Some(Abs::Num(r)) if r.f().fract() == 0.0 && (2.0..=36.0).contains(&r.f()) => Some(r.f() as u32),
+                    _ => None,
+                };
+                if let (Some(r), Ok(x)) = (radix, d.parse::<num_bigint::BigInt>()) {
+                    s.top_mut().pc += 1;
+                    s.top_mut().ostack.push(Abs::Str(x.to_str_radix(r)));
+                    return Step::Continue;
+                }
+            }
             if let (RExpr::Num(n), true, "toString") = (&**obj, self.pristine("Number"), method.as_str()) {
                 let radix = match args.first() {
                     None | Some(Abs::Undef) => Some(10),

@@ -553,6 +553,8 @@ name = "partial"
 version = "0.1.0"
 dependencies = [
  "im",
+ "num-bigint",
+ "num-traits",
  "regress",
  "stacker",
 ]
