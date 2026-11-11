@@ -273,8 +273,25 @@ impl Info {
         Some(i)
     }
 
+    /// The info of no value at all: the case of a choice that cannot
+    /// happen on a path (see `Js::consume_pending_joins`). The identity of
+    /// `join`.
+    pub fn bottom() -> Info {
+        Info { types: 0, ..Info::top() }
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        self.types == 0
+    }
+
     /// The hull of two infos (what holds of a value that is one or the other).
     pub fn join(&self, o: &Info) -> Info {
+        if self.is_bottom() {
+            return o.clone();
+        }
+        if o.is_bottom() {
+            return self.clone();
+        }
         Info {
             types: self.types | o.types,
             lo: looser_lo(self.lo, o.lo),
@@ -283,7 +300,12 @@ impl Info {
             truthy: if self.truthy == o.truthy { self.truthy } else { None },
             eq: if self.eq == o.eq { self.eq.clone() } else { None },
             ne: self.ne.iter().filter(|c| o.ne.contains(c)).cloned().collect(),
-            cases: if self.cases == o.cases { self.cases.clone() } else { None },
+            // (Cases on one condition: each case's hull.)
+            cases: match (&self.cases, &o.cases) {
+                (Some(a), Some(b)) if a.0 == b.0 => Some(Box::new((a.0.clone(), a.1.join(&b.1), a.2.join(&b.2)))),
+                (a, b) if a == b => a.clone(),
+                _ => None,
+            },
             fixed: self.fixed.iter().filter(|p| o.fixed.contains(p)).cloned().collect(),
             props: self
                 .props
@@ -1031,6 +1053,17 @@ fn refine(facts: &mut Facts, v: usize, f: impl FnOnce(&mut Info)) {
 
 /// Record that `cond` evaluated to a value of truthiness `truth`.
 pub fn learn(facts: &mut Facts, cond: &RExpr, truth: bool, typed_fns: &[&str]) {
+    // (What a variable is in the case `cond` decides: that case's info.)
+    let decided: Vec<usize> = facts.iter().filter(|(_, i)| i.cases.as_ref().is_some_and(|c| c.0 == *cond)).map(|(v, _)| *v).collect();
+    for v in decided {
+        let c = facts[&v].cases.clone().expect("a case on `cond`");
+        let i = if truth { c.1 } else { c.2 };
+        if i.is_top() {
+            facts.remove(&v);
+        } else {
+            facts.insert(v, i);
+        }
+    }
     match cond {
         RExpr::Var(v) => refine(facts, *v, |i| {
             i.truthy = Some(truth);

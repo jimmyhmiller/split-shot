@@ -847,6 +847,10 @@
   "merged": 0,
   "gap": 5
  },
+ "runtime_chosen_known_functions.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "script_closures.js": {
   "merged": 0,
   "gap": 8

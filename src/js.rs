@@ -1413,6 +1413,9 @@ struct PendingJoin {
     /// For the join of the whole `if`: the state it branched from (see
     /// `BeforeBranch`).
     before: Option<BeforeBranch>,
+    /// For the join of the whole `if`: the variable its condition is in,
+    /// whose truthiness tells its arms apart (see `consume_pending_joins`).
+    cond: Option<usize>,
 }
 
 /// What an `if`'s join needs of the state the `if` branched from, to tell
@@ -2917,6 +2920,9 @@ impl State {
             o.for_each_child(&mut add);
         }
         let mut named: std::collections::HashSet<usize> = vars.into_iter().collect();
+        // (And the condition of an `if` whose join is pending: see
+        // `PendingJoin::cond`.)
+        named.extend(self.pending_joins.iter().filter_map(|j| j.cond));
         // (And what a kept fact names: a known function's captures, its
         // methods and its [[Prototype]]; the values its object's known and
         // frozen properties are.)
@@ -13603,6 +13609,33 @@ impl Js {
                                 eprintln!("        locals {:?}", s.top().locals.iter().take(6).map(|v| format!("{v:?}").chars().take(80).collect::<String>()).collect::<Vec<_>>());
                             }
                         }
+                        // (An `if` whose arms assign what its join merges: its
+                        // condition in a variable, evaluated once here, that
+                        // tells the arms apart at the join. What the condition
+                        // itself tells is learned on each side as well.)
+                        let original = r.clone();
+                        let (r, cond_var) = match (&self.if_join[pc], r) {
+                            (Some((_, mods)), r) if !mods.is_empty() && !self.facts_off && !env_flag!("PE_NO_JOIN_CASES") => match r {
+                                RExpr::Var(v) => (RExpr::Var(v), Some(v)),
+                                r => {
+                                    let t = self.aux_var(125, pc, 0);
+                                    self.emit_temp(s, t, r.clone(), pc, out);
+                                    // (A slot holding that value, read before:
+                                    // the variable it now is in, so a test of
+                                    // the slot is a test of the same.)
+                                    let held = Abs::Dyn(r);
+                                    for f in s.frames.iter_mut() {
+                                        for v in f.locals.iter_mut() {
+                                            if *v == held {
+                                                *v = Abs::Dyn(RExpr::Var(t));
+                                            }
+                                        }
+                                    }
+                                    (RExpr::Var(t), Some(t))
+                                }
+                            },
+                            (_, r) => (r, None),
+                        };
                         // Every inlined activation on the stack has now branched
                         // dynamically: remember its context (see `do_call`).
                         {
@@ -13627,7 +13660,7 @@ impl Js {
                         // array), a marker would just make the arms' states differ
                         // by the un-popped stack and block the natural merge.
                         for (end, mods, globals) in &self.if_forward_joins[pc] {
-                            let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: None };
+                            let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: None, cond: None };
                             tstate.pending_joins.push(j.clone());
                             fstate.pending_joins.push(j);
                         }
@@ -13635,10 +13668,14 @@ impl Js {
                             let globals = &self.if_global_mods[pc];
                             if !mods.is_empty() || !globals.is_empty() {
                                 let before = BeforeBranch(std::rc::Rc::new((s.heap.clone(), s.escaped.clone(), s.fns.clone(), s.globals.clone(), s.top().branched)));
-                                let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: Some(before) };
+                                let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: Some(before), cond: cond_var };
                                 tstate.pending_joins.push(j.clone());
                                 fstate.pending_joins.push(j);
                             }
+                        }
+                        if cond_var.is_some() && original != r {
+                            crate::facts::learn(&mut tstate.facts, &original, false, self.typed_intrinsics());
+                            crate::facts::learn(&mut fstate.facts, &original, true, self.typed_intrinsics());
                         }
                         // Block boundary: drop dead locals, then reclaim heap
                         // garbage in each successor.
@@ -18433,6 +18470,15 @@ impl Js {
     fn known_callee(&self, s: &mut State, callee: Abs) -> Abs {
         if self.facts_off {
             return callee;
+        }
+        // (A choice the path decides: the side it takes.)
+        if let Abs::Dyn(RExpr::Opaque(op, xs)) = &callee {
+            if op == "?:" && xs.len() == 3 {
+                if let Some(t) = self.truthy_in(s, &Abs::Dyn(xs[0].clone())) {
+                    let side = xs[if t { 1 } else { 2 }].clone();
+                    return self.known_callee(s, Abs::from_const_rexpr(&side).unwrap_or(Abs::Dyn(side)));
+                }
+            }
         }
         let Abs::Dyn(RExpr::Var(v)) = &callee else { return callee };
         if env_flag!("KNOWN_DEBUG") {
@@ -25800,43 +25846,10 @@ impl Js {
         // its variable runs the code here. See `facts::KnownFn`.)
         if !self.facts_off && !env_flag!("PE_NO_ESCAPED_FN_FACTS") {
             for (a, var) in &made {
-                let Some(HeapObj::Closure { fid, captured, ident: None, .. }) = heap.get(a) else { continue };
+                let Some(info) = self.made_fn_info(&heap, *a, &made, &s.escaped) else { continue };
                 if env_flag!("KNOWN_DEBUG") {
-                    eprintln!("[KNOWN] made v{var} = closure {} captured {:?}", self.names[*fid], captured);
+                    eprintln!("[KNOWN] made v{var} = {:?}", info.callee.as_ref().map(|k| (self.names[k.fid].clone(), k.caps.clone())));
                 }
-                // (A value as the runtime expression it is now: a constant,
-                // a variable, the variable of an object made here or before.)
-                let expr_of = |v: &Abs| -> Option<RExpr> {
-                    match v {
-                        Abs::Ref(c) => match made.get(c) {
-                            Some(w) => Some(RExpr::Var(*w)),
-                            None if s.escaped.contains(c) => Some(RExpr::Var(self.escape_var(*c))),
-                            None => Js::handle_expr(&heap, *c).filter(rexpr_is_atom),
-                        },
-                        Abs::Dyn(e) => rexpr_is_atom(e).then(|| e.clone()),
-                        prim => Some(prim.to_rexpr()),
-                    }
-                };
-                let caps: Option<Vec<crate::facts::KnownCap>> = captured
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        // (A variable's final cell: the value it holds for
-                        // good. Any other cell is the runtime object.)
-                        let cell = self.fn_cell_captures[*fid].get(i).copied().unwrap_or(false);
-                        match Js::final_cell_value(&heap, c).filter(|_| cell) {
-                            Some(v) => Some(crate::facts::KnownCap { cell: true, value: crate::facts::KnownVal::Expr(expr_of(&v)?) }),
-                            None => Some(crate::facts::KnownCap { cell: false, value: crate::facts::KnownVal::Expr(expr_of(c)?) }),
-                        }
-                    })
-                    .collect();
-                if env_flag!("KNOWN_DEBUG") {
-                    eprintln!("[KNOWN]   caps {caps:?} cells {:?} heap {:?}", self.fn_cell_captures[*fid], captured.iter().map(|c| match c { Abs::Ref(x) => format!("{:?}", heap.get(x)), v => format!("{v:?}") }).collect::<Vec<_>>());
-                }
-                let Some(caps) = caps else { continue };
-                let object = crate::facts::FnObject { proto_as_made: false, props: vec![("?".into(), None)], parent: None, es5_class: false, class_proto: false };
-                let kf = crate::facts::KnownFn { fid: *fid, caps, object, methods: Vec::new(), statics: Vec::new() };
-                let info = Info { types: crate::facts::T_FUNC, truthy: Some(true), callee: Some(std::rc::Rc::new(kf)), ..Info::top() };
                 s.facts.insert(*var, info.clone());
                 self.pending_info.borrow_mut().insert(*var, info);
             }
@@ -25850,6 +25863,43 @@ impl Js {
         s.escaped.extend(made.keys().copied());
         escaped.extend(made.keys().copied());
         values
+    }
+
+    /// What is known of the runtime function a closure at `addr` of `heap`
+    /// is made as (`facts::KnownFn`): its code, and what it captured as the
+    /// runtime expressions those are now (a constant, a variable, the
+    /// variable of an object made, by `made` or before, `escaped`). `None`
+    /// for no closure of known code, or one capturing a value with no such
+    /// expression.
+    fn made_fn_info(&self, heap: &Heap, addr: usize, made: &HashMap<usize, usize>, escaped: &im::OrdSet<usize>) -> Option<Info> {
+        let Some(HeapObj::Closure { fid, captured, ident: None, .. }) = heap.get(&addr) else { return None };
+        let expr_of = |v: &Abs| -> Option<RExpr> {
+            match v {
+                Abs::Ref(c) => match made.get(c) {
+                    Some(w) => Some(RExpr::Var(*w)),
+                    None if escaped.contains(c) => Some(RExpr::Var(self.escape_var(*c))),
+                    None => Js::handle_expr(heap, *c).filter(rexpr_is_atom),
+                },
+                Abs::Dyn(e) => rexpr_is_atom(e).then(|| e.clone()),
+                prim => Some(prim.to_rexpr()),
+            }
+        };
+        let caps: Vec<crate::facts::KnownCap> = captured
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                // (A variable's final cell: the value it holds for good. Any
+                // other cell is the runtime object.)
+                let cell = self.fn_cell_captures[*fid].get(i).copied().unwrap_or(false);
+                match Js::final_cell_value(heap, c).filter(|_| cell) {
+                    Some(v) => Some(crate::facts::KnownCap { cell: true, value: crate::facts::KnownVal::Expr(expr_of(&v)?) }),
+                    None => Some(crate::facts::KnownCap { cell: false, value: crate::facts::KnownVal::Expr(expr_of(c)?) }),
+                }
+            })
+            .collect::<Option<_>>()?;
+        let object = crate::facts::FnObject { proto_as_made: false, props: vec![("?".into(), None)], parent: None, es5_class: false, class_proto: false };
+        let kf = crate::facts::KnownFn { fid: *fid, caps, object, methods: Vec::new(), statics: Vec::new() };
+        Some(Info { types: crate::facts::T_FUNC, truthy: Some(true), callee: Some(std::rc::Rc::new(kf)), ..Info::top() })
     }
 
     /// A runtime write (`op`) the code of the top activation makes, in the
@@ -26786,7 +26836,7 @@ impl Js {
 
     fn consume_pending_joins(&self, ns: &mut State, target: usize, out: &mut Vec<Op>) {
         while ns.pending_joins.last().map(|j| j.end) == Some(target) {
-            let PendingJoin { mods: m, globals, before, depth, .. } = ns.pending_joins.pop().unwrap();
+            let PendingJoin { mods: m, globals, before, depth, cond, .. } = ns.pending_joins.pop().unwrap();
             // (An arm that did nothing but assign the slots merged here:
             // the other, if it did no more, arrives in this same state and
             // is this path from here on. The activation is then no more
@@ -26830,7 +26880,33 @@ impl Js {
                 .collect();
             let split = m.len() != all;
             let _why = self.why.merging(why::Merge::Join);
+            // (A function this arm leaves in a slot the join merges: what is
+            // known of it, in the case of the condition this arm took, the
+            // other arm's case its own. Joined, the two cases are both
+            // known; see `fork_on_known_callees`.)
+            let closures: Vec<(usize, usize)> = m
+                .iter()
+                .filter_map(|&slot| match ns.frames[fi].locals[slot] {
+                    Abs::Ref(a) if matches!(ns.heap.get(&a), Some(HeapObj::Closure { known: true, .. })) => Some((slot, a)),
+                    _ => None,
+                })
+                .collect();
+            let heap_before = ns.heap.clone();
             self.materialize(ns, &m, out);
+            if let Some(c) = cond {
+                if let Some(t) = self.truthy_in(ns, &Abs::Dyn(RExpr::Var(c))) {
+                    for (slot, a) in closures {
+                        let Abs::Dyn(RExpr::Var(w)) = ns.frames[fi].locals[slot] else { continue };
+                        let Some(info) = self.made_fn_info(&heap_before, a, &HashMap::new(), &ns.escaped) else { continue };
+                        let (x, y) = if t { (info, Info::bottom()) } else { (Info::bottom(), info) };
+                        let choice = Info::choice(&RExpr::Var(c), x, y);
+                        // (Over what the assignment of `w` would tell: see
+                        // `track_defs`.)
+                        self.pending_info.borrow_mut().insert(w, choice.clone());
+                        ns.facts.insert(w, choice);
+                    }
+                }
+            }
             if let Some(b) = rejoined {
                 if !split && !ns.pending_joins.iter().any(|j| j.depth == depth) {
                     ns.frames[fi].branched = b.0 .4;
