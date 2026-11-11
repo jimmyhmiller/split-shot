@@ -10105,17 +10105,25 @@ fn symbol_iterator_expr() -> RExpr {
     RExpr::Get(Box::new(RExpr::Global("Symbol".into())), "iterator".into())
 }
 
-/// The suffix of the kind of a standard accessor's getter
+/// The suffixes of the kinds of a standard accessor's getter and setter
 /// (`Map.prototype.size@get`: see `standard_prototype_accessor`).
 const ACCESSOR_GET: &str = "@get";
+const ACCESSOR_SET: &str = "@set";
+
+/// Is `kind` a standard accessor's getter or setter (see `ACCESSOR_GET`)?
+fn is_accessor_fn(kind: &str) -> bool {
+    kind.ends_with(ACCESSOR_GET) || kind.ends_with(ACCESSOR_SET)
+}
 
 fn intrinsic_method_expr(kind: &str) -> Option<RExpr> {
-    // (A standard accessor's getter: found by its descriptor.)
-    if let Some(rest) = kind.strip_suffix(ACCESSOR_GET) {
-        let (base, k) = rest.split_once(".prototype.")?;
-        let gopd = RExpr::Get(Box::new(RExpr::Global("Object".into())), "getOwnPropertyDescriptor".into());
-        let proto = RExpr::Get(Box::new(RExpr::Global(base.to_string())), "prototype".into());
-        return Some(RExpr::Get(Box::new(RExpr::Call(Box::new(gopd), vec![proto, RExpr::Str(k.to_string())])), "get".into()));
+    // (A standard accessor's getter or setter: found by its descriptor.)
+    for (suffix, part) in [(ACCESSOR_GET, "get"), (ACCESSOR_SET, "set")] {
+        if let Some(rest) = kind.strip_suffix(suffix) {
+            let (base, k) = rest.split_once(".prototype.")?;
+            let gopd = RExpr::Get(Box::new(RExpr::Global("Object".into())), "getOwnPropertyDescriptor".into());
+            let proto = RExpr::Get(Box::new(RExpr::Global(base.to_string())), "prototype".into());
+            return Some(RExpr::Get(Box::new(RExpr::Call(Box::new(gopd), vec![proto, RExpr::Str(k.to_string())])), part.into()));
+        }
     }
     if kind == "%ThrowTypeError%" {
         return Some(throw_type_error_expr());
@@ -10743,10 +10751,12 @@ fn state_reads_var(s: &State, id: usize) -> bool {
 
 /// Backward liveness of local slots over each function's bytecode. Slots are
 /// read only by `Load` and written only by `Store` (captured-and-mutated
-/// variables live in heap cells, reached through a `Load` of the cell). A
-/// function containing a `try` gets `None` everywhere (all slots live), since a
-/// `throw` can transfer to its catch from any instruction in the protected
-/// region and that edge isn't modeled here.
+/// variables live in heap cells, reached through a `Load` of the cell). In a
+/// `try`, any instruction of the protected body may transfer to the catch
+/// (a `throw`, or anything a call or an operation throws), which begins with
+/// the exception in its slot: what the catch reads but that slot is live
+/// throughout the body. A function with a native `finally` region (a
+/// residual generator body's) gets `None` everywhere (all slots live).
 fn compute_liveness(
     code: &[Instr],
     entries: &[usize],
@@ -10756,11 +10766,21 @@ fn compute_liveness(
 ) -> Vec<Option<Vec<u64>>> {
     let mut live: Vec<Option<Vec<u64>>> = vec![None; code.len()];
     for fid in 0..entries.len() {
-        if has_try[fid] {
-            continue;
-        }
         let lo = entries[fid];
         let hi = entries.get(fid + 1).copied().unwrap_or(code.len());
+        // (Each handler: its protected body, `[first, last]`, its catch and
+        // the slot the exception is put in.)
+        let mut handlers: Vec<(usize, usize, usize, Option<usize>)> = Vec::new();
+        if has_try[fid] {
+            if code[lo..hi].iter().any(|i| matches!(i, Instr::TryFinally { .. })) {
+                continue;
+            }
+            for (pc, i) in code[lo..hi].iter().enumerate() {
+                if let Instr::PushHandler { catch_pc, exc_slot, body_end, .. } = i {
+                    handlers.push((lo + pc + 1, *body_end, *catch_pc, *exc_slot));
+                }
+            }
+        }
         let words = nslots[fid].div_ceil(64).max(1);
         for pc in lo..hi {
             live[pc] = Some(vec![0u64; words]);
@@ -10782,6 +10802,21 @@ fn compute_liveness(
                     if (lo..hi).contains(&succ) {
                         if let Some(sv) = &live[succ] {
                             for (w, x) in v.iter_mut().zip(sv) {
+                                *w |= *x;
+                            }
+                        }
+                    }
+                }
+                // (The catch of each `try` whose body this is in: what it
+                // reads, but the exception's slot, written as it begins.)
+                for &(first, last, catch_pc, exc_slot) in &handlers {
+                    if (first..=last).contains(&pc) {
+                        if let Some(cv) = &live[catch_pc] {
+                            let mut cv = cv.clone();
+                            if let Some(e) = exc_slot.filter(|e| *e < nslots[fid]) {
+                                clear(&mut cv, e);
+                            }
+                            for (w, x) in v.iter_mut().zip(&cv) {
                                 *w |= *x;
                             }
                         }
@@ -13776,6 +13811,29 @@ impl Js {
                 matches!(&**c, RExpr::Global(g) if self.pristine(g) && (standard_prototype_method(g, k) || standard_prototype_accessor(g, k)))
             }
             _ => false,
+        }
+    }
+
+    /// `Object.getPrototypeOf(v)` of a modeled object or a standard function,
+    /// when it is known (`None` otherwise).
+    fn prototype_of(&self, s: &State, v: &Abs) -> Option<Abs> {
+        match v {
+            Abs::Ref(a) => match &s.heap[a] {
+                // (A standard prototype: `Object.prototype`, ...)
+                HeapObj::Object { proto: INTRINSIC_PROTO, class: ObjClass::Ordinary, .. } => self.standard_prototype("Object"),
+                HeapObj::Object { proto, .. } if *proto != INTRINSIC_PROTO => Some(proto.clone()),
+                HeapObj::Closure { known: true, proto, .. } if *proto != INTRINSIC_PROTO => Some(proto.clone()),
+                HeapObj::Closure { known: true, fid, .. } if !self.is_async[*fid] && self.fn_kinds[*fid] != FnKind::Generator => self.standard_prototype("Function"),
+                HeapObj::Array(xs) if xs.proto == INTRINSIC_PROTO => self.standard_prototype("Array"),
+                _ => None,
+            },
+            // (A standard function, or a static method of a standard
+            // global: `Function.prototype`.)
+            Abs::Dyn(RExpr::Global(g)) if builtin_typeof(g) == Some("function") && self.pristine(g) => self.standard_prototype("Function"),
+            Abs::Dyn(RExpr::Get(o, m)) if matches!(&**o, RExpr::Global(g) if standard_static_method(g, m) && self.pristine(g)) => {
+                self.standard_prototype("Function")
+            }
+            _ => None,
         }
     }
 
@@ -19484,7 +19542,7 @@ impl Js {
                     Abs::Ref(a) => match &s.heap[a] {
                         // (One read by name: `String.prototype[@@iterator]`
                         // is called as the value it is.)
-                        HeapObj::Builtin { kind, .. } if intrinsic_method_expr(kind).is_some() && kind != STRING_ITERATOR_METHOD && !kind.ends_with(ACCESSOR_GET) && this != Abs::Undef => {
+                        HeapObj::Builtin { kind, .. } if intrinsic_method_expr(kind).is_some() && kind != STRING_ITERATOR_METHOD && !is_accessor_fn(kind) && this != Abs::Undef => {
                             kind.split_once(".prototype.").map(|(_, m)| m.to_string())
                         }
                         _ => None,
@@ -20053,24 +20111,7 @@ impl Js {
                 };
                 Some(new_array(s, elems))
             }
-            ("Object", "getPrototypeOf") => match &arg(0) {
-                Abs::Ref(a) => match &s.heap[a] {
-                    // (A standard prototype: `Object.prototype`, ...)
-                    HeapObj::Object { proto: INTRINSIC_PROTO, class: ObjClass::Ordinary, .. } => self.standard_prototype("Object"),
-                    HeapObj::Object { proto, .. } if *proto != INTRINSIC_PROTO => Some(proto.clone()),
-                    HeapObj::Closure { known: true, proto, .. } if *proto != INTRINSIC_PROTO => Some(proto.clone()),
-                    HeapObj::Closure { known: true, fid, .. } if !self.is_async[*fid] && self.fn_kinds[*fid] != FnKind::Generator => self.standard_prototype("Function"),
-                    HeapObj::Array(xs) if xs.proto == INTRINSIC_PROTO => self.standard_prototype("Array"),
-                    _ => None,
-                },
-                // (A standard function, or a static method of a standard
-                // global: `Function.prototype`.)
-                Abs::Dyn(RExpr::Global(g)) if builtin_typeof(g) == Some("function") && self.pristine(g) => self.standard_prototype("Function"),
-                Abs::Dyn(RExpr::Get(o, m)) if matches!(&**o, RExpr::Global(g) if standard_static_method(g, m) && self.pristine(g)) => {
-                    self.standard_prototype("Function")
-                }
-                _ => None,
-            },
+            ("Object", "getPrototypeOf") => self.prototype_of(s, &arg(0)),
             ("Object", "create") if args.len() == 1 => match arg(0) {
                 p @ (Abs::Null | Abs::Ref(_)) => {
                     if let Abs::Ref(a) = &p {
@@ -20157,17 +20198,28 @@ impl Js {
                         }
                         RExpr::Get(c, p) if p == "prototype" => match &**c {
                             RExpr::Global(g) if self.pristine(g) && standard_prototype_method(g, &k) => Some(true),
-                            // (A getter-only accessor, `Map.prototype.size`:
-                            // its getter, a standard function.)
-                            RExpr::Global(g) if self.pristine(g) && self.pristine("Function") && standard_prototype_accessor(g, &k) && !(g == "Object" && k == "__proto__") => {
-                                let get = s.alloc(HeapObj::Builtin { kind: format!("{g}.prototype.{k}{ACCESSOR_GET}"), data: vec![].into(), ext: None });
+                            // (An accessor, `Map.prototype.size`: its getter,
+                            // and setter if it has one (`__proto__`'s), each
+                            // a standard function.)
+                            RExpr::Global(g) if self.pristine(g) && self.pristine("Function") && standard_prototype_accessor(g, &k) => {
+                                let mut fns = Vec::new();
+                                for (suffix, has) in [(ACCESSOR_GET, true), (ACCESSOR_SET, g == "Object" && k == "__proto__")] {
+                                    fns.push(if has {
+                                        let f = s.alloc(HeapObj::Builtin { kind: format!("{g}.prototype.{k}{suffix}"), data: vec![].into(), ext: None });
+                                        self.creation_pc.borrow_mut().insert(f, pc);
+                                        Abs::Ref(f)
+                                    } else {
+                                        Abs::Undef
+                                    });
+                                }
+                                let set = fns.pop().unwrap();
+                                let get = fns.pop().unwrap();
                                 let d = s.alloc(HeapObj::object(vec![
-                                    Prop::data("get", Abs::Ref(get)),
-                                    Prop::data("set", Abs::Undef),
+                                    Prop::data("get", get),
+                                    Prop::data("set", set),
                                     Prop::data("enumerable", Abs::Bool(false)),
                                     Prop::data("configurable", Abs::Bool(true)),
                                 ]));
-                                self.creation_pc.borrow_mut().insert(get, pc);
                                 self.creation_pc.borrow_mut().insert(d, pc);
                                 return Some(Abs::Ref(d));
                             }
@@ -21359,6 +21411,18 @@ impl Js {
                 self.creation_pc.borrow_mut().insert(*a, pc);
             }
             return self.do_throw(s, e, out);
+        }
+        // `o.__proto__` of a modeled object no modeled object on its chain
+        // defines it for: `Object.prototype`'s accessor (Annex B), which
+        // gives `Object.getPrototypeOf(o)`.
+        if k == "__proto__" && self.pristine("Object") {
+            if let Abs::Ref(a) = &o {
+                if matches!(self.lookup_prop(&s.heap, *a, k), Found::Unknown) {
+                    if let Some(p) = self.prototype_of(s, &o) {
+                        return self.push(s, p);
+                    }
+                }
+            }
         }
         // A member of the standard `Symbol` it does not have
         // (`Symbol.metadata`, a proposal's): `undefined`.
@@ -23032,8 +23096,8 @@ impl Js {
     /// collection of its kind), as when read from the receiver?
     fn intrinsic_serves(&self, s: &State, f: &usize, this: Option<&Abs>) -> bool {
         let HeapObj::Builtin { kind, .. } = &s.heap[f] else { return false };
-        // (A standard accessor's getter: called at runtime.)
-        if kind.ends_with(ACCESSOR_GET) {
+        // (A standard accessor's getter or setter: called at runtime.)
+        if is_accessor_fn(kind) {
             return false;
         }
         // (The methods that make or step an iterator: a string's on a known
@@ -25716,12 +25780,6 @@ impl Js {
             HeapObj::Closure { ident: Some(v), .. } => Some(RExpr::Var(*v)),
             HeapObj::Builtin { kind, data, .. } if react::is_handle(kind) => Some(react::handle_value(data)),
             HeapObj::Object { class: ObjClass::FinalCell { made: Some(v) }, .. } => Some(RExpr::Var(*v)),
-            // A standard method (`Function.prototype.bind`) the program reads
-            // from a prototype it does not change: that method at runtime too,
-            // which runtime code it reaches cannot make another (see
-            // `pristine`). (Not one whose expression makes a value to find it,
-            // `%ThrowTypeError%`.)
-            HeapObj::Builtin { kind, data, ext: None } if data.is_empty() => intrinsic_method_expr(kind).filter(is_global_path),
             _ => None,
         }
     }
@@ -27525,11 +27583,30 @@ impl Js {
                 }
                 (Some(_), None) => {}
             }
-            if let Some(after) = after {
-                for (slot, v) in after.into_iter().enumerate() {
-                    if let Some(v) = v {
-                        s.top_mut().locals[slot] = v;
-                    }
+            // Any other local the region assigns is in its variable (each
+            // store in it writes the variable as it runs; its end, what it
+            // holds), and so is read after the `try`, though dead as it began
+            // (the value a `return` in the body leaves for the exit).
+            // (Which of the paths' values it holds is decided at runtime: a
+            // merge of the paths out of the `try`, for `--why`.)
+            let func = s.top().func;
+            let after = after.unwrap_or_default();
+            let _why = self.why.merging(why::Merge::TryEnd);
+            for slot in stored(body_pc, end) {
+                if slot < s.top().locals.len() {
+                    s.top_mut().locals[slot] = match after.get(slot).cloned().flatten() {
+                        Some(v) => v,
+                        None => {
+                            let var = self.stable_id(func, slot);
+                            self.why.made(var, end, func);
+                            Abs::Dyn(RExpr::Var(var))
+                        }
+                    };
+                }
+            }
+            for (slot, v) in after.into_iter().enumerate() {
+                if let Some(v) = v {
+                    s.top_mut().locals[slot] = v;
                 }
             }
             return Step::Continue;
