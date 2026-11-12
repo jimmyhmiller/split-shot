@@ -545,13 +545,24 @@ fn work_label(e: &RExpr) -> String {
     }
 }
 
-/// Built-ins whose answer is the run's.
+/// Built-ins whose answer is the run's: the clock, randomness, output,
+/// and what the host defines, as the source text of a built-in function
+/// (`Function.prototype.toString` gives one implementation-defined text,
+/// `Object.prototype.constructor.toString()`, immer's `objectCtorString`).
 fn impure_builtin(name: &str, nargs: usize, new: bool) -> bool {
     match name {
         "Date.now" | "Math.random" | "performance.now" => true,
         "Date" => !new || nargs == 0,
+        _ if nargs == 0 && builtin_function_path(name.strip_suffix(".toString").unwrap_or("")) => true,
         _ => name.starts_with("console.") || name.starts_with("Atomics.") || name.starts_with("Intl."),
     }
+}
+
+/// Is the dotted path a standard built-in function read by name: a
+/// standard constructor or function global, or one's `prototype.constructor`?
+fn builtin_function_path(path: &str) -> bool {
+    let g = path.strip_suffix(".prototype.constructor").unwrap_or(path);
+    !g.contains('.') && builtin_typeof(g) == Some("function")
 }
 
 struct Analysis<'a> {

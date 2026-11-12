@@ -263,6 +263,10 @@
   "merged": 0,
   "gap": 0
  },
+ "create_with_properties.js": {
+  "merged": 0,
+  "gap": 7
+ },
  "cyclic_graph_leaves_as_literals.js": {
   "merged": 0,
   "gap": 6
@@ -290,6 +294,10 @@
  "deep_static_recursion.js": {
   "merged": 0,
   "gap": 0
+ },
+ "define_properties_and_descriptors.js": {
+  "merged": 0,
+  "gap": 17
  },
  "define_property_false_value.js": {
   "merged": 0,
@@ -668,6 +676,10 @@
   "gap": 0
  },
  "null_read_in_try_throws.js": {
+  "merged": 0,
+  "gap": 0
+ },
+ "nullish_of_known_nonnullish.js": {
   "merged": 0,
   "gap": 0
  },
