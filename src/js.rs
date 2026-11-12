@@ -1737,6 +1737,9 @@ struct EntrySplit {
     exports: std::cell::RefCell<Vec<usize>>,
     /// The boundary's objects a call may change (by address).
     dynamic: std::cell::RefCell<std::collections::BTreeSet<usize>>,
+    /// The boundary's objects a call made at runtime, each its own copy:
+    /// made once by the load code instead, and still known (`hoisted`).
+    hoist: std::cell::RefCell<std::collections::BTreeSet<usize>>,
     /// The globals a call may assign.
     dynamic_globals: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// Any global may be assigned at runtime.
@@ -8455,8 +8458,21 @@ impl Js {
         let before = dynamic.len();
         dynamic.extend(watch.written.intersection(&boundary_heap).copied());
         // (One `main` makes at runtime, but for those the load code made: a
-        // runtime object made once, at load, not a copy each call.)
-        dynamic.extend(watch.escaped.iter().filter(|a| boundary_heap.contains(a) && !watch.hoisted.contains_key(a)).copied());
+        // runtime object made once, at load, not a copy each call. Known
+        // still, as the globals' objects are, when runtime code writes
+        // nothing it could reach; otherwise runtime state, as everything
+        // runtime code reaches then is: see below. `PE_ENTRY_NO_HOIST`:
+        // runtime state always.)
+        let made_by_main = watch.escaped.iter().filter(|a| boundary_heap.contains(a) && !watch.hoisted.contains_key(a)).copied();
+        let mut hoist = self.entry.hoist.borrow_mut();
+        let hoist_before = hoist.len();
+        if runtime_writes || env_flag!("PE_ENTRY_NO_HOIST") {
+            dynamic.extend(made_by_main);
+        } else {
+            hoist.extend(made_by_main);
+        }
+        let hoist_grew = hoist.len() > hoist_before;
+        drop(hoist);
         if runtime_writes {
             // (A frozen ordinary object no write changes.)
             let frozen = |a: &usize| {
@@ -8473,7 +8489,7 @@ impl Js {
         if w.wild {
             self.entry.all_globals_dynamic.set(true);
         }
-        let added = dynamic.len() > before || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
+        let added = dynamic.len() > before || hoist_grew || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
         if env_flag!("ENTRY_DEBUG") {
             eprintln!("[ENTRY] conflicts: dynamic {:?} globals {:?} all {} (runtime writes {runtime_writes}) -> again {added}", dynamic, globals, self.entry.all_globals_dynamic.get());
         }
@@ -21343,6 +21359,11 @@ impl Js {
             out.push(Op::AssignGlobal { name: name.clone(), expr });
             region_note_globals();
             s.globals.insert(name, (v, false));
+        }
+        // (The objects a call made copies of: made once, here.)
+        let hoist: Vec<usize> = self.entry.hoist.borrow().iter().copied().filter(|a| heap.contains_key(a) && !s.escaped.contains(a)).collect();
+        for a in hoist {
+            self.hoist_object(a, &heap, &mut seen, out);
         }
         if self.entry.all_globals_dynamic.get() {
             region_note_globals();

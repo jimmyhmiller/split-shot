@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": ["", "lg", "x y"],
+  "repeat": true,
+  "forbid": "\\.join\\(|\\.base\\b|\\.length"
+}
