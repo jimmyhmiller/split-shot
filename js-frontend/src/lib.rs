@@ -1117,7 +1117,7 @@ mod tests {
     /// have mutated it), so they read the runtime object.
     #[test]
     fn read_after_escape() {
-        let src = "function main(x) { let o = { a: x }; let s = Object.getOwnPropertyDescriptors(o); return o.a + 1; }";
+        let src = "function main(x) { let o = { a: x }; let s = structuredClone(o); return o.a + 1; }";
         let js = to_js(src).unwrap();
         assert!(js.contains(".a + 1;"), "read should be opaque:\n{js}");
         assert_node_equiv(src, &[0, 9, -4]);
@@ -1128,7 +1128,7 @@ mod tests {
     fn write_after_escape() {
         let src = "function main(x) {
             let o = { a: x };
-            let s = Object.getOwnPropertyDescriptors(o);
+            let s = structuredClone(o);
             o.a = 99;
             return o.a;
         }";
@@ -2181,7 +2181,7 @@ mod tests {
     fn delete_on_escaped_object_residualizes() {
         let src = r#"function main(x) {
             var o = { a: x, b: 2 };
-            var s = Object.keys(Object.getOwnPropertyDescriptors(o)).length;   // o escapes
+            var s = Object.keys(structuredClone(o)).length;   // o escapes
             delete o.a;
             return [s, JSON.stringify(o)];
         }"#;

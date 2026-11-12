@@ -15512,6 +15512,188 @@ impl Js {
         true
     }
 
+    /// The `[[Prototype]]` of `Object.create(p)`'s object, when this model
+    /// makes it: `null`, a modeled object or function of known code, a
+    /// standard prototype (`Object.prototype` the intrinsic one), a runtime
+    /// object the path knows is one (as `SetProto` takes it).
+    fn create_proto(&self, s: &State, p: Abs) -> Option<Abs> {
+        match p {
+            Abs::Null => Some(p),
+            Abs::Ref(a) => matches!(&s.heap[&a], HeapObj::Object { .. } | HeapObj::Closure { known: true, .. }).then_some(p),
+            Abs::Dyn(e) if self.standard_prototype_of(&e).is_some() => {
+                Some(if self.standard_prototype_of(&e) == Some("Object") { INTRINSIC_PROTO } else { Abs::Dyn(e) })
+            }
+            p @ Abs::Dyn(_) if self.runtime_object(s, &p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// `Object.defineProperties(o, ps)` on the modeled object at `o`, `ps` an
+    /// ordinary object whose own enumerable properties are data properties
+    /// holding plain descriptors: every definition done, or `None` with
+    /// nothing changed.
+    fn define_properties_static(&self, s: &mut State, o: usize, ps: usize) -> Option<()> {
+        let HeapObj::Object { props, class: ObjClass::Ordinary, .. } = &s.heap[&ps] else { return None };
+        let mut defs = Vec::new();
+        for p in own_keys_order(props) {
+            if p.attrs & ENUMERABLE == 0 {
+                continue;
+            }
+            let PVal::Data(Abs::Ref(d)) = &p.val else { return None };
+            // (A descriptor that is `o` itself would read what an earlier
+            // definition changed: the spec reads them all first.)
+            if *d == o {
+                return None;
+            }
+            defs.push((p.key.clone(), *d));
+        }
+        let saved = s.heap.clone();
+        for (k, d) in defs {
+            if self.define_own_static(s, o, &k, d).is_none() {
+                s.heap = saved;
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    /// `Object.defineProperty(o, k, d)` on the modeled object at `o` (an
+    /// ordinary object, a function of known code, a standard array's named
+    /// property), `d` a plain descriptor of own data fields: done, or `None`
+    /// (nothing changed) when this model does not decide it.
+    fn define_own_static(&self, s: &mut State, o: usize, k: &PKey, d: usize) -> Option<()> {
+        let implicit = match &s.heap[&o] {
+            HeapObj::Object { .. } => false,
+            HeapObj::Closure { known: true, .. } if k != "prototype" => {
+                matches!(k.as_str(), Some("name" | "length")) && s.heap[&o].own_key(&k).is_none()
+            }
+            // (A property of an array that is neither an element
+            // nor its `length`: one of its own, as an object's.)
+            HeapObj::Array(xs) if xs.proto == INTRINSIC_PROTO && k.as_str().is_some_and(|k| !array_element_key(&s.heap[&o], k)) => false,
+            _ => return None,
+        };
+        if let Some(k) = k.as_str() {
+            assert_unmapped(&s.heap[&o], k);
+        }
+        if !extensible(&s.heap[&o]) {
+            return None; // a TypeError, or a redefinition
+        }
+        let HeapObj::Object { props: dp, proto: INTRINSIC_PROTO, .. } = &s.heap[&d] else { return None };
+        // Only a plain descriptor's own data fields.
+        let field = |name: &str| -> Option<Option<Abs>> {
+            match dp.iter().find(|p| p.key == name) {
+                None => Some(None),
+                Some(Prop { val: PVal::Data(v), .. }) => Some(Some(v.clone())),
+                Some(_) => None,
+            }
+        };
+        // (A field absent is the property's as it is: for a fresh
+        // one `false`; a function's `name`/`length` is only
+        // configurable.)
+        let truthy = |v: Option<Abs>, dflt: bool| -> Option<bool> { v.map_or(Some(dflt), |v| v.truthy()) };
+        let (value, get, set) = (field("value")?, field("get")?, field("set")?);
+        // Redefining an existing own property (not a function's
+        // implicit `name`/`length`): ValidateAndApplyPropertyDescriptor.
+        if let (false, Some(cur)) = (implicit, s.heap[&o].own_key(&k).cloned()) {
+            let present = |v: Option<Abs>| -> Option<Option<bool>> { v.map(|v| v.truthy()).map_or(Some(None), |b| b.map(Some)) };
+            let (enumerable, configurable, writable) = (present(field("enumerable")?)?, present(field("configurable")?)?, present(field("writable")?)?);
+            let accessor_desc = get.is_some() || set.is_some();
+            let data_desc = value.is_some() || writable.is_some();
+            if accessor_desc && data_desc {
+                return None; // a TypeError
+            }
+            // (Two values the same, statically: SameValue.)
+            let same = |a: &Abs, b: &Abs| -> Option<bool> {
+                match (a, b) {
+                    (Abs::Num(x), Abs::Num(y)) => Some(x == y),
+                    (Abs::Ref(x), Abs::Ref(y)) => Some(x == y),
+                    (a, b) if !a.is_dynamic() && !b.is_dynamic() && !matches!(a, Abs::Ref(_)) && !matches!(b, Abs::Ref(_)) => Some(static_strict_eq(a, b)),
+                    _ => None,
+                }
+            };
+            let cur_accessor = matches!(cur.val, PVal::Accessor { .. });
+            if cur.attrs & CONFIGURABLE == 0 {
+                // (What a non-configurable property refuses: a TypeError
+                // at runtime.)
+                if configurable == Some(true) || enumerable.is_some_and(|e| e != (cur.attrs & ENUMERABLE != 0)) {
+                    return None;
+                }
+                if (accessor_desc || data_desc) && accessor_desc != cur_accessor {
+                    return None;
+                }
+                match &cur.val {
+                    PVal::Accessor { get: g, set: st } => {
+                        if get.as_ref().is_some_and(|v| same(v, g) != Some(true)) || set.as_ref().is_some_and(|v| same(v, st) != Some(true)) {
+                            return None;
+                        }
+                    }
+                    PVal::Data(v) => {
+                        if cur.attrs & WRITABLE == 0 && (writable == Some(true) || value.as_ref().is_some_and(|x| same(x, v) != Some(true))) {
+                            return None;
+                        }
+                    }
+                }
+            }
+            let mut attrs = cur.attrs & (ENUMERABLE | CONFIGURABLE);
+            if let Some(e) = enumerable {
+                attrs = if e { attrs | ENUMERABLE } else { attrs & !ENUMERABLE };
+            }
+            if let Some(c) = configurable {
+                attrs = if c { attrs | CONFIGURABLE } else { attrs & !CONFIGURABLE };
+            }
+            let val = match (&cur.val, accessor_desc, data_desc) {
+                // To an accessor: the fields not given undefined.
+                (PVal::Data(_), true, _) => PVal::Accessor { get: get.unwrap_or(Abs::Undef), set: set.unwrap_or(Abs::Undef) },
+                (PVal::Accessor { get: g, set: st }, _, false) => {
+                    PVal::Accessor { get: get.unwrap_or_else(|| g.clone()), set: set.unwrap_or_else(|| st.clone()) }
+                }
+                // To a data property: not writable unless said.
+                (PVal::Accessor { .. }, _, true) => {
+                    if writable == Some(true) {
+                        attrs |= WRITABLE;
+                    }
+                    PVal::Data(value.unwrap_or(Abs::Undef))
+                }
+                (PVal::Data(v), false, _) => {
+                    let w = writable.unwrap_or(cur.attrs & WRITABLE != 0);
+                    if w {
+                        attrs |= WRITABLE;
+                    }
+                    PVal::Data(value.unwrap_or_else(|| v.clone()))
+                }
+            };
+            define_own(s.heap.get_mut(&o).unwrap(), k, val, attrs);
+            return Some(());
+        }
+        let mut attrs = 0;
+        if truthy(field("enumerable")?, false)? {
+            attrs |= ENUMERABLE;
+        }
+        if truthy(field("configurable")?, implicit)? {
+            attrs |= CONFIGURABLE;
+        }
+        let writable = truthy(field("writable")?, false)?;
+        // Redefining an existing property merges with it; only a
+        // fresh one (or a function's `name`/`length` made into a data
+        // property again) is modeled.
+        if s.heap[&o].own_key(&k).is_some() || (implicit && (get.is_some() || set.is_some() || value.is_none())) {
+            return None;
+        }
+        let val = if get.is_some() || set.is_some() {
+            if value.is_some() || writable {
+                return None; // a TypeError
+            }
+            PVal::Accessor { get: get.unwrap_or(Abs::Undef), set: set.unwrap_or(Abs::Undef) }
+        } else {
+            if writable {
+                attrs |= WRITABLE;
+            }
+            PVal::Data(value.unwrap_or(Abs::Undef))
+        };
+        define_own(s.heap.get_mut(&o).unwrap(), k, val, attrs);
+        Some(())
+    }
+
     /// Whether `f` is the unmodified `Object.defineProperty`.
     fn is_object_define_property(&self, f: &Abs) -> bool {
         matches!(f, Abs::Dyn(RExpr::Get(o, m)) if m == "defineProperty" && matches!(&**o, RExpr::Global(g) if g == "Object")) && self.pristine("Object")
@@ -20219,34 +20401,26 @@ impl Js {
                 Some(new_array(s, elems))
             }
             ("Object", "getPrototypeOf") => self.prototype_of(s, &arg(0)),
-            ("Object", "create") if args.len() == 1 => match arg(0) {
-                p @ (Abs::Null | Abs::Ref(_)) => {
-                    if let Abs::Ref(a) = &p {
-                        if !matches!(&s.heap[a], HeapObj::Object { .. } | HeapObj::Closure { known: true, .. }) {
-                            return None;
-                        }
-                    }
-                    let o = s.alloc(HeapObj::Object { props: vec![], proto: p, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-                    self.creation_pc.borrow_mut().insert(o, pc);
-                    Some(Abs::Ref(o))
+            // `Object.create(proto)`, and `Object.create(proto, props)` given
+            // `props`'s definitions (see `defineProperties`).
+            ("Object", "create") if args.len() == 1 || (args.len() == 2 && arg(1) == Abs::Undef) => {
+                let proto = self.create_proto(s, arg(0))?;
+                let o = s.alloc(HeapObj::Object { props: vec![], proto, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
+                self.creation_pc.borrow_mut().insert(o, pc);
+                Some(Abs::Ref(o))
+            }
+            ("Object", "create") if args.len() == 2 => {
+                let Abs::Ref(ps) = arg(1) else { return None };
+                let proto = self.create_proto(s, arg(0))?;
+                let saved = s.heap.clone();
+                let o = s.alloc(HeapObj::Object { props: vec![], proto, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
+                if self.define_properties_static(s, o, ps).is_none() {
+                    s.heap = saved;
+                    return None;
                 }
-                // (A standard prototype: `Object.create(Object.prototype)`
-                // is `{}`.)
-                Abs::Dyn(e) if self.standard_prototype_of(&e).is_some() => {
-                    let proto = if self.standard_prototype_of(&e) == Some("Object") { INTRINSIC_PROTO } else { Abs::Dyn(e) };
-                    let o = s.alloc(HeapObj::Object { props: vec![], proto, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-                    self.creation_pc.borrow_mut().insert(o, pc);
-                    Some(Abs::Ref(o))
-                }
-                // (A runtime object the path knows is one: a modeled object
-                // inheriting from it, as `SetProto` makes one.)
-                p @ Abs::Dyn(_) if self.runtime_object(s, &p) => {
-                    let o = s.alloc(HeapObj::Object { props: vec![], proto: p, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-                    self.creation_pc.borrow_mut().insert(o, pc);
-                    Some(Abs::Ref(o))
-                }
-                _ => None,
-            },
+                self.creation_pc.borrow_mut().insert(o, pc);
+                Some(Abs::Ref(o))
+            }
             ("Object", "setPrototypeOf") if args.len() == 2 => match (arg(0), arg(1)) {
                 (Abs::Ref(a), p @ (Abs::Null | Abs::Ref(_))) if matches!(&s.heap[&a], HeapObj::Object { .. }) => {
                     // A cycle would throw.
@@ -20470,137 +20644,42 @@ impl Js {
                 // own until defined, are as it was made: read-only,
                 // configurable, a definition merges with them.)
                 let k = self.prop_key(s, &arg(1))?;
-                let implicit = match &s.heap[&o] {
-                    HeapObj::Object { .. } => false,
-                    HeapObj::Closure { known: true, .. } if k != "prototype" => {
-                        matches!(k.as_str(), Some("name" | "length")) && s.heap[&o].own_key(&k).is_none()
-                    }
-                    // (A property of an array that is neither an element
-                    // nor its `length`: one of its own, as an object's.)
-                    HeapObj::Array(xs) if xs.proto == INTRINSIC_PROTO && k.as_str().is_some_and(|k| !array_element_key(&s.heap[&o], k)) => false,
-                    _ => return None,
-                };
-                if let Some(k) = k.as_str() {
-                    assert_unmapped(&s.heap[&o], k);
-                }
-                if !extensible(&s.heap[&o]) {
-                    return None; // a TypeError, or a redefinition
-                }
                 let Abs::Ref(d) = arg(2) else { return None };
-                let HeapObj::Object { props: dp, proto: INTRINSIC_PROTO, .. } = &s.heap[&d] else { return None };
-                // Only a plain descriptor's own data fields.
-                let field = |name: &str| -> Option<Option<Abs>> {
-                    match dp.iter().find(|p| p.key == name) {
-                        None => Some(None),
-                        Some(Prop { val: PVal::Data(v), .. }) => Some(Some(v.clone())),
-                        Some(_) => None,
-                    }
-                };
-                // (A field absent is the property's as it is: for a fresh
-                // one `false`; a function's `name`/`length` is only
-                // configurable.)
-                let truthy = |v: Option<Abs>, dflt: bool| -> Option<bool> { v.map_or(Some(dflt), |v| v.truthy()) };
-                let (value, get, set) = (field("value")?, field("get")?, field("set")?);
-                // Redefining an existing own property (not a function's
-                // implicit `name`/`length`): ValidateAndApplyPropertyDescriptor.
-                if let (false, Some(cur)) = (implicit, s.heap[&o].own_key(&k).cloned()) {
-                    let present = |v: Option<Abs>| -> Option<Option<bool>> { v.map(|v| v.truthy()).map_or(Some(None), |b| b.map(Some)) };
-                    let (enumerable, configurable, writable) = (present(field("enumerable")?)?, present(field("configurable")?)?, present(field("writable")?)?);
-                    let accessor_desc = get.is_some() || set.is_some();
-                    let data_desc = value.is_some() || writable.is_some();
-                    if accessor_desc && data_desc {
-                        return None; // a TypeError
-                    }
-                    // (Two values the same, statically: SameValue.)
-                    let same = |a: &Abs, b: &Abs| -> Option<bool> {
-                        match (a, b) {
-                            (Abs::Num(x), Abs::Num(y)) => Some(x == y),
-                            (Abs::Ref(x), Abs::Ref(y)) => Some(x == y),
-                            (a, b) if !a.is_dynamic() && !b.is_dynamic() && !matches!(a, Abs::Ref(_)) && !matches!(b, Abs::Ref(_)) => Some(static_strict_eq(a, b)),
-                            _ => None,
-                        }
-                    };
-                    let cur_accessor = matches!(cur.val, PVal::Accessor { .. });
-                    if cur.attrs & CONFIGURABLE == 0 {
-                        // (What a non-configurable property refuses: a TypeError
-                        // at runtime.)
-                        if configurable == Some(true) || enumerable.is_some_and(|e| e != (cur.attrs & ENUMERABLE != 0)) {
-                            return None;
-                        }
-                        if (accessor_desc || data_desc) && accessor_desc != cur_accessor {
-                            return None;
-                        }
-                        match &cur.val {
-                            PVal::Accessor { get: g, set: st } => {
-                                if get.as_ref().is_some_and(|v| same(v, g) != Some(true)) || set.as_ref().is_some_and(|v| same(v, st) != Some(true)) {
-                                    return None;
-                                }
-                            }
-                            PVal::Data(v) => {
-                                if cur.attrs & WRITABLE == 0 && (writable == Some(true) || value.as_ref().is_some_and(|x| same(x, v) != Some(true))) {
-                                    return None;
-                                }
-                            }
-                        }
-                    }
-                    let mut attrs = cur.attrs & (ENUMERABLE | CONFIGURABLE);
-                    if let Some(e) = enumerable {
-                        attrs = if e { attrs | ENUMERABLE } else { attrs & !ENUMERABLE };
-                    }
-                    if let Some(c) = configurable {
-                        attrs = if c { attrs | CONFIGURABLE } else { attrs & !CONFIGURABLE };
-                    }
-                    let val = match (&cur.val, accessor_desc, data_desc) {
-                        // To an accessor: the fields not given undefined.
-                        (PVal::Data(_), true, _) => PVal::Accessor { get: get.unwrap_or(Abs::Undef), set: set.unwrap_or(Abs::Undef) },
-                        (PVal::Accessor { get: g, set: st }, _, false) => {
-                            PVal::Accessor { get: get.unwrap_or_else(|| g.clone()), set: set.unwrap_or_else(|| st.clone()) }
-                        }
-                        // To a data property: not writable unless said.
-                        (PVal::Accessor { .. }, _, true) => {
-                            if writable == Some(true) {
-                                attrs |= WRITABLE;
-                            }
-                            PVal::Data(value.unwrap_or(Abs::Undef))
-                        }
-                        (PVal::Data(v), false, _) => {
-                            let w = writable.unwrap_or(cur.attrs & WRITABLE != 0);
-                            if w {
-                                attrs |= WRITABLE;
-                            }
-                            PVal::Data(value.unwrap_or_else(|| v.clone()))
-                        }
-                    };
-                    define_own(s.heap.get_mut(&o).unwrap(), &k, val, attrs);
-                    return Some(given);
-                }
-                let mut attrs = 0;
-                if truthy(field("enumerable")?, false)? {
-                    attrs |= ENUMERABLE;
-                }
-                if truthy(field("configurable")?, implicit)? {
-                    attrs |= CONFIGURABLE;
-                }
-                let writable = truthy(field("writable")?, false)?;
-                // Redefining an existing property merges with it; only a
-                // fresh one (or a function's `name`/`length` made into a data
-                // property again) is modeled.
-                if s.heap[&o].own_key(&k).is_some() || (implicit && (get.is_some() || set.is_some() || value.is_none())) {
-                    return None;
-                }
-                let val = if get.is_some() || set.is_some() {
-                    if value.is_some() || writable {
-                        return None; // a TypeError
-                    }
-                    PVal::Accessor { get: get.unwrap_or(Abs::Undef), set: set.unwrap_or(Abs::Undef) }
-                } else {
-                    if writable {
-                        attrs |= WRITABLE;
-                    }
-                    PVal::Data(value.unwrap_or(Abs::Undef))
-                };
-                define_own(s.heap.get_mut(&o).unwrap(), &k, val, attrs);
+                self.define_own_static(s, o, &k, d)?;
                 Some(given)
+            }
+            // `Object.defineProperties(o, props)`: the descriptors of `props`'s
+            // own enumerable properties (in its key order), each defined on
+            // `o` in turn, all or none (one this model does not decide
+            // leaves the call, and every definition, to the runtime).
+            ("Object", "defineProperties") if args.len() == 2 => {
+                let given = arg(0);
+                let Abs::Ref(o) = given else { return None };
+                let Abs::Ref(ps) = arg(1) else { return None };
+                self.define_properties_static(s, o, ps)?;
+                Some(given)
+            }
+            // `Object.getOwnPropertyDescriptors(o)` of an ordinary object: a
+            // fresh object holding each own property's descriptor, in its
+            // key order.
+            ("Object", "getOwnPropertyDescriptors") if args.len() == 1 => {
+                let Abs::Ref(o) = arg(0) else { return None };
+                let HeapObj::Object { props, class: ObjClass::Ordinary, .. } = &s.heap[&o] else { return None };
+                let own: Vec<Prop> = own_keys_order(props).into_iter().cloned().collect();
+                let mut out = Vec::with_capacity(own.len());
+                for p in own {
+                    let flag = |b: u8| Abs::Bool(p.attrs & b != 0);
+                    let fields = match &p.val {
+                        PVal::Data(v) => vec![Prop::data("value", v.clone()), Prop::data("writable", flag(WRITABLE)), Prop::data("enumerable", flag(ENUMERABLE)), Prop::data("configurable", flag(CONFIGURABLE))],
+                        PVal::Accessor { get, set } => vec![Prop::data("get", get.clone()), Prop::data("set", set.clone()), Prop::data("enumerable", flag(ENUMERABLE)), Prop::data("configurable", flag(CONFIGURABLE))],
+                    };
+                    let d = s.alloc(HeapObj::object(fields));
+                    self.creation_pc.borrow_mut().insert(d, pc);
+                    out.push(Prop { key: p.key.clone(), val: PVal::Data(Abs::Ref(d)), attrs: DEFAULT_ATTRS });
+                }
+                let r = s.alloc(HeapObj::object(out));
+                self.creation_pc.borrow_mut().insert(r, pc);
+                Some(Abs::Ref(r))
             }
             ("Object", "is") if args.len() == 2 => match (arg(0), arg(1)) {
                 (Abs::Num(a), Abs::Num(b)) => Some(Abs::Bool(a == b)), // identity: NaN is NaN, -0 is not 0
