@@ -1,0 +1,1 @@
+{"entry": "main.mjs", "inputs": ["", "ab", "aab", "abc", "babab", "bbb"], "repeat": true, "forbid": "\\.get\\(|new Map"}

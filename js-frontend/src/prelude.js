@@ -554,6 +554,57 @@ function __pe_json_property(key, holder, replacerFunction, propertyList, gap, in
   return out;
 }
 
+// %TypedArray%.from(source, mapFn, thisArg) called as a method of a
+// standard typed array constructor C: ECMA-262 23.2.2.1. An iterable's
+// values are listed first (IteratorToList), an array-like's are read as they
+// are stored; each is mapped, then stored (and so converted) in turn.
+function __pe_typed_from(C, source, mapFn, thisArg) {
+  var mapping = mapFn !== undefined;
+  if (mapping && typeof mapFn !== "function") return __pe_unmodeled();
+  if (source === undefined || source === null) return __pe_unmodeled();
+  var usingIterator = source[Symbol.iterator];
+  var values = source;
+  if (usingIterator !== undefined && usingIterator !== null) {
+    if (typeof usingIterator !== "function") return __pe_unmodeled();
+    values = __pe_std_Array_from(source);
+  }
+  var len = Math.trunc(Number(values.length));
+  if (len !== len || len < 0) len = 0;
+  var target = new C(len);
+  for (var k = 0; k < len; k++) {
+    var kValue = values[k];
+    target[k] = mapping ? mapFn.call(thisArg, kValue, k) : kValue;
+  }
+  return target;
+}
+function __pe_std_Int8Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Int8Array, source, mapFn, thisArg);
+}
+function __pe_std_Uint8Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Uint8Array, source, mapFn, thisArg);
+}
+function __pe_std_Uint8ClampedArray_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Uint8ClampedArray, source, mapFn, thisArg);
+}
+function __pe_std_Int16Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Int16Array, source, mapFn, thisArg);
+}
+function __pe_std_Uint16Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Uint16Array, source, mapFn, thisArg);
+}
+function __pe_std_Int32Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Int32Array, source, mapFn, thisArg);
+}
+function __pe_std_Uint32Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Uint32Array, source, mapFn, thisArg);
+}
+function __pe_std_Float32Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Float32Array, source, mapFn, thisArg);
+}
+function __pe_std_Float64Array_from(source, mapFn, thisArg) {
+  return __pe_typed_from(Float64Array, source, mapFn, thisArg);
+}
+
 // Array.from(items, mapFn, thisArg) called as a method of %Array%:
 // ECMA-262 23.1.2.1.
 function __pe_std_Array_from(items, mapFn, thisArg) {

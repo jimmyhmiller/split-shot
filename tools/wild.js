@@ -6,7 +6,14 @@
 //
 //   node tools/wild.js [--filter REGEX] [--json out.json] [--md docs/WILD.md]
 //                      [--keep DIR] [--timeout SECONDS] [--jobs N]
-//                      [--bin path] [--no-time]
+//                      [--bin path] [--no-time] [--cases DIR]
+//
+// `--cases DIR`: the cases in DIR instead (under tools/wild, so their
+// imports resolve to its packages: tools/wild/interp is the interpreter
+// suite, see tools/interp.js). A case may claim what a specialized residual
+// no longer holds with a comment line `// residue: REGEX` (an interpreter's
+// opcode names, say): the result records whether the residual matches it
+// (`compiled`: it does not).
 //
 // The libraries are pinned in tools/wild/package.json (`npm install
 // --ignore-scripts` there). A case is an ES module in tools/wild/cases/:
@@ -76,7 +83,7 @@ const { spawn, spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const wildDir = path.join(__dirname, 'wild');
-const casesDir = path.join(wildDir, 'cases');
+let casesDir = path.join(wildDir, 'cases');
 const { OBSERVE_SRC } = require(path.join(wildDir, 'observe.cjs'));
 
 // (Module residuals load through `vm.SourceTextModule`: see above.)
@@ -100,6 +107,7 @@ let doTime = true;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--bin') bin = path.resolve(argv[++i]);
+  else if (a === '--cases') casesDir = path.resolve(argv[++i]);
   else if (a === '--filter') filter = new RegExp(argv[++i]);
   else if (a === '--json') jsonOut = path.resolve(argv[++i]);
   else if (a === '--md') mdOut = path.resolve(argv[++i]);
@@ -154,9 +162,13 @@ const binAtStart = binStamp();
 // library reaching for a Node built-in does not bundle. Then as a bundler for
 // the browser would (the package's `browser` field and condition, which is
 // how such a library says what to use where there is no Node).
+// (No `import` or `require` condition listed: esbuild adds the one each
+// import's kind asks for, and `default` always applies. Listed, `import`
+// would hold for a `require()` too, and a CommonJS package would get the ES
+// module form of a dual dependency: jexl's `@babel/runtime` helpers.)
 const PLATFORMS = {
-  neutral: { platform: 'neutral', mainFields: ['module', 'main'], conditions: ['import', 'default'] },
-  browser: { platform: 'browser', mainFields: ['browser', 'module', 'main'], conditions: ['browser', 'import', 'default'] },
+  neutral: { platform: 'neutral', mainFields: ['module', 'main'], conditions: [] },
+  browser: { platform: 'browser', mainFields: ['browser', 'module', 'main'], conditions: ['browser'] },
 };
 
 const bundleOptions = (casePath, platform) => ({
@@ -453,6 +465,14 @@ async function runCase(file) {
   if (isModule(residual)) fs.writeFileSync(path.join(dir, 'residual.mjs'), residual);
   res.residualLines = lineCount(residual);
   res.residualBytes = residual.length;
+  const claim = fs.readFileSync(casePath, 'utf8').match(/^\/\/ residue: (.+)$/m);
+  if (claim) {
+    const re = new RegExp(claim[1].trim());
+    const left = residual.match(re);
+    res.residue = claim[1].trim();
+    res.compiled = !left;
+    if (left) res.residueLeft = left[0];
+  }
 
   // The account of what was left.
   const whyFile = path.join(dir, 'why.json');

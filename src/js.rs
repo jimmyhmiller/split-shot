@@ -2649,9 +2649,14 @@ struct Handler {
     frame_depth: usize,
     ostack_depth: usize,
     /// A handler of the load code that only throws what it caught again
-    /// (after writing variables): an operation left to runtime in its `try`
-    /// needs no runtime `try` (see `Js::load_rethrow_handler`).
+    /// (after writing variables), or one that throws any exception runtime
+    /// code raises again as it is (see `Js::rethrows_foreign`): an operation
+    /// left to runtime in its `try` needs no runtime `try`.
     transparent: bool,
+    /// For the second kind: the prototypes that must stay out of runtime
+    /// code's reach while it is active (a runtime exception inheriting one
+    /// is one it would handle).
+    unseen: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -2686,6 +2691,20 @@ pub struct State {
     /// loop head (see `Js::counter_only_loop`). NOT part of the state's
     /// identity.
     branched_since_head: bool,
+    /// How many runtime branches this path has taken, and, per place in an
+    /// interpreted program it has been (an interpreter's loop head at a
+    /// static program counter, see `Js::dispatch_point`), how many it had
+    /// taken when it was last there: back at one after a runtime branch
+    /// since, it runs a loop of that program its runtime data controls (see
+    /// `dynamically_controlled`). NOT part of the state's identity.
+    dyn_branches: u32,
+    dispatch_seen: im::HashMap<u64, u32>,
+    /// How many times this path has passed each loop head (by function,
+    /// head and place in an interpreted program, not by depth: a `try`'s
+    /// probe runs the activation alone and must decide as the run does): the
+    /// whistle lets a loop whose objects only gained keys run once more
+    /// (see `whistle_with`). NOT part of the state's identity.
+    head_visits: im::HashMap<u64, u32>,
     /// What this path knows about residual variables' values (see `facts`):
     /// learned from the branches it took and the expressions it assigned.
     facts: crate::facts::Facts,
@@ -4372,6 +4391,15 @@ pub struct Js {
     /// Per (func, slot): the slot is used as an array index (`a[slot]`), i.e. it
     /// drives dispatch. A static-valued dispatch slot stays SPLIT at a join.
     drives_dispatch: Vec<Vec<bool>>,
+    /// The property names whose values some code uses as an array index
+    /// (`vm.thread[vm.ip++]`): an interpreter keeping its program counter in
+    /// a record (see `Js::dispatch_point`).
+    dispatch_props: HashMap<String, std::collections::HashSet<String>>,
+    /// Per (func, slot): a program counter (see `drives_dispatch`): a store
+    /// gives it a value not made of constants and itself (it jumps, a
+    /// counter only counts), and it indexes an array its function does not
+    /// change (a program, not a list it builds) or is a lookup key.
+    dispatch_jumps: Vec<Vec<bool>>,
     /// Per loop-head pc: slots in the loop's header condition (induction-variable
     /// candidates). The growth whistle keeps a differing static guard UNROLLING.
     loop_guards: Vec<Vec<usize>>,
@@ -4666,6 +4694,13 @@ pub struct Js {
     /// True while running the foldability probe for a `try`: a would-be
     /// `forbid_residual_in_try` records taint instead of aborting.
     probing: std::cell::Cell<bool>,
+    /// While `rethrows_foreign` probes a handler: the prototypes a runtime
+    /// value was found no instance of (see `static_instanceof`).
+    foreign_protos: std::cell::RefCell<Option<Vec<usize>>>,
+    /// Per call site, how many cases `trick_lookup` split it into.
+    trick_splits: std::cell::RefCell<HashMap<usize, usize>>,
+    /// `fn_assigned_globals`, once computed.
+    fn_globals_memo: std::cell::RefCell<Option<std::rc::Rc<std::collections::HashSet<String>>>>,
     /// Set by the probe when the try body would emit a may-throw residual op, so
     /// the engine knows the try must residualize instead of fold inline.
     try_taint: std::cell::Cell<bool>,
@@ -4750,6 +4785,9 @@ pub struct Js {
     /// Inlining contexts (function, static skeleton of its arguments) in which
     /// a dynamic branch was taken, in this specialization. A later call in the
     /// same context shares a residual function (see `do_call`).
+    /// Per structured context that branched (see `do_call`), how many
+    /// times it was inlined again under runtime control.
+    structured_inlined: std::cell::RefCell<HashMap<(usize, std::rc::Rc<[Skel]>), usize>>,
     branched_contexts: std::cell::RefCell<std::collections::HashSet<(usize, std::rc::Rc<[Skel]>)>>,
     /// The objects on the top frame's operand stack as the current step
     /// began: its operands, in use while it runs though it pops them (roots
@@ -5321,65 +5359,269 @@ impl Js {
         // simulation that forgets at a leader and at any instruction it does
         // not follow: missing an index only forgoes a fold, so the
         // approximation is safe.)
-        let drives_dispatch: Vec<Vec<bool>> = (0..program.len())
+        let (drives_dispatch, dispatch_jumps): (Vec<Vec<bool>>, Vec<(Vec<bool>, Vec<bool>)>) = (0..program.len())
             .map(|fid| {
+                // (What a value on the stack is computed from: slots, by
+                // arithmetic or concatenation; or a `get`/`has` method
+                // read off an object, whose call's key drives dispatch as
+                // an index does (an interpreter's state looked up in a
+                // table: `rules.get(state + " " + symbol)`); or neither.)
+                #[derive(Clone)]
+                enum Prov {
+                    Slots(Vec<usize>),
+                    Lookup,
+                    Other,
+                }
                 let lo = entries[fid];
                 let hi = entries.get(fid + 1).copied().unwrap_or(code.len());
                 let mut dd = vec![false; nslots[fid]];
-                // (Each entry: the slots its value is computed from, or
-                // `None` for a value not so computed.)
-                let mut stack: Vec<Option<Vec<usize>>> = Vec::new();
-                let pop = |st: &mut Vec<Option<Vec<usize>>>| st.pop().flatten();
+                // (Per slot, the slots a store into it computed its value
+                // from: an index computed from a copy of the program counter,
+                // `t = pc; pc = t + 1; code[t]`, drives dispatch through the
+                // counter too.)
+                let mut derived: Vec<Vec<usize>> = vec![Vec::new(); nslots[fid]];
+                // (Per slot, whether a store gives it a value not made of
+                // constants and itself alone: a program counter jumps (`pc =
+                // ins[1]`), a loop's counter only counts.)
+                let mut jumps = vec![false; nslots[fid]];
+                // (Per slot, whether its array is changed in the function
+                // (an indexed store, a mutating method): a program an
+                // interpreter runs is not, a list it builds is. And each
+                // index read: its slots, its array's.)
+                let mut mutated = vec![false; nslots[fid]];
+                let mut reads: Vec<(Vec<usize>, Option<Vec<usize>>)> = Vec::new();
+                let mut stack: Vec<Prov> = Vec::new();
+                let slots_of = |p: Option<Prov>| match p {
+                    Some(Prov::Slots(v)) => Some(v),
+                    _ => None,
+                };
+                let mut mark = |dd: &mut Vec<bool>, p: Option<Vec<usize>>| {
+                    for sl in p.unwrap_or_default() {
+                        if sl < dd.len() {
+                            dd[sl] = true;
+                        }
+                    }
+                };
                 for pc in lo..hi {
                     if leaders[pc] {
                         stack.clear();
                     }
                     match &code[pc] {
-                        Instr::Load(slot) => stack.push(Some(vec![*slot])),
-                        Instr::PushNum(_) => stack.push(Some(Vec::new())),
+                        Instr::Load(slot) => stack.push(Prov::Slots(vec![*slot])),
+                        Instr::PushNum(_) | Instr::PushStr(_) => stack.push(Prov::Slots(Vec::new())),
                         Instr::Dup => {
-                            let top = stack.last().cloned().flatten();
+                            let top = stack.last().cloned().unwrap_or(Prov::Other);
                             stack.push(top);
                         }
+                        // (Operands combined: the slots of those that have
+                        // some, `state + " " + tape[head]` of `state`.)
                         Instr::Bin(_) => {
-                            let (b, a) = (stack.pop(), stack.pop());
-                            stack.push(match (a.flatten(), b.flatten()) {
-                                (Some(mut x), Some(y)) => {
-                                    x.extend(y);
-                                    Some(x)
-                                }
-                                _ => None,
+                            let (b, a) = (slots_of(stack.pop()), slots_of(stack.pop()));
+                            stack.push(match (a, b) {
+                                (None, None) => Prov::Other,
+                                (x, y) => Prov::Slots(x.unwrap_or_default().into_iter().chain(y.unwrap_or_default()).collect()),
                             });
                         }
-                        Instr::GetIndex => {
-                            if let Some(slots) = pop(&mut stack) {
-                                for sl in slots {
-                                    if sl < dd.len() {
-                                        dd[sl] = true;
+                        // (A value computed from operands by an operator,
+                        // and a snapshot of one: from what they are. `pc++`
+                        // reads `pc` through `tonumeric` and a snapshot; its
+                        // store pops the incremented value.)
+                        Instr::OpaqueOp { arity, .. } => {
+                            let mut from: Option<Vec<usize>> = Some(Vec::new());
+                            for _ in 0..*arity {
+                                match (slots_of(stack.pop()), &mut from) {
+                                    (Some(x), Some(f)) => f.extend(x),
+                                    _ => from = None,
+                                }
+                            }
+                            stack.push(from.map_or(Prov::Other, Prov::Slots));
+                        }
+                        Instr::Snapshot => {}
+                        Instr::Store(dst) => {
+                            let from = slots_of(stack.pop());
+                            if *dst < jumps.len() && from.as_ref().is_none_or(|v| v.iter().any(|s| s != dst)) {
+                                jumps[*dst] = true;
+                            }
+                            if let (Some(from), true) = (from, *dst < derived.len()) {
+                                derived[*dst].extend(from.into_iter().filter(|s| s != dst));
+                            }
+                        }
+                        Instr::GetProp(k) => {
+                            let obj = slots_of(stack.pop());
+                            if matches!(k.as_str(), "push" | "pop" | "shift" | "unshift" | "splice" | "reverse" | "sort" | "fill" | "copyWithin" | "set") {
+                                for sl in obj.unwrap_or_default() {
+                                    if sl < mutated.len() {
+                                        mutated[sl] = true;
                                     }
                                 }
                             }
-                            stack.pop();
-                            stack.push(None);
+                            stack.push(if k == "get" || k == "has" { Prov::Lookup } else { Prov::Other });
+                        }
+                        Instr::CallMethod(n) => {
+                            let n = *n;
+                            if stack.len() >= n + 2 {
+                                let at = stack.len() - n - 2;
+                                if n >= 1 && matches!(stack[at + 1], Prov::Lookup) {
+                                    let key = slots_of(Some(stack[at + 2].clone()));
+                                    mark(&mut dd, key);
+                                }
+                                stack.truncate(at);
+                            } else {
+                                stack.clear();
+                            }
+                            stack.push(Prov::Other);
+                        }
+                        Instr::GetIndex => {
+                            let index = slots_of(stack.pop());
+                            let base = slots_of(stack.pop());
+                            reads.push((index.clone().unwrap_or_default(), base));
+                            mark(&mut dd, index);
+                            stack.push(Prov::Other);
                         }
                         Instr::SetIndexOp => {
                             stack.pop();
-                            if let Some(slots) = pop(&mut stack) {
-                                for sl in slots {
-                                    if sl < dd.len() {
-                                        dd[sl] = true;
-                                    }
+                            let index = slots_of(stack.pop());
+                            mark(&mut dd, index);
+                            for sl in slots_of(stack.pop()).unwrap_or_default() {
+                                if sl < mutated.len() {
+                                    mutated[sl] = true;
                                 }
                             }
-                            stack.pop();
                         }
                         _ => stack.clear(),
                     }
                 }
-                dd
+                loop {
+                    let mut grew = false;
+                    for slot in 0..dd.len() {
+                        if dd[slot] {
+                            for &from in &derived[slot] {
+                                if from < dd.len() && !dd[from] {
+                                    dd[from] = true;
+                                    grew = true;
+                                }
+                            }
+                        }
+                    }
+                    if !grew {
+                        break;
+                    }
+                }
+                // (A program counter: a slot that jumps, indexing an array
+                // the function does not change (or one read otherwise,
+                // `this.code`), or a lookup key.)
+                let mut program = vec![false; nslots[fid]];
+                for (index, base) in &reads {
+                    if base.as_ref().is_none_or(|b| b.iter().all(|sl| !mutated.get(*sl).copied().unwrap_or(false))) {
+                        for &sl in index {
+                            if sl < program.len() {
+                                program[sl] = true;
+                            }
+                        }
+                    }
+                }
+                for sl in 0..program.len() {
+                    // (A lookup key, or a copy of a counter that indexes:
+                    // as `dd` has it, through `derived`.)
+                    if dd[sl] && !reads.iter().any(|(i, _)| i.contains(&sl)) {
+                        program[sl] = true;
+                    }
+                }
+                loop {
+                    let mut grew = false;
+                    for slot in 0..program.len() {
+                        if program[slot] {
+                            for &from in &derived[slot] {
+                                if from < program.len() && !program[from] {
+                                    program[from] = true;
+                                    grew = true;
+                                }
+                            }
+                        }
+                    }
+                    if !grew {
+                        break;
+                    }
+                }
+                let pcs: Vec<bool> = (0..jumps.len()).map(|i| jumps[i] && program[i]).collect();
+                (dd, (jumps, pcs))
             })
-            .collect();
+            .unzip();
 
+        let dispatch_props: HashMap<String, std::collections::HashSet<String>> = {
+            // (Per property used as an index, the properties the arrays it
+            // indexes were read from: `vm.thread[vm.ip]`, `ip` of `thread`.)
+            let mut props: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+            // (Each entry: the properties its value is computed from, or
+            // `None` for one not so computed.)
+            let mut stack: Vec<Option<Vec<String>>> = Vec::new();
+            for pc in 0..code.len() {
+                if leaders[pc] {
+                    stack.clear();
+                }
+                match &code[pc] {
+                    Instr::GetProp(k) => {
+                        stack.pop();
+                        stack.push(Some(vec![k.clone()]));
+                    }
+                    Instr::Load(_) | Instr::PushNum(_) | Instr::PushThis => stack.push(Some(Vec::new())),
+                    Instr::Dup => {
+                        let top = stack.last().cloned().flatten();
+                        stack.push(top);
+                    }
+                    Instr::Bin(_) => {
+                        let (b, a) = (stack.pop().flatten(), stack.pop().flatten());
+                        stack.push(match (a, b) {
+                            (Some(mut x), Some(y)) => {
+                                x.extend(y);
+                                Some(x)
+                            }
+                            _ => None,
+                        });
+                    }
+                    Instr::OpaqueOp { arity, .. } => {
+                        let mut from: Option<Vec<String>> = Some(Vec::new());
+                        for _ in 0..*arity {
+                            match (stack.pop().flatten(), &mut from) {
+                                (Some(x), Some(f)) => f.extend(x),
+                                _ => from = None,
+                            }
+                        }
+                        stack.push(from);
+                    }
+                    Instr::Snapshot => {}
+                    Instr::Store(_) => {
+                        stack.pop();
+                    }
+                    Instr::SetPropOp(_) => {
+                        stack.pop();
+                        stack.pop();
+                    }
+                    Instr::GetIndex => {
+                        let index = stack.pop().flatten();
+                        let base = stack.pop().flatten();
+                        if let (Some(ps), Some(bs)) = (index, base) {
+                            for p in ps {
+                                props.entry(p).or_default().extend(bs.iter().cloned());
+                            }
+                        }
+                        stack.push(None);
+                    }
+                    _ => stack.clear(),
+                }
+            }
+            props.retain(|_, bs| !bs.is_empty());
+            props
+        };
+        if env_flag!("DISPATCH_DEBUG") {
+            eprintln!("[DISPATCH] props {dispatch_props:?}");
+            for (fid, dd) in drives_dispatch.iter().enumerate() {
+                let slots: Vec<usize> = dd.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
+                if !slots.is_empty() {
+                    eprintln!("[DISPATCH] fn {fid}: slots {slots:?}");
+                }
+            }
+        }
         // Per loop-head pc: the slots referenced in the loop's HEADER condition
         // (the `Load`s from the head up to its exit `JmpIfFalsy`, within a short
         // window). These are the loop's *guard* slots — a static-valued guard that
@@ -5545,6 +5787,8 @@ impl Js {
             if_forward_joins,
             if_heap_modified,
             drives_dispatch,
+            dispatch_jumps: dispatch_jumps.into_iter().map(|(_, pcs)| pcs).collect(),
+            dispatch_props,
             loop_guards,
             loop_guard_globals,
             loop_counters,
@@ -5668,6 +5912,9 @@ impl Js {
             halt_locals: std::cell::RefCell::new(Vec::new()),
             region_limits: std::cell::RefCell::new(Vec::new()),
             probing: std::cell::Cell::new(false),
+            foreign_protos: std::cell::RefCell::new(None),
+            fn_globals_memo: std::cell::RefCell::new(None),
+            trick_splits: std::cell::RefCell::new(HashMap::new()),
             try_taint: std::cell::Cell::new(false),
             spec_steps: std::cell::Cell::new(0),
             spec_blocks: std::cell::Cell::new(0),
@@ -5690,6 +5937,7 @@ impl Js {
             passed_leader: std::cell::Cell::new(None),
             block_hist: std::cell::RefCell::new(HashMap::new()),
             branched_contexts: std::cell::RefCell::new(std::collections::HashSet::new()),
+            structured_inlined: std::cell::RefCell::new(HashMap::new()),
             step_operands: std::cell::RefCell::new(Vec::new()),
             force_escape_all: std::cell::Cell::new(env_flag!("FORCE_ESCAPE_ALL")),
             why: why::Ledger::default(),
@@ -7269,6 +7517,9 @@ impl Js {
             globals: im::OrdMap::new(),
             escaped: im::OrdSet::new(),
             branched_since_head: false,
+            dyn_branches: 0,
+            dispatch_seen: im::HashMap::new(),
+            head_visits: im::HashMap::new(),
             facts: if self.facts_off { crate::facts::Facts::new() } else { facts },
         };
         // The body runs at runtime, at any point: what the top-level
@@ -7507,6 +7758,9 @@ impl Js {
             globals: im::OrdMap::new(),
             escaped: im::OrdSet::new(),
             branched_since_head: false,
+            dyn_branches: 0,
+            dispatch_seen: im::HashMap::new(),
+            head_visits: im::HashMap::new(),
             facts: crate::facts::Facts::new(),
         };
         self.alloc_fn_objects(&mut start, false);
@@ -8077,6 +8331,9 @@ impl Js {
             globals: im::OrdMap::new(),
             escaped: im::OrdSet::new(),
             branched_since_head: false,
+            dyn_branches: 0,
+            dispatch_seen: im::HashMap::new(),
+            head_visits: im::HashMap::new(),
             facts: crate::facts::Facts::new(),
         };
         self.alloc_fn_objects(&mut s, true);
@@ -8863,6 +9120,8 @@ impl Js {
         self.creation_pc.borrow_mut().clear();
         self.field_owner.borrow_mut().clear();
         self.branched_contexts.borrow_mut().clear();
+        self.structured_inlined.borrow_mut().clear();
+        self.trick_splits.borrow_mut().clear();
         self.why.reset();
     }
 
@@ -10367,7 +10626,16 @@ fn ta_view(heap: &Heap, addr: usize) -> Option<(String, usize, usize, usize)> {
 
 /// `new C([elements])` (or `new C(n)` when every element is 0).
 fn typed_array_literal(ctor: &str, elems: &[Abs]) -> RExpr {
-    let zero = elems.iter().all(|e| matches!(e, Abs::Num(n) if n.f() == 0.0 && !n.f().is_sign_negative()));
+    let is_zero = |e: &Abs| matches!(e, Abs::Num(n) if n.f() == 0.0 && !n.f().is_sign_negative());
+    let zero = elems.iter().all(is_zero);
+    // (Mostly zeros (an emulator's memory): the zeroed array its length
+    // makes, with the other elements set, in order.)
+    let nonzero = elems.iter().filter(|e| !is_zero(e)).count();
+    if !zero && elems.len() >= 64 && nonzero * 4 < elems.len() {
+        let made = RExpr::New(Box::new(RExpr::Global(ctor.to_string())), vec![RExpr::Num(JsNum::int(elems.len() as i64))]);
+        let set: Vec<(String, RExpr)> = elems.iter().enumerate().filter(|(_, e)| !is_zero(e)).map(|(i, e)| (i.to_string(), e.to_rexpr())).collect();
+        return RExpr::Call(Box::new(RExpr::Get(Box::new(RExpr::Global("Object".into())), "assign".into())), vec![made, RExpr::ObjectLit(set)]);
+    }
     let arg = if zero {
         RExpr::Num(JsNum::int(elems.len() as i64))
     } else {
@@ -11274,6 +11542,24 @@ fn skel_of(heap: &Heap, v: &Abs, depth: usize) -> Skel {
 /// Is `new` exactly `old` with more added: an array extended at the end, an
 /// object with extra properties (the old ones unchanged)? (An accumulation,
 /// as opposed to a structure that also shrank or changed.)
+/// Has `new` the shape of `old` and more: the same kind of object with
+/// every key `old` has, and others (an object or a map with more keys: an
+/// environment its first iteration declared variables in); the values held
+/// may differ. (Not an array grown longer: what a loop pushes to, which
+/// grows on.)
+fn shape_grew(old: &HeapObj, new: &HeapObj) -> bool {
+    match (old, new) {
+        (HeapObj::Object { props: a, proto: pa, class: ca, .. }, HeapObj::Object { props: b, proto: pb, class: cb, .. }) => {
+            pa == pb && ca == cb && b.len() > a.len() && a.iter().all(|p| b.iter().any(|q| q.key == p.key && q.attrs == p.attrs))
+        }
+        (HeapObj::Builtin { kind: k1, data: a, ext: None }, HeapObj::Builtin { kind: k2, data: b, ext: None }) if k1 == k2 && is_collection(k1) => {
+            let stride = collection_stride(k1);
+            b.len() > a.len() && a.iter().zip(b.iter()).enumerate().all(|(i, (x, y))| (stride == 3 && i % stride == 1) || x == y)
+        }
+        _ => false,
+    }
+}
+
 fn pure_growth(old: &HeapObj, new: &HeapObj) -> bool {
     match (old, new) {
         (HeapObj::Array(a), HeapObj::Array(b)) => a.proto == b.proto && b.len() > a.len() && b[..a.len()] == a[..],
@@ -11648,7 +11934,14 @@ impl Client for Js {
     }
     fn point(&self, s: &State) -> Vec<usize> {
         if !env_flag!("PE_CONTEXT_POINTS") {
-            return s.frames.iter().map(|f| f.pc).collect();
+            let mut point = Vec::with_capacity(s.frames.len() * 2);
+            for frame in &s.frames {
+                point.push(frame.pc);
+                if let Some(d) = self.dispatch_point(s, frame) {
+                    point.push(d);
+                }
+            }
+            return point;
         }
         // (`PE_CONTEXT_POINTS`, for object-projection's first-projection
         // experiments: several distinct static syntax positions driven
@@ -11770,8 +12063,287 @@ impl Client for Js {
 impl Js {
     /// `whistle(seen, cand)`, given what it needs of `cand` alone (and,
     /// with `differ`, that the two differ).
+    /// Where in the program it interprets an activation is (`point`'s
+    /// part for it): the static values of its dispatch slots (an
+    /// interpreter's program counter, see `drives_dispatch`) that index a
+    /// static array the activation holds (in a local, or a property of an
+    /// object in one: a VM's `this.code`), hashed; `None` when no such slot
+    /// has one. Two states at one instruction of the interpreter but at
+    /// different instructions of the program it runs are then different
+    /// points, never weighed against each other by the whistle: the
+    /// interpreter's dispatch on its program counter stays static, and its
+    /// loop is tied where the program's own loops are, the same program
+    /// instruction met again. Bounded by the static arrays' lengths: an
+    /// index past every one (a counter over runtime data) is no part of the
+    /// point, and the whistle weighs it as it would any value.
+    /// `PE_NO_DISPATCH_POINTS`: the instruction alone.
+    /// The place in an interpreted program the top activation of `s` is at
+    /// (see `dispatch_point`), with where in the interpreter (not by depth,
+    /// see `State::head_visits`): `None` when it is at none.
+    fn dispatch_key(&self, s: &State) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let f = s.top();
+        let d = self.dispatch_point(s, f)?;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (f.func, f.pc, d).hash(&mut h);
+        Some(h.finish())
+    }
+
+    /// The globals some function's code assigns (all but the top-level
+    /// code's assignments: a script's declarations).
+    fn fn_assigned_globals(&self) -> std::rc::Rc<std::collections::HashSet<String>> {
+        if let Some(g) = self.fn_globals_memo.borrow().as_ref() {
+            return g.clone();
+        }
+        let mut g = std::collections::HashSet::new();
+        for fid in 0..self.entries.len() {
+            if fid == self.main {
+                continue;
+            }
+            let lo = self.entries[fid];
+            let hi = self.entries.get(fid + 1).copied().unwrap_or(self.code.len());
+            for pc in lo..hi.max(lo) {
+                if let Some(Instr::SetGlobalOp(n)) = self.code.get(pc) {
+                    g.insert(n.clone());
+                }
+            }
+        }
+        let g = std::rc::Rc::new(g);
+        *self.fn_globals_memo.borrow_mut() = Some(g.clone());
+        g
+    }
+
+    /// The loop head the top activation of `s` is at, as `head_visits`
+    /// counts it.
+    fn head_key(&self, s: &State) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let f = s.top();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (f.func, f.pc, self.dispatch_point(s, f)).hash(&mut h);
+        h.finish()
+    }
+
+    fn dispatch_point(&self, s: &State, f: &Frame) -> Option<usize> {
+        use std::hash::{Hash, Hasher};
+        let slots = self.dispatch_slots(s, f);
+        let fields = self.dispatch_fields(s, f);
+        if slots.is_empty() && fields.is_empty() {
+            return None;
+        }
+        if env_flag!("POINT_DEBUG") {
+            eprintln!("[POINT] {} pc {} slots {:?} fields {:?}", self.names[f.func], f.pc, slots.iter().map(|&k| (k, f.locals[k].clone())).collect::<Vec<_>>(), fields);
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for &slot in &slots {
+            match &f.locals[slot] {
+                Abs::Num(n) => (slot, n.0 as usize).hash(&mut h),
+                Abs::Str(st) => (slot, st).hash(&mut h),
+                _ => {}
+            }
+        }
+        fields.hash(&mut h);
+        Some(h.finish() as usize)
+    }
+
+    /// An interpreter's program counter kept in a record the activation
+    /// holds (a local's object, its `this`): per such record, its dispatch
+    /// properties' static values that index a static array (see
+    /// `dispatch_slots`), and which arrays it holds (the code it runs: a
+    /// Forth word's body), by address. Empty when none.
+    fn dispatch_fields(&self, s: &State, f: &Frame) -> Vec<(usize, Vec<(String, usize)>, Vec<usize>)> {
+        if self.dispatch_props.is_empty() || env_flag!("PE_NO_DISPATCH_POINTS") {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for v in f.locals.iter().chain(std::iter::once(&f.this)) {
+            let Abs::Ref(a) = v else { continue };
+            let Some(o @ HeapObj::Object { props, class: ObjClass::Ordinary, .. }) = s.heap.get(a) else { continue };
+            let arrays: Vec<(usize, usize)> = o
+                .children()
+                .into_iter()
+                .filter_map(|c| match c {
+                    Abs::Ref(b) => match s.heap.get(b) {
+                        Some(HeapObj::Array(arr)) => Some((*b, arr.len())),
+                        // (A typed array: an emulator's memory.)
+                        Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray" => ta_view(&s.heap, *b).map(|(_, _, _, len)| (*b, len)),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            // (A property in range of an array the record holds under a
+            // property it indexes: `ip` within `thread`.)
+            let len_at = |k: &str| -> Option<usize> {
+                let p = props.iter().find(|p| p.key.as_str() == Some(k))?;
+                let PVal::Data(Abs::Ref(b)) = &p.val else { return None };
+                arrays.iter().find(|(x, _)| x == b).map(|(_, n)| *n)
+            };
+            let at: Vec<(String, usize)> = props
+                .iter()
+                .filter_map(|p| {
+                    let k = p.key.as_str()?;
+                    let bases = self.dispatch_props.get(k)?;
+                    match &p.val {
+                        PVal::Data(Abs::Num(n)) if n.0 >= 0.0 && n.0.fract() == 0.0 && bases.iter().any(|b| len_at(b).is_some_and(|len| (n.0 as usize) < len)) => {
+                            Some((k.to_string(), n.0 as usize))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            if !at.is_empty() {
+                // (And a return stack the record holds, an array of static
+                // places (code arrays and indices into them, at most
+                // `RETURN_STACK_POINT` long): which call of a word this is
+                // is where the program is, as the activation stack is for
+                // the interpreter's own code. A data stack, numbers only, is
+                // no part of it.)
+                let mut place: Vec<usize> = arrays.iter().map(|(b, _)| *b).collect();
+                for (b, _) in &arrays {
+                    let Some(HeapObj::Array(arr)) = s.heap.get(b) else { continue };
+                    let elems: Vec<&Abs> = arr.iter().collect();
+                    let code_refs = elems.iter().any(|e| matches!(e, Abs::Ref(c) if matches!(s.heap.get(c), Some(HeapObj::Array(_)))));
+                    if code_refs && elems.len() <= RETURN_STACK_POINT && elems.iter().all(|e| matches!(e, Abs::Ref(_) | Abs::Num(_))) {
+                        place.push(usize::MAX);
+                        for e in elems {
+                            match e {
+                                Abs::Ref(c) => place.push(*c),
+                                Abs::Num(n) => place.push(n.0 as usize),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                out.push((*a, at, place));
+            }
+        }
+        out
+    }
+
+    /// The dispatch slots of `f` whose static value is a place in the
+    /// program it interprets (see `dispatch_point`): an integer index into a
+    /// static array the activation holds or a global does.
+    fn dispatch_slots(&self, s: &State, f: &Frame) -> Vec<usize> {
+        if env_flag!("PE_NO_DISPATCH_POINTS") {
+            return Vec::new();
+        }
+        let Some(dispatch) = self.drives_dispatch.get(f.func) else { return Vec::new() };
+        if !dispatch.iter().any(|d| *d) {
+            return Vec::new();
+        }
+        // (The longest static array the activation holds, one level deep.)
+        let mut longest = 0usize;
+        // (An array's length, a typed array view's.)
+        let len_of = |a: usize| -> Option<usize> {
+            match s.heap.get(&a) {
+                Some(HeapObj::Array(arr)) => Some(arr.len()),
+                Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray" => ta_view(&s.heap, a).map(|(_, _, _, len)| len),
+                _ => None,
+            }
+        };
+        let look = |v: &Abs, longest: &mut usize| {
+            let Abs::Ref(a) = v else { return };
+            if let Some(n) = len_of(*a) {
+                *longest = (*longest).max(n);
+            } else if let Some(o @ HeapObj::Object { .. }) = s.heap.get(a) {
+                for c in o.children() {
+                    if let Abs::Ref(b) = c {
+                        if let Some(n) = len_of(*b) {
+                            *longest = (*longest).max(n);
+                        }
+                    }
+                }
+            }
+        };
+        // (In its locals, its `this`, and the globals: a script's program
+        // table is one.)
+        for v in f.locals.iter().chain(std::iter::once(&f.this)).chain(s.globals.values().map(|(v, _)| v)) {
+            look(v, &mut longest);
+        }
+        // (A counter of a loop its runtime data bounds (`for (i = 0; i < n;
+        // i++) buf[i] = ...`, its condition at runtime) is no place in a
+        // program: a slot that guards the loop whose head this is, when
+        // that loop's condition is dynamic, is not one.)
+        let guards = self.loop_guards.get(f.pc).map(Vec::as_slice).unwrap_or(&[]);
+        let is_top = std::ptr::eq(f, s.top());
+        let mut counter_loop: Option<bool> = None;
+        // (A string that starts some key of a known map the activation
+        // reaches the same way: a state an interpreter looks its next step
+        // up by, finitely many.)
+        let mut key_prefix: Option<Vec<String>> = None;
+        let mut starts_key = |v: &str| -> bool {
+            let keys = key_prefix.get_or_insert_with(|| {
+                let mut keys = Vec::new();
+                let mut maps = |a: usize, keys: &mut Vec<String>| {
+                    if let Some(HeapObj::Builtin { kind, data, ext: None }) = s.heap.get(&a) {
+                        if kind == "Map" && !s.escaped.contains(&a) {
+                            for e in data.to_vec().chunks(3) {
+                                if let (Abs::Str(k), Abs::Bool(true)) = (&e[0], &e[2]) {
+                                    keys.push(k.clone());
+                                }
+                            }
+                        }
+                    }
+                };
+                for v in f.locals.iter().chain(std::iter::once(&f.this)).chain(s.globals.values().map(|(v, _)| v)) {
+                    let Abs::Ref(a) = v else { continue };
+                    maps(*a, &mut keys);
+                    if let Some(o @ HeapObj::Object { .. }) = s.heap.get(a) {
+                        for c in o.children() {
+                            if let Abs::Ref(b) = c {
+                                maps(*b, &mut keys);
+                            }
+                        }
+                    }
+                }
+                keys
+            });
+            keys.iter().any(|k| k.starts_with(v))
+        };
+        let mut slots: Vec<usize> = f
+            .locals
+            .iter()
+            .enumerate()
+            .filter(|(slot, v)| {
+                dispatch.get(*slot).copied().unwrap_or(false)
+                    && (env_flag!("PE_COUNTERS_DISPATCH") || self.dispatch_jumps.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false))
+                    && match v {
+                        Abs::Num(n) => n.0 >= 0.0 && n.0.fract() == 0.0 && (n.0 as usize) < longest,
+                        Abs::Str(st) => starts_key(st),
+                        _ => false,
+                    }
+            })
+            .map(|(slot, _)| slot)
+            .collect();
+        slots.retain(|slot| {
+            if !guards.contains(slot) {
+                return true;
+            }
+            if !is_top || !self.loop_head[f.pc] {
+                return false;
+            }
+            !*counter_loop.get_or_insert_with(|| self.dry_run_condition(s, &mut Vec::new()))
+        });
+        slots
+    }
+
     fn whistle_with(&self, seen: &State, cand: &State, facts: &JsCandFacts, differ: bool) -> bool {
         let yielded = seen.frames.len() == cand.frames.len() && seen.top().yields != cand.top().yields;
+        // (A loop under runtime control whose objects only gained keys since
+        // `seen` (an environment its first iteration added variables to):
+        // once more, a bounded number of times on a path, so the whistle
+        // weighs two iterations of one shape, whose differing values become
+        // variables, and the objects stay modeled. `PE_NO_SHAPE_PEEL`: as
+        // any difference.)
+        if facts.dynamic && !yielded && !env_flag!("PE_NO_SHAPE_PEEL") && seen.frames.len() == cand.frames.len() {
+            let visits = cand.head_visits.get(&self.head_key(cand)).copied().unwrap_or(0);
+            if visits <= SHAPE_PEELS {
+                let shapes = self.heap_shape_changes(&seen.heap, &cand.heap);
+                if !shapes.is_empty() && shapes.iter().all(|a| seen.heap.get(a).zip(cand.heap.get(a)).is_some_and(|(o, n)| shape_grew(o, n))) {
+                    return false;
+                }
+            }
+        }
         let fired = (differ || seen != cand) && (yielded || facts.dynamic || self.loop_diverges_with(seen, cand, Some(&facts.guard_fields)) || self.join_mergeable(seen, cand));
         if fired && env_flag!("FACTS_DEBUG") {
             eprintln!("[FACTS] pc={} same_but_facts={} seen={:?}\n        cand={:?}", cand.top().pc, same_but_facts(seen, cand), seen.facts, cand.facts);
@@ -11872,6 +12444,12 @@ impl Js {
         // (Passing a loop head starts a new iteration.)
         if self.loop_head[pc] {
             s.branched_since_head = false;
+            if let Some(k) = self.dispatch_key(s) {
+                let n = s.dyn_branches;
+                s.dispatch_seen.insert(k, n);
+            }
+            let h = self.head_key(s);
+            *s.head_visits.entry(h).or_insert(0) += 1;
         }
         // Straight-line code reaching a pending join (the fall-through path
         // of an `if` reaching the target of a `continue` in it): a block
@@ -11994,13 +12572,18 @@ impl Js {
             Instr::PushHandler { catch_pc, exc_slot, body_end, end } => {
                 let frame_depth = s.frames.len();
                 let ostack_depth = s.top().ostack.len();
-                let transparent = self.load_rethrow_handler(s, *catch_pc, *exc_slot, *end);
+                let load_transparent = self.load_rethrow_handler(s, *catch_pc, *exc_slot, *end);
+                // (A handler that throws what runtime code raises again, as
+                // it is: no runtime `try` for it, should the region fold so,
+                // see `try_folds`.)
+                let unseen = if load_transparent { None } else { self.rethrows_foreign(s, *catch_pc, *exc_slot, *end) };
                 let handler = Handler {
                     catch_pc: *catch_pc,
                     exc_slot: *exc_slot,
                     frame_depth,
                     ostack_depth,
-                    transparent,
+                    transparent: load_transparent || unseen.is_some(),
+                    unseen: unseen.clone().unwrap_or_default(),
                 };
                 // Decide whether the try body fully specializes (model `throw` as
                 // control flow, exceptions vanish) or must residualize a runtime
@@ -12010,7 +12593,7 @@ impl Js {
                 if env_flag!("HANDLER_DEBUG") {
                     eprintln!("[HANDLER] pc={pc} catch_pc={catch_pc} exc_slot={exc_slot:?} body_end={body_end} end={end}: {:?}", &self.code[*catch_pc..(*end).min(*catch_pc + 24)]);
                 }
-                if transparent || self.probing.get() || self.try_folds(s, &handler, *body_end, *end) {
+                if load_transparent || self.probing.get() || self.try_folds(s, &handler, *body_end, *end) {
                     s.handlers.push(handler);
                     self.advance(s)
                 } else {
@@ -13365,6 +13948,11 @@ impl Js {
                 self.do_call(s, *nargs, pc, out, Abs::Undef, RetMode::Value, Abs::Undef)
             }
             Instr::CallMethod(nargs) => {
+                // A lookup of a runtime key in a small known table: a
+                // case on the key (see `trick_lookup`).
+                if let Some(step) = self.trick_lookup(s, *nargs, pc, out) {
+                    return step;
+                }
                 // `Object.defineProperty` of a choice of objects.
                 if let (3, Some(c)) = (*nargs, Js::choice_at(s, 2)) {
                     let len = s.top().ostack.len();
@@ -13418,6 +14006,15 @@ impl Js {
                 // inputs are static, instead of residualizing a `new` call.
                 if let Some(name) = self.builtin_ctor_name(&callee, s) {
                     if let Some(v) = self.try_builtin_new(name, &args, s) {
+                        // (Where it was made: what names its fields' variables
+                        // when a loop lifts them, see `heap_field_changes`.)
+                        if let Abs::Ref(made) = v {
+                            self.creation_pc.borrow_mut().entry(made).or_insert(pc);
+                            // (A typed array's buffer, made with it.)
+                            if let Some((_, buf, _, _)) = ta_view(&s.heap, made) {
+                                self.creation_pc.borrow_mut().entry(buf).or_insert(pc);
+                            }
+                        }
                         s.top_mut().pc += 1;
                         s.top_mut().ostack.push(v);
                         return Step::Continue;
@@ -13979,6 +14576,16 @@ impl Js {
                             Vec::new()
                         };
                         let hm: Vec<usize> = hm.into_iter().filter(|sl| !cells.iter().any(|(c, _)| c == sl)).collect();
+                        // (Nor an interpreter's record of where its program
+                        // is (see `dispatch_fields`): the arms set its
+                        // program counter to different places, which stay
+                        // split, as a dispatch slot does at a join.)
+                        let records: Vec<usize> = if env_flag!("PE_NO_DISPATCH_DATA") {
+                            Vec::new()
+                        } else {
+                            self.dispatch_fields(s, s.top()).into_iter().map(|(a, _, _)| a).collect()
+                        };
+                        let hm: Vec<usize> = hm.into_iter().filter(|sl| !matches!(s.top().locals.get(*sl), Some(Abs::Ref(a)) if records.contains(a))).collect();
                         let cells: Vec<usize> = cells.into_iter().map(|(_, a)| a).collect();
                         let c = if hm.is_empty() {
                             c
@@ -14057,11 +14664,13 @@ impl Js {
                         tstate.top_mut().dyn_ctl = true;
                         tstate.top_mut().branched = true;
                         tstate.branched_since_head = true;
+                        tstate.dyn_branches += 1;
                         let mut fstate = s.clone();
                         fstate.top_mut().pc = pc + 1; // truthy branch
                         fstate.top_mut().dyn_ctl = true;
                         fstate.top_mut().branched = true;
                         fstate.branched_since_head = true;
+                        fstate.dyn_branches += 1;
                         // Only schedule a join merge when arms assign primitive
                         // slots differently. With nothing to merge (e.g. an empty
                         // else, or arms that only push to an already-escaped
@@ -14255,7 +14864,23 @@ impl Js {
             // it would materialize a dead object into the variable of a live
             // one.
             g.gc();
-            let changed = self.heap_shape_changes(&seen.heap, &g.heap);
+            let mut changed = self.heap_shape_changes(&seen.heap, &g.heap);
+            // (And those whose fields hold other objects than at `seen`'s
+            // visit (a cell a loop keeps a fresh object in each iteration):
+            // no variable stands for an object, so they become runtime
+            // values too. `PE_NO_REF_FIELD_ESCAPE`: kept.)
+            if !env_flag!("PE_NO_REF_FIELD_ESCAPE") && fields.is_empty() {
+                for (addr, c) in g.heap.iter() {
+                    let Some(o) = seen.heap.get(addr) else { continue };
+                    if o == c || changed.contains(addr) || g.escaped.contains(addr) {
+                        continue;
+                    }
+                    let (oc, cc) = (o.children(), c.children());
+                    if oc.len() == cc.len() && oc.iter().zip(cc.iter()).any(|(x, y)| x != y && (matches!(x, Abs::Ref(_)) || matches!(y, Abs::Ref(_)))) {
+                        changed.push(*addr);
+                    }
+                }
+            }
             for addr in Js::holders_first(&g.heap, &changed, 1) {
                 if g.heap.contains_key(&addr) && !g.escaped.contains(&addr) {
                     if env_flag!("GEN_DEBUG") {
@@ -14849,6 +15474,20 @@ impl Js {
             restore_all();
             return None;
         }
+        // (Arms that leave an interpreter at different places in the program
+        // it runs (a branch instruction setting its program counter): those
+        // stay two paths, each at its place, not one at a place chosen at
+        // runtime, see `dispatch_point`.)
+        if !env_flag!("PE_NO_DISPATCH_DATA")
+            && st_t.frames.len() == st_f.frames.len()
+            && st_t.frames.iter().zip(st_f.frames.iter()).any(|(a, b)| self.dispatch_point(&st_t, a) != self.dispatch_point(&st_f, b))
+        {
+            if dbg {
+                eprintln!("[IFCONV] pc={pc}: the arms leave an interpreted program at different places");
+            }
+            restore_all();
+            return None;
+        }
         // (An arm that called a function had its dead values cleared, see
         // `clear_dead`: the other's are too, so the two compare as they
         // are.)
@@ -15056,6 +15695,9 @@ impl Js {
             mf.branched = sf.branched;
         }
         m.branched_since_head = s.branched_since_head;
+        m.dyn_branches = s.dyn_branches;
+        m.dispatch_seen = s.dispatch_seen.clone();
+        m.head_visits = s.head_visits.clone();
         // (Every value that differs is unset until its choice is made: the
         // truthy arm's fresh objects are not in the merged heap.)
         for slot in 0..fa.locals.len() {
@@ -15460,6 +16102,133 @@ impl Js {
         if env_flag!("CHOICE_DEBUG") {
             eprintln!("[CHOICE]   after: stack={:?}", s.top().ostack);
         }
+    }
+
+    /// `m.get(k)` / `m.has(k)` of a known map (or `s.has(k)` of a known set)
+    /// the runtime does not hold, with `k` a runtime value: "The Trick" —
+    /// a case on `k` over the table's keys, each case's answer known. What
+    /// the facts already tell of `k` decides it: equal to a key, that
+    /// entry; unequal to all, none. Otherwise a runtime branch on `k ===`
+    /// the first key not yet ruled out, at this same call: on its true arm
+    /// the facts say `k` is that key, on its false arm that it is not, and
+    /// the call, met again on each, is decided or cases on the next key.
+    /// (So a table's answer stays known on every path: an interpreter's
+    /// next state looked up by a runtime symbol, a Turing machine's rule.)
+    /// Only where the activation is an interpreter at a place in its
+    /// program, and for at most `TRICK_KEYS` keys, all primitives or objects the
+    /// runtime does not hold (no runtime value is one), none a `NaN` (`===`
+    /// and the map's equality differ on it), and with facts learned on
+    /// branches (else the call would branch on the same key again).
+    /// `PE_NO_TRICK`: never.
+    fn trick_lookup(&self, s: &mut State, nargs: usize, pc: usize, out: &mut Vec<Op>) -> Option<Step<Js>> {
+        if nargs < 1 || self.facts_off || env_flag!("PE_NO_LEARN") || env_flag!("PE_NO_TRICK") {
+            return None;
+        }
+        let len = s.top().ostack.len();
+        if len < nargs + 2 {
+            return None;
+        }
+        let (recv, method, key) = (s.top().ostack[len - nargs - 2].clone(), s.top().ostack[len - nargs - 1].clone(), s.top().ostack[len - nargs].clone());
+        let (Abs::Ref(r), Abs::Ref(m), Abs::Dyn(e)) = (&recv, &method, &key) else { return None };
+        if s.escaped.contains(r) {
+            return None;
+        }
+        let Some(HeapObj::Builtin { kind, data, ext: None }) = s.heap.get(r) else { return None };
+        let Some(HeapObj::Builtin { kind: mk, .. }) = s.heap.get(m) else { return None };
+        let get = match (kind.as_str(), mk.as_str()) {
+            ("Map", "Map.prototype.get") => true,
+            ("Map", "Map.prototype.has") | ("Set", "Set.prototype.has") => false,
+            _ => return None,
+        };
+        if !self.pristine(kind) {
+            return None;
+        }
+        // (Only where an interpreter is at a place in the program it runs
+        // (see `dispatch_point`): there the answer decides where it goes
+        // next, which the cases keep known. A lookup of plain data would
+        // only copy what follows once per key.)
+        if self.dispatch_point(s, s.top()).is_none() {
+            return None;
+        }
+        let stride = collection_stride(kind);
+        let d = data.to_vec();
+        let mut cases: Vec<(RExpr, Abs)> = Vec::new();
+        for entry in d.chunks(stride) {
+            if entry[stride - 1] != Abs::Bool(true) {
+                continue;
+            }
+            let answer = if get { entry[1].clone() } else { Abs::Bool(true) };
+            match &entry[0] {
+                Abs::Ref(a) if s.escaped.contains(a) => return None,
+                Abs::Ref(_) => continue,
+                Abs::Dyn(_) => return None,
+                Abs::Num(n) if n.f().is_nan() => return None,
+                k => cases.push((k.to_rexpr(), answer)),
+            }
+        }
+        if cases.len() > TRICK_KEYS {
+            return None;
+        }
+        let miss = if get { Abs::Undef } else { Abs::Bool(false) };
+        // (The key in a variable of its own, which the facts can speak of.)
+        let v = match e {
+            RExpr::Var(v) => *v,
+            other => {
+                let t = self.aux_var(132, pc, 0);
+                // (A key that starts with a known string (`state + " " +
+                // symbol`) is none of the keys that do not: so the facts
+                // say from the start.)
+                let mut prefix = other;
+                while let RExpr::Bin(Bop::Add, l, _) = prefix {
+                    prefix = l;
+                }
+                let excluded: Vec<RExpr> = match prefix {
+                    RExpr::Str(p) if !p.is_empty() => cases.iter().filter(|(k, _)| !matches!(k, RExpr::Str(ks) if ks.starts_with(p.as_str()))).map(|(k, _)| k.clone()).collect(),
+                    _ => Vec::new(),
+                };
+                self.emit_temp(s, t, other.clone(), pc, out);
+                s.top_mut().ostack[len - nargs] = Abs::Dyn(RExpr::Var(t));
+                if !excluded.is_empty() {
+                    let lookup = |v: usize| s.facts.get(&v).cloned();
+                    let mut info = Js::identity_info(crate::facts::info_of(other, &lookup, self.typed_intrinsics()));
+                    info.ne.extend(excluded);
+                    self.pending_info.borrow_mut().insert(t, info);
+                }
+                t
+            }
+        };
+        let info = s.facts.get(&v).cloned();
+        let decided = match info.as_ref().and_then(|i| i.eq.clone()) {
+            Some(c) => Some(cases.iter().find(|(k, _)| *k == c).map(|(_, a)| a.clone()).unwrap_or(miss.clone())),
+            None => {
+                let ne = info.map(|i| i.ne).unwrap_or_default();
+                let left: Vec<&(RExpr, Abs)> = cases.iter().filter(|(k, _)| !ne.contains(k)).collect();
+                match left.first() {
+                    None => Some(miss.clone()),
+                    Some((k, _)) => {
+                        // (Bounded: a call that has split `TRICK_SPLITS`
+                        // times stays the runtime's lookup, so lookups one
+                        // after another on runtime paths, each a case of the
+                        // one before, stay finitely many.)
+                        {
+                            let mut n = self.trick_splits.borrow_mut();
+                            let n = n.entry(pc).or_insert(0);
+                            if *n >= TRICK_SPLITS {
+                                return None;
+                            }
+                            *n += 1;
+                        }
+                        let cond = RExpr::Bin(Bop::Eq, Box::new(RExpr::Var(v)), Box::new(k.clone()));
+                        return Some(Step::Branch { cond: Cond::Falsy(cond), t: s.clone(), f: s.clone() });
+                    }
+                }
+            }
+        };
+        let answer = decided?;
+        s.top_mut().ostack.truncate(len - nargs - 2);
+        s.top_mut().pc += 1;
+        s.top_mut().ostack.push(answer);
+        Some(Step::Continue)
     }
 
     /// Escape the choice on the stack at `i` (counted from the top), if
@@ -17103,10 +17872,27 @@ impl Js {
                 (HeapObj::Object { .. }, HeapObj::Object { .. }) | (HeapObj::Closure { .. }, HeapObj::Closure { .. }) => {
                     obj_cell_labels(s) != obj_cell_labels(c)
                 }
-                // (A typed array's buffer whose elements changed: written by
-                // the loop, it is a runtime buffer from here.)
+                // (A typed array's buffer of another size or element kind;
+                // one whose elements only changed keeps its shape, its
+                // changed elements variables of their own (see
+                // `heap_field_changes`). `PE_NO_MAP_FIELDS`: any change, a
+                // runtime buffer from here.)
                 (HeapObj::Builtin { kind: k1, data: d1, .. }, HeapObj::Builtin { kind: k2, data: d2, .. }) if k1 == "ArrayBuffer" && k2 == "ArrayBuffer" => {
-                    d1 != d2
+                    // (Nor one that already has elements of its own
+                    // variables, a static one of which changed now: the
+                    // elements a loop writes grow (it fills the buffer),
+                    // they are no fixed set of registers.)
+                    let ids = self.var_ids.borrow();
+                    let lifted = |v: &Abs| matches!(v, Abs::Dyn(RExpr::Var(x)) if matches!(ids.keys.get(x), Some(VarKey::HeapField(..))));
+                    if env_flag!("PE_NO_MAP_FIELDS") || !self.creation_pc.borrow().contains_key(addr) {
+                        // (Nor elements that can have no variables, its
+                        // making not known: see `heap_field_changes`.)
+                        d1 != d2
+                    } else {
+                        d1.len() != d2.len()
+                            || d1.first() != d2.first()
+                            || (d1.iter().any(lifted) && d1.iter().zip(d2.iter()).any(|(a, b)| a != b && !a.is_dynamic()))
+                    }
                 }
                 (HeapObj::Builtin { kind: k1, data: d1, ext: e1 }, HeapObj::Builtin { kind: k2, data: d2, ext: e2 }) => {
                     k1 != k2 || d1.len() != d2.len() || ext_shape(e1) != ext_shape(e2)
@@ -17181,7 +17967,7 @@ impl Js {
         guards: Option<&std::cell::OnceCell<Vec<(usize, Option<usize>)>>>,
     ) -> Option<(Vec<(usize, usize)>, bool)> {
         if seen.len() != cand.len() {
-            return None;
+            { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 1"); } return None; }
         }
         let creation = self.creation_pc.borrow();
         let mut changes = Vec::new();
@@ -17211,8 +17997,8 @@ impl Js {
             None => cand.keys().copied().collect(),
         };
         for addr in &addrs {
-            let c = cand.get(addr)?;
-            let s = seen.get(fresh.get(addr).unwrap_or(addr))?;
+            let Some(c) = cand.get(addr) else { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none: @{addr} not in cand"); } return None };
+            let Some(s) = seen.get(fresh.get(addr).unwrap_or(addr)) else { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none: @{addr} not in seen"); } return None };
             if s == c {
                 continue;
             }
@@ -17233,16 +18019,35 @@ impl Js {
                 (HeapObj::Object { .. }, HeapObj::Object { .. }) if obj_cell_labels(s) == obj_cell_labels(c) => {
                     s.children().into_iter().zip(c.children()).collect()
                 }
+                // (A map with the same keys, live alike: its values, which
+                // a variable environment keeps. `PE_NO_MAP_FIELDS`: none.)
+                // (A buffer of the same element kind and size: its elements,
+                // an asm.js heap's stack or registers.)
+                (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None })
+                    if k1 == "ArrayBuffer" && k2 == "ArrayBuffer" && d1.len() == d2.len() && d1.first() == d2.first() && !env_flag!("PE_NO_MAP_FIELDS") =>
+                {
+                    s.children().into_iter().zip(c.children()).collect()
+                }
+                (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None })
+                    if k1 == k2 && matches!(k1.as_str(), "Map" | "WeakMap") && d1.len() == d2.len() && !env_flag!("PE_NO_MAP_FIELDS") =>
+                {
+                    let stride = collection_stride(k1);
+                    let same_keys = d1.iter().zip(d2.iter()).enumerate().all(|(i, (x, y))| i % stride == 1 || x == y);
+                    if !same_keys {
+                        { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 2"); } return None; }
+                    }
+                    s.children().into_iter().zip(c.children()).collect()
+                }
                 _ => return None,
             };
             // The field's residual name is keyed by the object's creation site.
-            creation.get(addr)?;
+            if creation.get(addr).is_none() { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none: no creation pc for @{addr}"); } return None; }
             for (idx, (a, b)) in pairs.into_iter().enumerate() {
                 if a == b {
                     continue;
                 }
                 if matches!(a, Abs::Ref(_)) || matches!(b, Abs::Ref(_)) {
-                    return None;
+                    { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 3"); } return None; }
                 }
                 // A field moving between two STATIC values that a loop's
                 // condition reads: the loop's bound (see above).
@@ -17252,7 +18057,7 @@ impl Js {
                         None => guard_fields.get_or_insert_with(|| self.loop_condition_fields(at)),
                     };
                     if guards.iter().any(|&(g, e)| g == *addr && e.is_none_or(|e| e == idx)) {
-                        return None;
+                        { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 4"); } return None; }
                     }
                 }
                 if let (Abs::Dyn(x), Abs::Dyn(y)) = (a, b) {
@@ -17278,7 +18083,7 @@ impl Js {
                 *owners.entry(owner).or_insert(0) += 1;
             }
             if owners.values().any(|&n| n > 1) {
-                return None;
+                { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 5"); } return None; }
             }
         }
         Some((changes, grew))
@@ -20636,10 +21441,28 @@ impl Js {
         // program known statically keeps its static AST, which sharing
         // through a generic residual helper discards. It changes only this
         // duplication optimization, not the recursion checks or budgets.)
+        // (Only a context of primitives and runtime values: one holding a
+        // static structure (an interpreter's syntax node, its program, a
+        // closure it compiled) is what the call is specialized to, which a
+        // shared residual function, given it as a runtime value, would
+        // discard: an interpreter's every program point would run
+        // interpreted. `PE_SHARE_STRUCTURED`: those shared too.)
+        // (Bounded: a structured context is inlined on up to
+        // `structured_inlinings()` runtime paths, then shared, so a program
+        // whose interpreted structure repeats without end (a specializer
+        // specializing itself) stays finite, the code it makes linear in
+        // that bound.)
+        let structured = now.iter().any(|k| matches!(k, Skel::Arr(..) | Skel::Obj(..) | Skel::Clo(..) | Skel::Ref(_)));
+        let key = (fid, std::rc::Rc::<[Skel]>::from(now.as_slice()));
+        let branched_before = s.top().dyn_ctl && !context.is_empty() && self.branched_contexts.borrow().contains(&key);
         let shared_context = !env_flag!("PE_NO_SHARED_CONTEXTS")
-            && s.top().dyn_ctl
-            && !context.is_empty()
-            && self.branched_contexts.borrow().contains(&(fid, std::rc::Rc::from(now.as_slice())));
+            && branched_before
+            && (!structured || env_flag!("PE_SHARE_STRUCTURED") || {
+                let mut counts = self.structured_inlined.borrow_mut();
+                let n = counts.entry(key.clone()).or_insert(0);
+                *n += 1;
+                *n > structured_inlinings()
+            });
         let dynamic_recursion = dynamic_recursion
             || shared_context
             // Static recursion deeper than the inliner goes (it may terminate
@@ -20955,6 +21778,15 @@ impl Js {
                 let Found::Data(Abs::Ref(p)) = self.lookup_prop(&s.heap, *caddr, "prototype") else {
                     return None; // a non-object `prototype` throws at runtime
                 };
+                // (A value runtime code made or holds: never an instance of a
+                // class whose `prototype` runtime code has not had, which no
+                // runtime object can inherit. `PE_NO_UNSEEN_PROTO`: unknown.)
+                if matches!(o, Abs::Dyn(_)) && !s.escaped.contains(&p) && !env_flag!("PE_NO_UNSEEN_PROTO") {
+                    if let Some(used) = self.foreign_protos.borrow_mut().as_mut() {
+                        used.push(p);
+                    }
+                    return Some(false);
+                }
                 let (protos, _) = chain(s, o)?;
                 Some(protos.contains(&p))
             }
@@ -27116,6 +27948,17 @@ impl Js {
         }
         s.escaped.extend(made.keys().copied());
         escaped.extend(made.keys().copied());
+        // (A prototype a transparent handler counts on runtime code not
+        // having (see `rethrows_foreign`) now made runtime: a runtime
+        // exception may inherit it, which that handler would handle. The
+        // probe of its region learns so, and the `try` is a runtime one.)
+        if s.handlers.iter().any(|h| h.unseen.iter().any(|p| made.contains_key(p))) {
+            if self.probing.get() {
+                self.try_taint.set(true);
+            } else {
+                panic!("internal: a prototype a transparent handler relies on escaped outside its region's probe (rethrows_foreign)");
+            }
+        }
         values
     }
 
@@ -27945,6 +28788,15 @@ impl Js {
         if !self.loop_head[s.top().pc] {
             return false;
         }
+        // (An interpreter's loop head back at a place of the program it
+        // runs, after a runtime branch since it was last there: a loop of
+        // that program its runtime data controls, whatever the
+        // interpreter's own loop condition is.)
+        if let Some(k) = self.dispatch_key(s) {
+            if s.dispatch_seen.get(&k).is_some_and(|n| *n != s.dyn_branches) {
+                return true;
+            }
+        }
         // (A constant-test loop one of whose exits has been dynamic.)
         if self.loop_exit_dynamic.borrow().contains(&self.loop_ctx(s, s.top().pc)) {
             return true;
@@ -28195,6 +29047,9 @@ impl Js {
                 })
                 .collect();
             let split = m.len() != all;
+            if env_flag!("JOINMERGE_DEBUG") && !m.is_empty() {
+                eprintln!("[JOINMERGE] at {target} in {} merges slots {:?} values {:?}", self.names[func], m, m.iter().map(|&k| ns.frames[fi].locals[k].clone()).collect::<Vec<_>>());
+            }
             let _why = self.why.merging(why::Merge::Join);
             // (A function this arm leaves in a slot the join merges: what is
             // known of it, in the case of the condition this arm took, the
@@ -28388,8 +29243,20 @@ impl Js {
             if !ns.top().runtime_loops.contains(&target) {
                 ns.top_mut().runtime_loops.push(target);
             }
-            // Tracked globals become runtime ones across a residual loop.
-            self.sync_globals(&mut ns, true, out);
+            // Tracked globals are written out across a residual loop, and
+            // those a function may assign become runtime ones: the loop may
+            // run such code any number of times. One no function assigns (a
+            // program table a script's top-level code made) stays known: in
+            // a function's loop nothing changes it. (In the top-level code,
+            // all become runtime. `PE_LOOP_FORGETS_GLOBALS`: all, always.)
+            if env_flag!("PE_LOOP_FORGETS_GLOBALS") || ns.top().func == self.main {
+                self.sync_globals(&mut ns, true, out);
+            } else {
+                self.sync_globals(&mut ns, false, out);
+                let assigned = self.fn_assigned_globals();
+                region_note_globals();
+                ns.globals = ns.globals.iter().filter(|(k, _)| !assigned.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            }
             // Materialize loop-modified primitive slots AND any heap-reference
             // slot (an array/object live across a dynamic loop must become a
             // residual value, else the abstract heap grows without bound).
@@ -28497,6 +29364,39 @@ impl Js {
                         }
                     }
                 }
+            }
+            // (But a dispatch slot at a place in the program it interprets:
+            // that place is where this loop head is, see `dispatch_point`.)
+            let at = self.dispatch_slots(&ns, &ns.frames[fi]);
+            slots.retain(|sl| !at.contains(sl));
+            let at_fields = !self.dispatch_fields(&ns, &ns.frames[fi]).is_empty();
+            // (And at such a place, the objects the interpreter keeps its
+            // program's data in (its stack, its registers, its memory) stay
+            // modeled: the place is met again in the state its data has
+            // there, and the whistle lifts what differs between visits, an
+            // element or a field, to a variable of its own (see
+            // `generalize`), or makes runtime an object that grows from one
+            // visit to the next. `PE_NO_DISPATCH_DATA`: made runtime here.)
+            if (!at.is_empty() || at_fields) && !env_flag!("PE_NO_DISPATCH_DATA") {
+                slots.retain(|&sl| !matches!(ns.frames[fi].locals[sl], Abs::Ref(_)));
+            } else if !env_flag!("PE_NO_LOOP_RECORDS") {
+                // (Elsewhere an environment the loop does not replace stays
+                // modeled the same way: a map, a record of primitive
+                // values. A loop's other objects (an array it pushes to, a
+                // record holding objects, one it makes anew each iteration)
+                // are made runtime here.)
+                let reassigned = &self.loop_modified[target];
+                let environment = |a: usize| match ns.heap.get(&a) {
+                    Some(HeapObj::Builtin { kind, ext: None, .. }) => kind == "Map",
+                    Some(HeapObj::Object { class: ObjClass::Ordinary, props, .. }) => {
+                        props.iter().all(|p| matches!(&p.val, PVal::Data(v) if !matches!(v, Abs::Ref(_))))
+                    }
+                    _ => false,
+                };
+                slots.retain(|&sl| match ns.frames[fi].locals[sl] {
+                    Abs::Ref(a) => reassigned.contains(&sl) || !environment(a),
+                    _ => true,
+                });
             }
             slots.sort_unstable();
             if env_flag!("MAT_DEBUG") {
@@ -28995,7 +29895,7 @@ impl Js {
             let Some(&cpc) = self.creation_pc.borrow().get(&addr) else { continue };
             let id = self.heap_field_id(cpc, addr, idx);
             let cell: Option<&mut Abs> = match ns.heap.get_mut_quiet(&addr) {
-                Some(o @ (HeapObj::Array(_) | HeapObj::Object { .. })) => o.children_mut().into_iter().nth(idx),
+                Some(o @ (HeapObj::Array(_) | HeapObj::Object { .. } | HeapObj::Builtin { ext: None, .. })) => o.children_mut().into_iter().nth(idx),
                 _ => None,
             };
             let Some(cell) = cell else { continue };
@@ -29049,6 +29949,70 @@ impl Js {
     /// state of a program that did not load. (A `throw` the specializer
     /// runs itself still goes through the handler.) (`PE_NO_LOAD_RETHROW`:
     /// every such `try` a runtime one, as before.)
+    /// Does the handler at `catch_pc` throw any exception runtime code
+    /// raises again, as it is, doing nothing else first: run from the
+    /// exception a fresh runtime value, does it reach `throw` of that value
+    /// with nothing emitted and no runtime branch? (`catch (e) { if (e
+    /// instanceof ReturnSignal) return e.value; throw e; }`: a runtime
+    /// value is no instance of a class runtime code has not seen, see
+    /// `static_instanceof`.) Then an operation left to runtime in the
+    /// `try` needs no runtime `try`: what it may throw passes the handler
+    /// as if there were none. The prototypes that judgement relied on
+    /// (`Handler::unseen`), or `None`. `PE_NO_FOREIGN_RETHROW`: never.
+    fn rethrows_foreign(&self, s: &State, catch_pc: usize, exc_slot: Option<usize>, end: usize) -> Option<Vec<usize>> {
+        if env_flag!("PE_NO_FOREIGN_RETHROW") || self.entry.loading.get() {
+            return None;
+        }
+        let exc = exc_slot?;
+        if exc >= s.top().locals.len() {
+            return None;
+        }
+        let foreign = Abs::Dyn(RExpr::Var(self.aux_var(131, catch_pc, 0)));
+        let mut p = self.sole_frame_state(s, catch_pc);
+        p.top_mut().locals[exc] = foreign.clone();
+        let saved = (
+            self.materialized_fids.borrow().clone(),
+            self.shared_fn_objects.borrow().clone(),
+            self.try_taint.get(),
+            self.branched_contexts.borrow().clone(),
+            self.loop_cond_seen.borrow().clone(),
+            self.loop_exit_dynamic.borrow().clone(),
+        );
+        let saved_foreign = self.foreign_protos.replace(Some(Vec::new()));
+        let mut found = false;
+        let mut at_entry = true;
+        for _ in 0..10_000 {
+            let pc = p.top().pc;
+            if p.frames.len() != 1 || pc < catch_pc || pc >= end {
+                break;
+            }
+            if matches!(self.code[pc], Instr::Throw) {
+                found = p.top().ostack.last() == Some(&foreign);
+                break;
+            }
+            let mut out = Vec::new();
+            match self.step(&mut p, &mut out, at_entry) {
+                Step::Continue if out.is_empty() => at_entry = false,
+                Step::Jump(n) | Step::JumpFresh(n) if out.is_empty() => {
+                    p = n;
+                    at_entry = true;
+                }
+                _ => break,
+            }
+        }
+        let used = self.foreign_protos.replace(saved_foreign).unwrap_or_default();
+        *self.materialized_fids.borrow_mut() = saved.0;
+        *self.shared_fn_objects.borrow_mut() = saved.1;
+        self.try_taint.set(saved.2);
+        *self.branched_contexts.borrow_mut() = saved.3;
+        *self.loop_cond_seen.borrow_mut() = saved.4;
+        *self.loop_exit_dynamic.borrow_mut() = saved.5;
+        if env_flag!("HANDLER_DEBUG") {
+            eprintln!("[HANDLER] catch_pc={catch_pc}: rethrows foreign {found} (unseen {used:?})");
+        }
+        found.then_some(used)
+    }
+
     fn load_rethrow_handler(&self, s: &State, catch_pc: usize, exc_slot: Option<usize>, end: usize) -> bool {
         if !self.entry.loading.get() || self.probing.get() || !self.halt_at.borrow().is_empty() || self.in_residual_body.get() || env_flag!("PE_NO_LOAD_RETHROW") {
             return false;
@@ -29402,6 +30366,9 @@ impl Js {
             globals: s.globals.clone(),
             escaped: s.escaped.clone(),
             branched_since_head: s.branched_since_head,
+            dyn_branches: s.dyn_branches,
+            dispatch_seen: s.dispatch_seen.clone(),
+            head_visits: s.head_visits.clone(),
             facts: s.facts.clone(),
         }
     }
@@ -29418,7 +30385,8 @@ impl Js {
             exc_slot: handler.exc_slot,
             frame_depth: 1,
             ostack_depth: 0,
-            transparent: false,
+            transparent: handler.transparent,
+            unseen: handler.unseen.clone(),
         });
         // Save/restore `probing` and `try_taint`: a probed body can itself contain
         // a `try`, whose `PushHandler` re-enters `try_folds`. Without save/restore
@@ -30733,6 +31701,9 @@ fn canonicalize_state(s: &State) -> State {
         },
         escaped: im::OrdSet::new(),
         branched_since_head: false,
+        dyn_branches: 0,
+        dispatch_seen: im::HashMap::new(),
+        head_visits: im::HashMap::new(),
         facts: s.facts.clone(),
     }
 }
@@ -30745,6 +31716,30 @@ fn canonicalize_state(s: &State) -> State {
 /// The most steps `Js::static_prefix` runs before giving up (a prefix that
 /// long is not hoisted: see `Js::hoist_main_prefix`).
 const PREFIX_STEPS: usize = 2_000_000;
+
+/// How many runtime paths a structured context that branched is inlined on
+/// before calls of it are shared (see `do_call`): `PE_STRUCTURED_INLININGS`,
+/// or 16.
+fn structured_inlinings() -> usize {
+    thread_local!(static N: usize = std::env::var("PE_STRUCTURED_INLININGS").ok().and_then(|v| v.parse().ok()).unwrap_or(16));
+    N.with(|n| *n)
+}
+
+/// The longest return stack (see `Js::dispatch_fields`) that is part of a
+/// place in an interpreted program.
+const RETURN_STACK_POINT: usize = 64;
+
+/// The most keys a table may have for a lookup of a runtime key in it to be
+/// a case on the key (see `Js::trick_lookup`).
+const TRICK_KEYS: usize = 64;
+
+/// How many case splits one lookup site makes before it stays the
+/// runtime's (see `Js::trick_lookup`).
+const TRICK_SPLITS: usize = 64;
+
+/// How many times a path may pass one loop head whose objects only gained
+/// keys before the whistle weighs it as any other (see `whistle_with`).
+const SHAPE_PEELS: u32 = 2;
 
 fn iso_equal(a: &State, b: &State) -> bool {
     iso_equal_fixing(a, b, &|_| false)
