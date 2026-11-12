@@ -98,6 +98,10 @@ pub struct LowerOpts {
     /// global the program does not define is absent (see the engine's
     /// `Js::set_host_globals`).
     pub host_globals: Option<Vec<String>>,
+    /// Write the residual as an ES module exporting `main` where its code
+    /// allows (see `codegen::program_to_js_as`): the program is one of
+    /// modules.
+    pub module_output: bool,
 }
 
 /// `compile_full`, with the lowering options.

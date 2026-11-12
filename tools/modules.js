@@ -33,6 +33,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+// (A residual that is an ES module exporting `main`, which the specializer
+// writes when its code is all strict, loads through `vm.SourceTextModule`:
+// Node's `--experimental-vm-modules`, with which this runs itself again.)
+if (typeof vm.SourceTextModule !== 'function') {
+  const r = spawnSync(process.execPath, ['--experimental-vm-modules', '--no-warnings', __filename, ...process.argv.slice(2)], { stdio: 'inherit' });
+  process.exit(r.status === null ? 1 : r.status);
+}
+const isModule = (code) => /^export (async )?function main\b/m.test(code);
+
 const root = path.resolve(__dirname, '..');
 const argv = process.argv.slice(2);
 let bin = path.join(root, 'target/release/js-frontend');
@@ -58,7 +67,16 @@ async function runIn(code, name, input, sequence) {
   };
   const ctx = vm.createContext(sandbox);
   try {
-    vm.runInContext(code + '\n;globalThis.__main = main;', ctx, { timeout: 10000 });
+    if (isModule(code)) {
+      const m = new vm.SourceTextModule(code, { context: ctx, identifier: 'residual.mjs' });
+      await m.link(() => {
+        throw new Error('the residual imports a module');
+      });
+      await m.evaluate({ timeout: 10000 });
+      ctx.__main = m.namespace.main;
+    } else {
+      vm.runInContext(code + '\n;globalThis.__main = main;', ctx, { timeout: 10000 });
+    }
   } catch (e) {
     return { logs, loaderr: String(e && e.name) + ': ' + String(e && e.message) };
   }

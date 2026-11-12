@@ -53,7 +53,17 @@
 //                fix the case
 //
 // For every `ok` case the residual and the original are also timed
-// (indicative only: one machine, one run, a handful of inputs).
+// (indicative only: one machine, a handful of inputs), each in a Node
+// process of its own, loaded as deployed (the bundle and a module residual
+// imported, a script residual run in the process's realm), the host cut
+// down to the declared one (tools/wild/bench.mjs). Not in a `node:vm`
+// context: there a script's top-level bindings live on a global object that
+// answers through an interceptor, which slows them down several times.
+//
+// The residual of a bundle is an ES module exporting `main` when its code
+// is all strict (else a script defining a global `main`): checked as one,
+// in a `node:vm` context (`vm.SourceTextModule`, which needs Node's
+// `--experimental-vm-modules`: the harness runs itself again with it).
 //
 // This is a measurement, not a gate: the exit status is 0 unless the harness
 // itself fails.
@@ -68,6 +78,15 @@ const root = path.resolve(__dirname, '..');
 const wildDir = path.join(__dirname, 'wild');
 const casesDir = path.join(wildDir, 'cases');
 const { OBSERVE_SRC } = require(path.join(wildDir, 'observe.cjs'));
+
+// (Module residuals load through `vm.SourceTextModule`: see above.)
+if (typeof vm.SourceTextModule !== 'function') {
+  const r = spawnSync(process.execPath, ['--experimental-vm-modules', '--no-warnings', __filename, ...process.argv.slice(2)], { stdio: 'inherit' });
+  process.exit(r.status === null ? 1 : r.status);
+}
+
+// Is this residual an ES module (see `program_to_js_as`)?
+const isModule = (code) => /^export (async )?function main\b/m.test(code);
 
 const argv = process.argv.slice(2);
 let bin = path.join(root, 'target/release/js-frontend');
@@ -199,14 +218,24 @@ function newContext() {
   return vm.createContext(sandboxGlobals());
 }
 
-// A script loaded in a fresh context, or why it does not load.
-function load(code) {
+// A script (or an ES module, see `isModule`) loaded in a fresh context, or
+// why it does not load.
+async function load(code) {
   const ctx = newContext();
   try {
     // (`WILD_TRACE=1`: see tools/wild/observe.cjs.)
     ctx.__wildTraceEnv = process.env.WILD_TRACE === '1';
     vm.runInContext(OBSERVE_SRC, ctx);
-    vm.runInContext(code + '\n;globalThis.__wildMain = main;', ctx, { timeout: VM_TIMEOUT_MS });
+    if (isModule(code)) {
+      const m = new vm.SourceTextModule(code, { context: ctx, identifier: 'residual.mjs' });
+      await m.link(() => {
+        throw new Error('the residual imports a module');
+      });
+      await m.evaluate({ timeout: VM_TIMEOUT_MS });
+      ctx.__wildMain = m.namespace.main;
+    } else {
+      vm.runInContext(code + '\n;globalThis.__wildMain = main;', ctx, { timeout: VM_TIMEOUT_MS });
+    }
   } catch (e) {
     return { loaderr: String(e && e.name) + ': ' + String(e && e.message) };
   }
@@ -226,14 +255,14 @@ function callIn(ctx, json) {
 }
 
 // What a script gives, the way the oracle observes a bundle.
-function observeScript(code, jsons) {
+async function observeScript(code, jsons) {
   const fresh = [];
   for (const json of jsons) {
-    const l = load(code);
+    const l = await load(code);
     if (l.loaderr) return { loaderr: l.loaderr };
     fresh.push(callIn(l.ctx, json));
   }
-  const l = load(code);
+  const l = await load(code);
   if (l.loaderr) return { loaderr: l.loaderr };
   const repeated = [];
   for (const json of jsons.concat(jsons)) repeated.push(callIn(l.ctx, json));
@@ -398,7 +427,7 @@ async function runCase(file) {
   res.throws = oracle.fresh.filter((s) => s.startsWith('throw ')).length;
 
   // The original where the residual will run.
-  const bare = observeScript(b.scriptText, jsons);
+  const bare = await observeScript(b.scriptText, jsons);
   if (bare.loaderr) return { ...res, verdict: 'skipped', detail: 'the original does not load outside Node: ' + bare.loaderr };
   const envDiff = firstDifference(oracle, bare, jsons);
   if (envDiff) return { ...res, verdict: 'skipped', detail: 'the original runs differently outside Node', diff: envDiff };
@@ -421,6 +450,7 @@ async function runCase(file) {
   }
   const residual = s.stdout.replace(/^--- residual as JavaScript.*\n/, '');
   fs.writeFileSync(path.join(dir, 'residual.js'), residual);
+  if (isModule(residual)) fs.writeFileSync(path.join(dir, 'residual.mjs'), residual);
   res.residualLines = lineCount(residual);
   res.residualBytes = residual.length;
 
@@ -444,7 +474,7 @@ async function runCase(file) {
       .map((c) => ({ class: c.class, kind: c.kind, what: c.what, units: c.units, sole: c.sole }));
   }
 
-  const after = observeScript(residual, jsons);
+  const after = await observeScript(residual, jsons);
   if (after.loaderr) return { ...res, verdict: 'crash', detail: 'the residual does not load: ' + clip(after.loaderr) };
   const diff = firstDifference(oracle, after, jsons);
   if (diff) {
@@ -456,9 +486,9 @@ async function runCase(file) {
 
 // ---------------------------------------------------------------- timing
 
-// Milliseconds per pass over the inputs, original and residual, each loaded
-// in a context of its own in this process. The number of passes is cut down
-// for a case whose passes are slow.
+// Microseconds per pass over the inputs, original and residual, each in a
+// Node process of its own (tools/wild/bench.mjs), alternating twice, the
+// faster of each kept.
 function timeCase(res) {
   const dir = path.join(work, res.name);
   // (Only the inputs `main` returns for: one it throws for measures the
@@ -470,22 +500,24 @@ function timeCase(res) {
     .map((v) => JSON.stringify(v))
     .filter((_, i) => !String(fresh[i]).startsWith('throw '));
   if (jsons.length === 0) throw new Error('main throws for every input');
-  const measure = (code, warm, iters, runs) => {
-    const l = load(code);
-    if (l.loaderr) throw new Error('does not load: ' + l.loaderr);
-    l.ctx.__wildJsons = jsons;
-    l.ctx.__wildNow = () => performance.now();
-    return vm.runInContext(`__wildTime(__wildMain, __wildJsons, ${warm}, ${iters}, ${runs}, __wildNow)`, l.ctx);
+  const jsonsFile = path.join(dir, 'timing-inputs.json');
+  fs.writeFileSync(jsonsFile, JSON.stringify(jsons));
+  const residualModule = fs.existsSync(path.join(dir, 'residual.mjs'));
+  const measure = (file, kind) => {
+    const r = spawnSync(process.execPath, [path.join(wildDir, 'bench.mjs'), file, kind, jsonsFile, HOST_GLOBALS.join(',')], { encoding: 'utf8', timeout: 120000 });
+    if (r.status !== 0) throw new Error(`timing ${path.basename(file)}: ${(r.stderr || r.error || 'exit ' + r.status).toString().trim().split('\n').slice(-1)[0]}`);
+    const { ms, iters } = JSON.parse(r.stdout.trim().split('\n').pop());
+    return (ms / iters) * 1000;
   };
-  const original = fs.readFileSync(path.join(dir, 'original.js'), 'utf8');
-  const residual = fs.readFileSync(path.join(dir, 'residual.js'), 'utf8');
-  // (One pass of each, cold, to size the loops: about a second per run at most.)
-  const probe = Math.max(measure(original, 1, 1, 1), measure(residual, 1, 1, 1), 0.0005);
-  const iters = Math.max(5, Math.min(2000, Math.floor(1000 / probe)));
-  const warm = Math.max(2, Math.floor(iters / 4));
-  const a = measure(original, warm, iters, 5);
-  const b = measure(residual, warm, iters, 5);
-  return { iters, inputs: jsons.length, originalUs: (a / iters) * 1000, residualUs: (b / iters) * 1000, ratio: b / a };
+  const original = () => measure(path.join(dir, 'bundle.mjs'), 'module');
+  const residual = () => (residualModule ? measure(path.join(dir, 'residual.mjs'), 'module') : measure(path.join(dir, 'residual.js'), 'script'));
+  let a = Infinity;
+  let b = Infinity;
+  for (let round = 0; round < 2; round++) {
+    a = Math.min(a, original());
+    b = Math.min(b, residual());
+  }
+  return { inputs: jsons.length, residualModule, originalUs: a, residualUs: b, ratio: b / a };
 }
 
 // ---------------------------------------------------------------- reporting
@@ -676,8 +708,8 @@ function markdown(results, agg) {
     out.push('## Run time');
     out.push('');
     out.push(
-      'Indicative only. `main` over the inputs of the case it returns for (one it throws for measures the engine wording its error), the original bundle and the residual each loaded as a script in a `node:vm` context of the same process: ' +
-        'up to 2000 passes after a quarter as many to warm up, the median of 5 runs. One machine, one run, a handful of inputs.',
+      'Indicative only. `main` over the inputs of the case it returns for (one it throws for measures the engine wording its error), the original bundle and the residual each in a Node process of its own, loaded as deployed (the bundle and a module residual imported, a script residual run in the process\'s realm), Node\'s globals the declared host lacks removed first (tools/wild/bench.mjs): ' +
+        'up to 2000 passes after a quarter as many to warm up, the median of 5 runs; each measured twice, alternating, the faster kept. One machine, a handful of inputs.',
     );
     out.push('');
     out.push('| case | original (us/pass) | residual (us/pass) | residual / original |');

@@ -210,7 +210,7 @@ fn main() -> ExitCode {
     if emit_js && (entry != "main" || typescript || module_program || source_names || why || why_json.is_some() || host_globals.is_some()) {
         // (A program of modules is linked to one script whose top-level
         // names are the linker's own: no other script reads them.)
-        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react, source_names, host_globals: host_globals.clone() };
+        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react, source_names, host_globals: host_globals.clone(), module_output: module_program };
         // (`PE_REPEAT=n`: the whole compilation run n times more first, its
         // output dropped: one process to profile.)
         let repeat: usize = std::env::var("PE_REPEAT").ok().map(|n| n.parse().expect("PE_REPEAT is a count")).unwrap_or(0);

@@ -104,7 +104,7 @@ pub fn to_js_why(
     vm.coalesce_load();
     let t = phase("cleanup", t);
     codegen::set_source_names(opts.source_names);
-    let js = codegen::program_to_js(&vm, &prog, vm.input_var(), short_names, &sources);
+    let js = codegen::program_to_js_as(&vm, &prog, vm.input_var(), short_names, &sources, opts.module_output);
     codegen::set_source_names(false);
     phase("codegen", t);
     Ok((js, report))

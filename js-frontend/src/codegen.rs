@@ -41,6 +41,22 @@ pub fn program_to_js(
     short_names: bool,
     sources: &[Option<crate::lower::FnSource>],
 ) -> String {
+    program_to_js_as(vm, main_prog, input_var, short_names, sources, false)
+}
+
+/// `program_to_js`; with `as_module` (the program a program of modules),
+/// an ES module exporting `main` when every function of the residual is
+/// strict code (a module's code is: a sloppy one would change in one), its
+/// helpers then the module's own bindings rather than globals. Otherwise a
+/// script, as `program_to_js` gives.
+pub fn program_to_js_as(
+    vm: &Js,
+    main_prog: &Program<Op, Cond>,
+    input_var: usize,
+    short_names: bool,
+    sources: &[Option<crate::lower::FnSource>],
+    as_module: bool,
+) -> String {
     let mut s = String::new();
     // A whole script's load code, run once (see `Js::entry_load`), and the
     // variables it gives `main`: named apart, by every function alike.
@@ -511,10 +527,15 @@ pub fn program_to_js(
             let _ = writeln!(s, "{})();", text.trim_end());
         }
     }
-    let main_head = format!("{}function {}", if vm.main_is_async() { "async " } else { "" }, vm.entry_name());
+    // (A module only when no code of it is sloppy: the load code and
+    // `main` are as `main` is, each residual function as it is.)
+    let module = as_module && !env_flag_set("PE_NO_MODULE_OUTPUT") && vm.main_is_strict() && needed.iter().all(|r| fns[*r].strict);
+    let main_head = format!("{}{}function {}", if module { "export " } else { "" }, if vm.main_is_async() { "async " } else { "" }, vm.entry_name());
     let _ = write!(s, "{}", render_function(&main_head, &[input_var], usize::MAX, main_prog, short_names, vm.main_is_strict()));
     // A script's top-level declarations, declared by the residual script.
-    let vars: Vec<&str> = vm.script_decls().iter().filter(|(_, lex)| !lex).map(|(n, _)| n.as_str()).collect();
+    // (In a module, `main` is the function exported, no declaration
+    // besides.)
+    let vars: Vec<&str> = vm.script_decls().iter().filter(|(n, lex)| !lex && !(module && n == vm.entry_name())).map(|(n, _)| n.as_str()).collect();
     let lets: Vec<&str> = vm.script_decls().iter().filter(|(_, lex)| *lex).map(|(n, _)| n.as_str()).collect();
     let mut decl = String::new();
     if !vars.is_empty() {
@@ -2100,4 +2121,9 @@ fn js_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Is the environment variable `name` set (to anything but empty or `0`)?
+fn env_flag_set(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
