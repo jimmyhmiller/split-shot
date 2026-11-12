@@ -4478,6 +4478,9 @@ pub struct Js {
     /// Residual variables holding a variable's `{value}` cell (a residual
     /// function's capture of one): reading their `value` runs nothing.
     cell_vars: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// The residual functions' captures that are cells of initialized
+    /// bindings (see `Shape::InitCell`).
+    init_cells: std::cell::RefCell<std::collections::HashSet<usize>>,
     /// Residual functions whose bodies are being built, and those a closure
     /// was made of meanwhile (they take all their captures).
     building_fns: std::cell::RefCell<std::collections::HashSet<usize>>,
@@ -4856,6 +4859,10 @@ struct CapMemo {
 enum Shape {
     /// A runtime value, passed in.
     Runtime,
+    /// A variable's cell, passed in, its binding initialized: a `let`,
+    /// `const` or `class` binding's cell holds itself until then (the front
+    /// end's `tdz_checked`), and never again after.
+    InitCell,
     /// A static primitive (a binding never reassigned), not passed.
     Static(Abs),
     /// A function, passed in, whose code (`fid`) and captures are known:
@@ -5516,6 +5523,7 @@ impl Js {
             object_temps: std::cell::RefCell::new(std::collections::HashSet::new()),
             maybe_primitive_escapes: std::cell::RefCell::new(std::collections::HashSet::new()),
             cell_vars: std::cell::RefCell::new(std::collections::HashSet::new()),
+            init_cells: std::cell::RefCell::new(std::collections::HashSet::new()),
             straight_probe: std::cell::Cell::new(false),
             straight_failed: std::cell::Cell::new(false),
             unfold_probes: std::cell::Cell::new(0),
@@ -6143,9 +6151,6 @@ impl Js {
         if env_flag!("CAP_DEBUG") {
             eprintln!("[CAP] {} once={once} captured={:?}", self.names[fid], captured.iter().map(|c| match c { Abs::Ref(a) => format!("{:?}", heap.get(a)), v => format!("{v:?}") }).collect::<Vec<_>>());
         }
-        if !once {
-            return vec![CapForm::PASSED; captured.len()];
-        }
         let plain = self.no_unbox_fids.borrow().contains(&fid) || env_flag!("PE_NO_UNBOX_CELLS");
         // (What the residual function may take besides its captures: see
         // `MAX_TAKEN`.)
@@ -6182,6 +6187,26 @@ impl Js {
         // (How far each may be known: see `cap_ceilings`.)
         let ceilings = self.cap_ceilings.borrow().get(&fid).cloned().unwrap_or_default();
         let ceil = |i: usize| ceilings.get(i).copied().unwrap_or(CapCeil::Free);
+        // A closure made again and again is given its captures as they are,
+        // but a final cell its value, of which its body knows nothing more:
+        // every one made shares one residual function, which reads no cell.
+        if !once {
+            return captured
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let cell = self.fn_cell_captures[fid].get(i).copied().unwrap_or(false);
+                    let unbox = cell && !plain && ceil(i) != CapCeil::Cell && !env_flag!("PE_NO_UNBOX_REPEATED") && Js::final_cell_value(heap, c).is_some_and(|v| !reaches_made(&v));
+                    if unbox {
+                        CapForm::FinalCell(Shape::Runtime)
+                    } else if cell && !plain && ceil(i) != CapCeil::Cell && Js::cell_initialized(heap, c) {
+                        CapForm::Value(Shape::InitCell)
+                    } else {
+                        CapForm::PASSED
+                    }
+                })
+                .collect();
+        }
         // (How each is passed: its final cell's value, or as it is.)
         let unboxed: Vec<Option<Abs>> = captured
             .iter()
@@ -6203,6 +6228,7 @@ impl Js {
             let form = match (cell, &unboxed[i]) {
                 (true, Some(_)) if ceil(i) == CapCeil::Unknown => CapForm::FinalCell(Shape::Runtime),
                 (true, Some(v)) => CapForm::FinalCell(self.shape_of(v, heap, &mut budget, &mut Vec::new(), &mut taker)),
+                (true, None) if !plain && ceil(i) != CapCeil::Cell && Js::cell_initialized(heap, c) => CapForm::Value(Shape::InitCell),
                 (true, None) => CapForm::PASSED,
                 (false, _) if ceil(i) != CapCeil::Free || reaches_made(c) => CapForm::PASSED,
                 // (A capture that is no cell and no primitive is passed in
@@ -6215,6 +6241,19 @@ impl Js {
             forms.push(CapForm::Value(self.shape_of(&Abs::Ref(w), heap, &mut budget, &mut Vec::new(), &mut taker)));
         }
         forms
+    }
+
+    /// Is `c` a variable's cell that does not hold itself: its binding
+    /// initialized (see `Shape::InitCell`)?
+    fn cell_initialized(heap: &Heap, c: &Abs) -> bool {
+        if env_flag!("PE_NO_INIT_CELLS") {
+            return false;
+        }
+        let Abs::Ref(a) = c else { return false };
+        match heap.get(a) {
+            Some(HeapObj::Object { props, .. }) => !matches!(props.first().map(|p| &p.val), Some(PVal::Data(Abs::Ref(v))) if v == a),
+            _ => false,
+        }
     }
 
     /// The value of the final cell `c` is, if it is one.
@@ -6827,8 +6866,11 @@ impl Js {
             let v = self.taken_abs(&mut start, c);
             // (A capture that is a variable's cell: see
             // `FuncDef::cell_captures`.)
-            if matches!(forms.get(i), None | Some(CapForm::Value(Shape::Runtime))) && self.fn_cell_captures[fid].get(i).copied().unwrap_or(false) {
+            if matches!(forms.get(i), None | Some(CapForm::Value(Shape::Runtime | Shape::InitCell))) && self.fn_cell_captures[fid].get(i).copied().unwrap_or(false) {
                 self.cell_vars.borrow_mut().insert(self.residual_cap_var(rfid, i));
+            }
+            if matches!(forms.get(i), Some(CapForm::Value(Shape::InitCell))) {
+                self.init_cells.borrow_mut().insert(self.residual_cap_var(rfid, i));
             }
             start.frames[0].locals[i] = v;
         }
@@ -6955,7 +6997,7 @@ impl Js {
                 crate::facts::KnownVal::Handle(kind.clone(), statics, RExpr::Var(var))
             }
             Shape::Alias { handle: Some((kind, statics)), .. } => crate::facts::KnownVal::Handle(kind.clone(), statics.clone(), RExpr::Var(var)),
-            Shape::Runtime | Shape::Fn { .. } | Shape::Alias { handle: None, .. } => crate::facts::KnownVal::Expr(RExpr::Var(var)),
+            Shape::Runtime | Shape::InitCell | Shape::Fn { .. } | Shape::Alias { handle: None, .. } => crate::facts::KnownVal::Expr(RExpr::Var(var)),
             Shape::Element(_) | Shape::Record(_) | Shape::List(_) => unreachable!("a structured value, above"),
         }
     }
@@ -6976,7 +7018,7 @@ impl Js {
                 let mut p = at.clone();
                 p.steps.push(step);
                 let w = match sh {
-                    Shape::Static(_) | Shape::Runtime => continue,
+                    Shape::Static(_) | Shape::Runtime | Shape::InitCell => continue,
                     Shape::Element(_) | Shape::Record(_) | Shape::List(_) => 0,
                     Shape::Alias { index, .. } => self.residual_cap_var(rfid, *index),
                     _ => import_var[&p],
@@ -8083,18 +8125,20 @@ impl Js {
             if self.react_again() {
                 added = true;
             }
-            // A function made both as one taking final cells' values and in
-            // another form: its closures know less of the captures their
-            // forms differ in (see `lower_cap_ceilings`), or, those agreeing,
-            // pass cells; and specialize again.
+            // A function made both as one taking final cells' values (or
+            // cells known initialized, see `Shape::InitCell`) and in another
+            // form: its closures know less of the captures their forms
+            // differ in (see `lower_cap_ceilings`), or, those agreeing, pass
+            // cells; and specialize again.
             {
                 let fns = self.residual_fns.borrow();
+                let init_cells = self.init_cells.borrow();
                 let mut forms: HashMap<usize, (usize, bool)> = HashMap::new();
-                for (_, rf) in fns.iter().enumerate().filter(|(r, _)| live.contains(r)) {
+                for (r, rf) in fns.iter().enumerate().filter(|(r, _)| live.contains(r)) {
                     if let Some(f) = rf.fid {
                         let e = forms.entry(f).or_insert((0, false));
                         e.0 += 1;
-                        e.1 |= rf.unboxed.iter().any(|u| *u) || rf.imports > 0;
+                        e.1 |= rf.unboxed.iter().any(|u| *u) || rf.imports > 0 || (0..rf.ncaptured).any(|i| init_cells.contains(&self.residual_cap_var(r, i)));
                     }
                 }
                 let mut no = self.no_unbox_fids.borrow_mut();
@@ -8209,6 +8253,12 @@ impl Js {
                 }
                 if a.escaped != b.escaped {
                     eprintln!("[ENTRY]   escaped differ");
+                    for (tag, x, y) in [("only 0", a, b), ("only 1", b, a)] {
+                        for e in x.escaped.iter().filter(|e| !y.escaped.contains(e)).take(12) {
+                            let what = x.heap.get(e).map(|o| format!("{o:?}").chars().take(160).collect::<String>()).unwrap_or_default();
+                            eprintln!("[ENTRY]     escaped {tag}: @{e} {what}");
+                        }
+                    }
                 }
                 if a.fns != b.fns {
                     eprintln!("[ENTRY]   fns differ");
@@ -12038,20 +12088,35 @@ impl Js {
                     let eq = static_strict_eq(&a, &b);
                     return self.push(s, Abs::Bool(if *op == Bop::Eq { eq } else { !eq }));
                 }
+                // `c.value === c` of a cell of an initialized binding (the
+                // front end's test of its temporal dead zone): false, see
+                // `Shape::InitCell`.
+                if matches!(op, Bop::Eq | Bop::Ne) {
+                    let init_cell = |x: &Abs, y: &Abs| {
+                        matches!((x, y), (Abs::Dyn(RExpr::Get(c, k)), Abs::Dyn(RExpr::Var(v)))
+                            if k == "value" && matches!(&**c, RExpr::Var(w) if w == v) && self.init_cells.borrow().contains(v))
+                    };
+                    if init_cell(&a, &b) || init_cell(&b, &a) {
+                        return self.push(s, Abs::Bool(*op == Bop::Ne));
+                    }
+                }
                 // A modeled object that never escaped has no runtime
                 // identity: no runtime value is it.
                 if matches!(op, Bop::Eq | Bop::Ne) {
                     // (An object or array a literal in the code made: a
                     // function's object or prototype has a runtime identity
-                    // of its own.)
+                    // of its own. Or a final cell, which none but the
+                    // lowered code's own reads see, and which a body given
+                    // its value makes again: see `CapForm::FinalCell`.)
                     let fresh = |v: &Abs| match v {
                         Abs::Ref(a) => {
                             !s.escaped.contains(a)
                                 // (One the load code made is a runtime object
                                 // from the start: see `EntryWatch::hoisted`.)
                                 && !entry_is_hoisted(*a)
-                                && matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_)))
-                                && self.creation_pc.borrow().get(a).is_some_and(|pc| *pc < self.code.len() && matches!(self.code[*pc], Instr::NewObject(_) | Instr::NewArray(_)))
+                                && (matches!(s.heap.get(a), Some(HeapObj::Object { class: ObjClass::FinalCell { .. }, .. }))
+                                    || matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_)))
+                                        && self.creation_pc.borrow().get(a).is_some_and(|pc| *pc < self.code.len() && matches!(self.code[*pc], Instr::NewObject(_) | Instr::NewArray(_))))
                         }
                         _ => false,
                     };
@@ -13100,7 +13165,10 @@ impl Js {
                         // the runtime one, which constructs or throws.)
                         _ => self.escape(s, addr, &mut std::collections::HashSet::new(), out),
                     },
-                    other => panic!("`new` of a non-constructor value: {other:?}"),
+                    // (A primitive: no constructor, and `new` of it throws
+                    // a TypeError, at runtime as a call of a non-callable
+                    // value does.)
+                    other => other.to_rexpr(),
                 };
                 let mut escaped = std::collections::HashSet::new();
                 let mut arg_rs = Vec::with_capacity(args.len());

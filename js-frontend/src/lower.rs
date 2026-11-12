@@ -917,6 +917,9 @@ struct FnCtx {
     /// order: parameters, function declarations, declarations already
     /// lowered, and captures initialized when the closure was made.
     initialized: HashSet<usize>,
+    /// The cells (by slot) of boxed `let`/`const`/`class` bindings, which
+    /// hold themselves until their declaration runs (see `tdz_checked`).
+    tdz_cells: HashSet<usize>,
     /// Of `boxed_set`, the names no code assigns (boxed only to be seen by
     /// a closure made before their initialization): once a `let`/`const`
     /// of one is initialized, its cell is final (`Stmt::FinalCell`).
@@ -1100,6 +1103,7 @@ impl FnCtx {
             assigned: None,
             outer_assigned: HashSet::new(),
             initialized: HashSet::new(),
+            tdz_cells: HashSet::new(),
             final_cells: HashSet::new(),
             once_cells: HashSet::new(),
             boxed_params: HashSet::new(),
@@ -1615,7 +1619,8 @@ impl Compiler {
             let slot = ctx.declare_var(scope::LEXICAL_THIS);
             body.push(Stmt::Let(slot, if ctx.script_top { Expr::Global("globalThis".into()) } else { Expr::This }));
         }
-        body.extend(self.boxed_cell_stmts(ctx));
+        let lexical: HashSet<String> = info.top_lexical.iter().filter(|n| ctx.boxed_set.contains(*n) && !ctx.script_globals.contains(*n)).cloned().collect();
+        body.extend(self.boxed_cell_stmts(ctx, &lexical));
         if info.uses_arguments && !is_arrow {
             // `arguments` is a binding of the function arrows inside capture.
             let aslot = ctx.arguments_slot_or_reserve();
@@ -1781,6 +1786,13 @@ impl Compiler {
             return;
         }
         match ctx.resolve_binding(name) {
+            // (The value first, then the test: see `tdz_checked`.)
+            Some(b) if Self::tdz_checked(ctx, &b) => {
+                let t = ctx.fresh_slot();
+                out.push(Stmt::Let(t, value));
+                out.push(self.tdz_check(&b, name).unwrap_or_else(|e| panic!("{e}")));
+                out.push(b.write(Expr::Var(t)));
+            }
             Some(b) => out.push(b.write(value)),
             None => out.push(Stmt::SetGlobal(name.to_string(), value)),
         }
@@ -3150,27 +3162,57 @@ impl Compiler {
 
     /// Create the `{value: undefined}` cells for this function's own boxed vars,
     /// at the top of its body (so capture-by-reference cells exist before use).
-    fn boxed_cell_stmts(&self, ctx: &FnCtx) -> Vec<Stmt> {
-        let mut names: Vec<&String> = ctx.boxed_set.iter().collect();
+    fn boxed_cell_stmts(&self, ctx: &mut FnCtx, lexical: &HashSet<String>) -> Vec<Stmt> {
+        let mut names: Vec<String> = ctx.boxed_set.iter().cloned().collect();
         names.sort();
-        names
-            .into_iter()
-            .filter_map(|name| ctx.resolve(name).map(|slot| (name, slot)))
-            .flat_map(|(name, slot)| {
-                // A boxed parameter starts holding its incoming argument; wrap it
-                // in place (`p = {value: p}`, the inner `Var(slot)` reading the raw
-                // arg before the assignment rebinds the slot). A boxed local starts
-                // `undefined` (it is hoisted).
-                let param = ctx.boxed_params.contains(name);
-                let init = if param { Expr::Var(slot) } else { Expr::Undefined };
-                let mut out = vec![Stmt::Let(slot, Expr::Object(vec![("value".to_string(), init)]))];
-                // (A parameter written once, now: see `once_cells`.)
-                if param && ctx.once_cells.contains(name) {
-                    out.push(Stmt::FinalCell(slot));
-                }
-                out
-            })
-            .collect()
+        let mut out = Vec::new();
+        for name in names {
+            let Some(slot) = ctx.resolve(&name) else { continue };
+            // A boxed parameter starts holding its incoming argument; wrap it
+            // in place (`p = {value: p}`, the inner `Var(slot)` reading the raw
+            // arg before the assignment rebinds the slot). A boxed `var`
+            // starts `undefined` (it is hoisted); a boxed `let`/`const`/`class`
+            // uninitialized, its cell holding itself (see `tdz_checked`).
+            let param = ctx.boxed_params.contains(&name);
+            let init = if param { Expr::Var(slot) } else { Expr::Undefined };
+            out.push(Stmt::Let(slot, Expr::Object(vec![("value".to_string(), init)])));
+            if lexical.contains(&name) {
+                out.push(Stmt::SetProp(Expr::Var(slot), "value".to_string(), Expr::Var(slot)));
+                ctx.tdz_cells.insert(slot);
+            }
+            // (A parameter written once, now: see `once_cells`.)
+            if param && ctx.once_cells.contains(&name) {
+                out.push(Stmt::FinalCell(slot));
+            }
+        }
+        out
+    }
+
+    /// Must a read or write of the binding `b` here check that it is
+    /// initialized? A boxed `let`/`const`/`class` binding's cell holds
+    /// itself until its declaration runs (a value no code can see
+    /// otherwise): one not certainly initialized yet here (a closure made
+    /// before its declaration, a hoisted function's) reads it through its
+    /// cell, and throws while it is so.
+    fn tdz_checked(ctx: &FnCtx, b: &Binding) -> bool {
+        b.boxed && b.mapped.is_none() && ctx.tdz_cells.contains(&b.slot) && !ctx.initialized.contains(&b.slot)
+    }
+
+    /// The test `tdz_checked` asks for, as a statement: the ReferenceError
+    /// while `b`'s cell holds itself.
+    fn tdz_check(&self, b: &Binding, name: &str) -> R<Stmt> {
+        let cell = Expr::Var(b.slot);
+        let uninitialized = Expr::Bin(Bop::Eq, Box::new(Expr::Get(Box::new(cell.clone()), "value".to_string())), Box::new(cell));
+        Ok(Stmt::If(uninitialized, vec![Stmt::ExprStmt(self.tdz_error(name)?)], Vec::new()))
+    }
+
+    /// Read the binding `b` of `name`, checking it is initialized where it
+    /// may not be (see `tdz_checked`).
+    fn read_binding(&self, b: Binding, name: &str, ctx: &FnCtx) -> R<Expr> {
+        if Self::tdz_checked(ctx, &b) {
+            return Ok(Expr::Seq(vec![self.tdz_check(&b, name)?], Box::new(b.read())));
+        }
+        Ok(b.read())
     }
 
     /// Declare a slot (function-scoped, hoisted) for each direct-child
@@ -3280,8 +3322,9 @@ impl Compiler {
     /// The `let`/`const`/`class` names the block of `stmts` (its scope the
     /// current one) declares, not yet declared: until its declaration runs,
     /// a reference to one is in its temporal dead zone (`FnCtx::in_tdz`).
-    /// (One a closure captures is a cell made as the block is entered, read
-    /// as `undefined` until then: that zone is not modeled.)
+    /// (One a closure captures is a cell made as the block is entered,
+    /// holding itself until its declaration runs: a read through it tests
+    /// that, see `tdz_checked`.)
     fn note_tdz(stmts: &[ast::Stmt], ctx: &mut FnCtx) {
         for st in stmts {
             let names: Vec<String> = match st {
@@ -3342,10 +3385,17 @@ impl Compiler {
             }
         }
         Compiler::note_tdz(stmts, ctx);
+        let fns = fn_decl_names(stmts);
         for name in names {
             if ctx.boxed_set.contains(&name) && !ctx.scopes.last().unwrap().contains_key(&name) {
                 let slot = ctx.declare_boxed(&name, true);
                 out.push(Stmt::Let(slot, Expr::Object(vec![("value".to_string(), Expr::Undefined)])));
+                // (A `let`/`const`/`class` one uninitialized: see
+                // `tdz_checked`.)
+                if !fns.contains(&name) {
+                    out.push(Stmt::SetProp(Expr::Var(slot), "value".to_string(), Expr::Var(slot)));
+                    ctx.tdz_cells.insert(slot);
+                }
             }
         }
         for st in stmts {
@@ -3470,6 +3520,9 @@ impl Compiler {
             }
             if enclosing.resolve_binding(name).is_some_and(|b| enclosing.initialized.contains(&b.slot)) {
                 ctx.initialized.insert(slot);
+            }
+            if enclosing.resolve_binding(name).is_some_and(|b| b.boxed && enclosing.tdz_cells.contains(&b.slot)) {
+                ctx.tdz_cells.insert(slot);
             }
         }
         let ncaptured = captures.len();
@@ -4238,8 +4291,17 @@ impl Compiler {
                         let name = bi.id.sym.as_str();
                         match ctx.resolve_binding(name) {
                             // (a boxed one writes through its cell)
+                            // (`x = v` where `x` may be uninitialized: the
+                            // value, then the test, see `tdz_checked`.)
+                            Some(b) if op_combine.is_none() && Self::tdz_checked(ctx, &b) => {
+                                let t = ctx.fresh_slot();
+                                out.push(Stmt::Let(t, rhs));
+                                out.push(self.tdz_check(&b, name)?);
+                                out.push(b.write(Expr::Var(t)));
+                            }
                             Some(b) => {
-                                let value = combine_assign(&op_combine, rhs, || b.read());
+                                let old = self.read_binding(b, name, ctx)?;
+                                let value = combine_assign(&op_combine, rhs, || old);
                                 out.push(b.write(value));
                             }
                             // Assignment to an undeclared name = an implicit global
@@ -4854,7 +4916,7 @@ impl Compiler {
         }
         if let Some(b) = ctx.resolve_binding(name) {
             // A boxed variable lives in a cell; read through it.
-            Ok(b.read())
+            self.read_binding(b, name, ctx)
         } else if let Some(&fid) = self.name_to_fid.get(name) {
             Ok(Expr::Func(fid))
         } else if name == "undefined" {
@@ -5155,7 +5217,10 @@ impl Compiler {
             _ => return Err("`++`/`--` on an unsupported target".into()),
         };
         let read = match &place {
-            Place::Binding(b) => b.read(),
+            Place::Binding(b) => match unparen(&u.arg) {
+                ast::Expr::Ident(id) => self.read_binding(*b, id.sym.as_str(), ctx)?,
+                _ => b.read(),
+            },
             Place::Global(n) => Expr::Global(n.clone()),
             Place::Prop(o, k) => Expr::Get(Box::new(Expr::Var(*o)), k.clone()),
             Place::Index(o, k) => Expr::Index(Box::new(Expr::Var(*o)), Box::new(Expr::Var(*k))),

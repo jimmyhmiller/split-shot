@@ -159,6 +159,10 @@
   "merged": 0,
   "gap": 11
  },
+ "captured_binding_before_declaration.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "class_basic.js": {
   "merged": 0,
   "gap": 0
@@ -683,6 +687,10 @@
   "merged": 0,
   "gap": 5
  },
+ "new_of_a_primitive.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "new_proxy_typeof.js": {
   "merged": 0,
   "gap": 0
@@ -862,6 +870,10 @@
  "region_reassigns_outer_read.js": {
   "merged": 0,
   "gap": 0
+ },
+ "repeated_closures_take_final_values.js": {
+  "merged": 0,
+  "gap": 9
  },
  "repeated_long_strings.js": {
   "merged": 0,
