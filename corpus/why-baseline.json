@@ -343,6 +343,10 @@
   "merged": 0,
   "gap": 5
  },
+ "entry_options_read_by_callbacks.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "entry_regex_lastindex.js": {
   "merged": 0,
   "gap": 0
@@ -350,6 +354,10 @@
  "entry_returned_identity.js": {
   "merged": 0,
   "gap": 0
+ },
+ "entry_state_written_through_accessors.js": {
+  "merged": 0,
+  "gap": 37
  },
  "entry_state_written_through_aliases.js": {
   "merged": 0,
@@ -653,7 +661,7 @@
  },
  "native_global_rebinding.js": {
   "merged": 0,
-  "gap": 14
+  "gap": 7
  },
  "native_materialized_function_identity.js": {
   "merged": 0,

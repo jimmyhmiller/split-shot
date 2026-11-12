@@ -39,6 +39,7 @@ use crate::residual::{BlockId, Program, Terminator};
 use std::cell::RefCell;
 
 /// React as a model the specializer relies on (`Js::set_react`, `--react`).
+mod entry_pts;
 mod react;
 mod why;
 pub use why::{Cause as WhyCause, Class as WhyClass, Report as WhyReport, Unit as WhyUnit};
@@ -8457,29 +8458,58 @@ impl Js {
         let mut dynamic = self.entry.dynamic.borrow_mut();
         let before = dynamic.len();
         dynamic.extend(watch.written.intersection(&boundary_heap).copied());
+        // (A frozen ordinary object no write changes.)
+        let frozen = |a: &usize| {
+            matches!(watch.snapshot.get(a), Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. })
+                if private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)))
+        };
+        // What runtime code may write, or hand to code not seen (see
+        // `entry_pts`): runtime state. `None` when the residual has code
+        // the account does not see: then everything runtime code reaches,
+        // once it writes anything by key.
+        let may = {
+            let load = self.entry.load.borrow();
+            self.entry_may_change(&watch, load.as_ref(), main, &fns, live, &code)
+        };
+        let may_change = |a: &usize| match &may {
+            Some(m) => m.contains(a),
+            None => runtime_writes,
+        };
         // (One `main` makes at runtime, but for those the load code made: a
         // runtime object made once, at load, not a copy each call. Known
-        // still, as the globals' objects are, when runtime code writes
-        // nothing it could reach; otherwise runtime state, as everything
-        // runtime code reaches then is: see below. `PE_ENTRY_NO_HOIST`:
-        // runtime state always.)
-        let made_by_main = watch.escaped.iter().filter(|a| boundary_heap.contains(a) && !watch.hoisted.contains_key(a)).copied();
+        // still, as the globals' objects are, unless runtime code may change
+        // it. `PE_ENTRY_NO_HOIST`: runtime state always.)
+        let made_by_main: Vec<usize> = watch.escaped.iter().filter(|a| boundary_heap.contains(a) && !watch.hoisted.contains_key(a)).copied().collect();
         let mut hoist = self.entry.hoist.borrow_mut();
         let hoist_before = hoist.len();
-        if runtime_writes || env_flag!("PE_ENTRY_NO_HOIST") {
-            dynamic.extend(made_by_main);
-        } else {
-            hoist.extend(made_by_main);
+        for a in made_by_main {
+            if may_change(&a) || env_flag!("PE_ENTRY_NO_HOIST") {
+                dynamic.insert(a);
+            } else {
+                hoist.insert(a);
+            }
         }
         let hoist_grew = hoist.len() > hoist_before;
         drop(hoist);
-        if runtime_writes {
-            // (A frozen ordinary object no write changes.)
-            let frozen = |a: &usize| {
-                matches!(watch.snapshot.get(a), Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. })
-                    if private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)))
-            };
-            dynamic.extend(reached.iter().filter(|a| boundary_heap.contains(a) && !frozen(a)).copied());
+        match &may {
+            Some(m) => {
+                if env_flag!("ENTRY_DEBUG") {
+                    let was = if runtime_writes { reached.iter().filter(|a| boundary_heap.contains(a) && !frozen(a)).count() } else { 0 };
+                    eprintln!("[ENTRY] points-to: {} may change (the reach rule: {was})", m.iter().filter(|a| boundary_heap.contains(a)).count());
+                    for a in m.iter().filter(|a| boundary_heap.contains(a)) {
+                        let name = match watch.snapshot.get(a) {
+                            Some(HeapObj::Closure { fid, .. }) => format!(" ({})", self.names[*fid]),
+                            _ => String::new(),
+                        };
+                        eprintln!("[ENTRY]   may change @{a}{name}: {}", format!("{:?}", watch.snapshot.get(a)).chars().take(200).collect::<String>());
+                    }
+                }
+                dynamic.extend(m.iter().filter(|a| boundary_heap.contains(a) && !frozen(a)).copied());
+            }
+            None if runtime_writes => {
+                dynamic.extend(reached.iter().filter(|a| boundary_heap.contains(a) && !frozen(a)).copied());
+            }
+            None => {}
         }
         let mut globals = self.entry.dynamic_globals.borrow_mut();
         let globals_before = globals.len();
