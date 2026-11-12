@@ -235,6 +235,10 @@
   "merged": 0,
   "gap": 3
  },
+ "computed_key_writes_as_named.js": {
+  "merged": 0,
+  "gap": 4
+ },
  "continue_join.js": {
   "merged": 0,
   "gap": 0

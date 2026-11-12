@@ -11992,214 +11992,7 @@ impl Js {
                 self.push(s, Abs::Ref(addr))
             }
             Instr::GetProp(k) => self.get_prop_step(s, k, pc, out),
-            Instr::SetPropOp(k) => {
-                // A choice of objects: each written, as it is the one.
-                if let Some(c) = Js::choice_at(s, 1) {
-                    let v = s.top().ostack.last().unwrap().clone();
-                    if self.choice_set(s, c, k, v, pc, out) {
-                        let n = s.top().ostack.len();
-                        s.top_mut().ostack.truncate(n - 2);
-                        return self.advance(s);
-                    }
-                    self.escape_choice_at(s, 1, out);
-                }
-                let v = s.top_mut().ostack.pop().unwrap();
-                let mut o = s.top_mut().ostack.pop().unwrap();
-                // (A proxy whose handler has no `set`, nor the
-                // `getOwnPropertyDescriptor` and `defineProperty` an
-                // assignment through it consults: its target's, unless a
-                // setter would run with the proxy as `this`.)
-                while let Some(t) = as_ref_addr(&o).and_then(|p| {
-                    proxy_target_without(&s.heap, &s.heap[&p], &["set", "getOwnPropertyDescriptor", "defineProperty", "get"])
-                }) {
-                    if matches!(self.lookup_prop(&s.heap, t, k), Found::Accessor { .. } | Found::Unknown) {
-                        break;
-                    }
-                    o = Abs::Ref(t);
-                }
-                // `globalThis.x = v`: a tracked global (in the entry function).
-                // (Not a script's top-level `let`/`const`/`class` name: that
-                // global binding is no property of the global object.)
-                if is_global_object(&o) && !self.in_residual_body.get() && !self.is_lexical_global(k) && self.global_write_tracked(k) {
-                    note_entry_global(k);
-                    region_note_globals();
-                    s.globals.insert(k.clone(), (v, true));
-                    return self.advance(s);
-                }
-                // A RegExp's `lastIndex` is a plain writable property.
-                if let Abs::Ref(addr) = &o {
-                    if k == "lastIndex" && matches!(s.heap.get(addr), Some(HeapObj::Builtin { kind, .. }) if kind == "RegExp") {
-                        // (Its value again is no write: see `EntryWatch`.)
-                        if matches!(s.heap.get(addr), Some(HeapObj::Builtin { data, .. }) if data.get(2) == Some(&v)) {
-                            return self.advance(s);
-                        }
-                        if let Some(HeapObj::Builtin { kind, data, .. }) = s.heap.get_mut(addr) {
-                            if kind == "RegExp" {
-                                data.set(2, v);
-                                return self.advance(s);
-                            }
-                        }
-                    }
-                }
-                // `o.__proto__ = p` on an ordinary object whose chain ends in
-                // the unmodified `Object.prototype` (whose accessor it is):
-                // `p` an object or null is the new prototype (unless that
-                // makes a cycle, a TypeError); anything else is ignored.
-                if k == "__proto__" && self.pristine("Object") {
-                    if let Abs::Ref(addr) = &o {
-                        let addr = *addr;
-                        if let Some(true) = self.proto_accessor_reaches(s, addr) {
-                            match &v {
-                                // (A runtime object: no cycle through this
-                                // modeled one.)
-                                v @ Abs::Dyn(_) if self.runtime_object(s, v) => {
-                                    if let HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } = s.heap.get_mut(&addr).unwrap() {
-                                        *proto = v.clone();
-                                    }
-                                    return self.advance(s);
-                                }
-                                Abs::Ref(_) | Abs::Null => {
-                                    let mut cur = v.clone();
-                                    let mut cycle = false;
-                                    while let Abs::Ref(c) = cur {
-                                        if c == addr {
-                                            cycle = true;
-                                            break;
-                                        }
-                                        cur = match &s.heap[&c] {
-                                            HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } => proto.clone(),
-                                            _ => Abs::Null,
-                                        };
-                                    }
-                                    if !cycle {
-                                        if let HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } = s.heap.get_mut(&addr).unwrap() {
-                                            *proto = v;
-                                        }
-                                        return self.advance(s);
-                                    }
-                                }
-                                Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef => return self.advance(s),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                // An accessor on the chain: the setter runs with the receiver
-                // as `this` (its result is dropped). Without a setter the write
-                // is ignored in sloppy code and throws in strict code.
-                if let Abs::Ref(addr) = &o {
-                    let addr = *addr;
-                    if matches!(&s.heap[&addr], HeapObj::Object { .. } | HeapObj::Closure { known: true, .. }) {
-                        if let Found::Accessor { set, .. } = self.lookup_prop(&s.heap, addr, k) {
-                            let strict = self.fn_strict[s.top().func];
-                            if set != Abs::Undef {
-                                s.top_mut().ostack.push(set);
-                                s.top_mut().ostack.push(v);
-                                return self.do_call(s, 1, pc, out, Abs::Ref(addr), RetMode::Discard, Abs::Undef);
-                            } else if !strict {
-                                return self.advance(s);
-                            }
-                        }
-                        // (A read-only data property on the chain, or a new
-                        // property of a non-extensible object: the write is
-                        // ignored in sloppy code; in strict code it throws, at
-                        // runtime.)
-                        if !self.fn_strict[s.top().func] && set_refused(&s.heap, addr, k) {
-                            return self.advance(s);
-                        }
-                    }
-                }
-                match o {
-                    // Static object: update or append the field in the abstract
-                    // heap (stays scalar-replaced). A may-throw RHS is committed
-                    // first, so a dead object can't drop the exception.
-                    Abs::Ref(addr)
-                        if matches!(&s.heap[&addr], HeapObj::Object { .. } | HeapObj::Closure { .. })
-                            && {
-                                if k == "prototype" {
-                                    self.ensure_prototype(s, addr);
-                                }
-                                set_resolves_statically(&s.heap, addr, k, &|e| self.ordinary_value(e) || self.react_data_proto(s, e), &|f| self.intrinsic_protos_pristine(f))
-                            } =>
-                    {
-                        let v = self.emit_if_maythrow(s, pc, 0, v, out);
-                        set_heap_data_prop(&mut s.heap, addr, k, v);
-                    }
-                    // `arr.length = n` on a modeled array, `n` a known length:
-                    // the elements past it are gone, or holes are added up to
-                    // it (not a great many: such an array is made at runtime).
-                    Abs::Ref(addr)
-                        if k == "length"
-                            && matches!(&s.heap[&addr], HeapObj::Array(a) if !a.frozen)
-                            && matches!(&v, Abs::Num(n) if n.as_index().is_some_and(|n| {
-                                let len = match &s.heap[&addr] { HeapObj::Array(a) => a.elems.len(), _ => 0 };
-                                n <= len + 4096 && n < u32::MAX as usize
-                            })) =>
-                    {
-                        let Abs::Num(n) = &v else { unreachable!() };
-                        let n = n.as_index().unwrap();
-                        if let Some(HeapObj::Array(a)) = s.heap.get_mut(&addr) {
-                            let len = a.elems.len();
-                            if n < len {
-                                a.elems.truncate(n);
-                                a.holes.retain(|h| *h < n);
-                            } else {
-                                for i in len..n {
-                                    a.elems.push(Abs::Undef);
-                                    a.holes.insert(i);
-                                }
-                            }
-                        }
-                    }
-                    // A property of an array that is no element (`arr.extra =
-                    // v`): its own data property, on a standard array (whose
-                    // prototypes' members an assignment shadows).
-                    Abs::Ref(addr)
-                        if k != "length"
-                            && k != "__proto__"
-                            && array_index_key(k).is_none()
-                            && matches!(&s.heap[&addr], HeapObj::Array(a) if !a.frozen && a.standard()
-                                && a.props.iter().find(|p| p.key == *k).is_none_or(|p| matches!(p.val, PVal::Data(_)) && p.attrs & WRITABLE != 0))
-                            && self.pristine("Array")
-                            && self.pristine("Object") =>
-                    {
-                        let v = self.emit_if_maythrow(s, pc, 0, v, out);
-                        if let Some(HeapObj::Array(a)) = s.heap.get_mut(&addr) {
-                            match a.props.iter_mut().find(|p| p.key == *k) {
-                                Some(p) => p.val = PVal::Data(v),
-                                None => a.props.push(Prop::data(k.as_str(), v)),
-                            }
-                        }
-                    }
-                    // A named-property write on a non-object ref (e.g. `arr.foo =
-                    // v` on a frozen array): the abstract heap doesn't model it,
-                    // so the container escapes and the write residualizes.
-                    Abs::Ref(addr) => {
-                        let obj_r = self.escape(s, addr, &mut std::collections::HashSet::new(), out);
-                        self.forbid_residual_in_try(s, "a property write");
-                        let mut escaped = std::collections::HashSet::new();
-                        let val = self.operand_rexpr(s, &v, &mut escaped, out);
-                        let key = k.clone();
-                        self.freeze_readers(s, pc, out, &|e| reads_prop(e, &key));
-                        out.push(self.in_mode(s, Op::SetProp { obj: obj_r, key: k.clone(), val }));
-                    }
-                    // A write to a dynamic object — or a primitive base, where JS
-                    // either silently ignores the write (`(5).a = v`) or throws
-                    // (`null.a = v`) — residualizes. The value, if itself an
-                    // object, escapes too.
-                    other => {
-                        let obj_r = other.to_rexpr();
-                        self.forbid_residual_in_try(s, "a property write");
-                        self.react_note_write(s, &obj_r, k, &v);
-                        let mut escaped = std::collections::HashSet::new();
-                        let val = self.operand_rexpr(s, &v, &mut escaped, out);
-                        let key = k.clone();
-                        self.freeze_readers(s, pc, out, &|e| reads_prop(e, &key));
-                        out.push(self.in_mode(s, Op::SetProp { obj: obj_r, key: k.clone(), val }));
-                    }
-                }
-                self.advance(s)
-            }
+            Instr::SetPropOp(k) => self.set_prop_step(s, k, pc, out),
             Instr::SetIndexOp => {
                 // A choice of objects (or a write log): each written, as it
                 // is the one (a key known now, or a string one at runtime).
@@ -12236,6 +12029,15 @@ impl Js {
                     }
                 }
                 let i = object_key(&s.heap, &a, i);
+                // A modeled object, function or array (no element of it) with a
+                // string key known now: `o["k"] = v` is `o.k = v` (a setter on
+                // its chain runs, `__proto__` is the accessor's).
+                if let (Abs::Ref(_), Abs::Str(k)) = (&a, &i) {
+                    let k = k.clone();
+                    s.top_mut().ostack.push(a);
+                    s.top_mut().ostack.push(v);
+                    return self.set_prop_step(s, &k, pc, out);
+                }
                 // A modeled typed array with a static index: the value converts
                 // to the element type (always, as `ToNumber`; it is stored
                 // only at a valid index).
@@ -12263,26 +12065,12 @@ impl Js {
                 let served = matches!(&a, Abs::Ref(_))
                     && self.index_is_static(s, &a, &i)
                     && !matches!(&a, Abs::Ref(x) if is_typed_view(&s.heap, *x))
-                    // (An object's key is written as an assignment does: no
-                    // setter or read-only property up its chain, extensible
-                    // for a new one; a frozen array's element is read-only.)
-                    && !matches!(&a, Abs::Ref(x) if matches!(&s.heap[x], HeapObj::Array(arr) if arr.frozen))
-                    && match (&a, &i) {
-                        (Abs::Ref(x), Abs::Str(k)) if matches!(&s.heap[x], HeapObj::Object { .. }) => set_resolves_statically(
-                            &s.heap,
-                            *x,
-                            k,
-                            &|e| self.ordinary_value(e) || self.react_data_proto(s, e),
-                            &|f| self.intrinsic_protos_pristine(f),
-                        ),
-                        _ => true,
-                    };
+                    // (A frozen array's element is read-only.)
+                    && !matches!(&a, Abs::Ref(x) if matches!(&s.heap[x], HeapObj::Array(arr) if arr.frozen));
                 match a {
-                    // Static container with a static, type-matched index: mutate
-                    // the abstract heap in place (it stays scalar-replaced). An
-                    // array grows with `undefined` holes past its end; an object
-                    // key write updates or appends a field (the `obj["k"] = v`
-                    // form, equivalent to `obj.k = v`).
+                    // Static array with a static index: mutate the abstract
+                    // heap in place (it stays scalar-replaced). It grows with
+                    // `undefined` holes past its end.
                     Abs::Ref(addr) if served => {
                         let v = self.emit_if_maythrow(s, pc, 0, v, out);
                         match (s.heap.get_mut(&addr).unwrap(), &i) {
@@ -12290,8 +12078,7 @@ impl Js {
                                 let n = n.as_index().expect("index_is_static admits only array indices");
                                 elems.set(n, v);
                             }
-                            (o @ HeapObj::Object { .. }, Abs::Str(k)) => set_data_prop(o, k, v),
-                            _ => unreachable!(),
+                            _ => unreachable!("a string key is `set_prop_step`'s"),
                         }
                     }
                     // Static container with a dynamic index or a type-mismatched
@@ -21614,6 +21401,217 @@ impl Js {
                 Some((*v, Info { types: crate::facts::T_FUNC, truthy: Some(true), callee: Some(callee), ..Info::top() }))
             })
             .collect();
+    }
+
+    /// `o.k = v` (the object and the value on the stack): `SetPropOp`,
+    /// and `o["k"] = v` with a key known now (see `SetIndexOp`).
+    fn set_prop_step(&self, s: &mut State, k: &String, pc: usize, out: &mut Vec<Op>) -> Step<Self> {
+        // A choice of objects: each written, as it is the one.
+        if let Some(c) = Js::choice_at(s, 1) {
+            let v = s.top().ostack.last().unwrap().clone();
+            if self.choice_set(s, c, k, v, pc, out) {
+                let n = s.top().ostack.len();
+                s.top_mut().ostack.truncate(n - 2);
+                return self.advance(s);
+            }
+            self.escape_choice_at(s, 1, out);
+        }
+        let v = s.top_mut().ostack.pop().unwrap();
+        let mut o = s.top_mut().ostack.pop().unwrap();
+        // (A proxy whose handler has no `set`, nor the
+        // `getOwnPropertyDescriptor` and `defineProperty` an
+        // assignment through it consults: its target's, unless a
+        // setter would run with the proxy as `this`.)
+        while let Some(t) = as_ref_addr(&o).and_then(|p| {
+            proxy_target_without(&s.heap, &s.heap[&p], &["set", "getOwnPropertyDescriptor", "defineProperty", "get"])
+        }) {
+            if matches!(self.lookup_prop(&s.heap, t, k), Found::Accessor { .. } | Found::Unknown) {
+                break;
+            }
+            o = Abs::Ref(t);
+        }
+        // `globalThis.x = v`: a tracked global (in the entry function).
+        // (Not a script's top-level `let`/`const`/`class` name: that
+        // global binding is no property of the global object.)
+        if is_global_object(&o) && !self.in_residual_body.get() && !self.is_lexical_global(k) && self.global_write_tracked(k) {
+            note_entry_global(k);
+            region_note_globals();
+            s.globals.insert(k.clone(), (v, true));
+            return self.advance(s);
+        }
+        // A RegExp's `lastIndex` is a plain writable property.
+        if let Abs::Ref(addr) = &o {
+            if k == "lastIndex" && matches!(s.heap.get(addr), Some(HeapObj::Builtin { kind, .. }) if kind == "RegExp") {
+                // (Its value again is no write: see `EntryWatch`.)
+                if matches!(s.heap.get(addr), Some(HeapObj::Builtin { data, .. }) if data.get(2) == Some(&v)) {
+                    return self.advance(s);
+                }
+                if let Some(HeapObj::Builtin { kind, data, .. }) = s.heap.get_mut(addr) {
+                    if kind == "RegExp" {
+                        data.set(2, v);
+                        return self.advance(s);
+                    }
+                }
+            }
+        }
+        // `o.__proto__ = p` on an ordinary object whose chain ends in
+        // the unmodified `Object.prototype` (whose accessor it is):
+        // `p` an object or null is the new prototype (unless that
+        // makes a cycle, a TypeError); anything else is ignored.
+        if k == "__proto__" && self.pristine("Object") {
+            if let Abs::Ref(addr) = &o {
+                let addr = *addr;
+                if let Some(true) = self.proto_accessor_reaches(s, addr) {
+                    match &v {
+                        // (A runtime object: no cycle through this
+                        // modeled one.)
+                        v @ Abs::Dyn(_) if self.runtime_object(s, v) => {
+                            if let HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } = s.heap.get_mut(&addr).unwrap() {
+                                *proto = v.clone();
+                            }
+                            return self.advance(s);
+                        }
+                        Abs::Ref(_) | Abs::Null => {
+                            let mut cur = v.clone();
+                            let mut cycle = false;
+                            while let Abs::Ref(c) = cur {
+                                if c == addr {
+                                    cycle = true;
+                                    break;
+                                }
+                                cur = match &s.heap[&c] {
+                                    HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } => proto.clone(),
+                                    _ => Abs::Null,
+                                };
+                            }
+                            if !cycle {
+                                if let HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } = s.heap.get_mut(&addr).unwrap() {
+                                    *proto = v;
+                                }
+                                return self.advance(s);
+                            }
+                        }
+                        Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef => return self.advance(s),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // An accessor on the chain: the setter runs with the receiver
+        // as `this` (its result is dropped). Without a setter the write
+        // is ignored in sloppy code and throws in strict code.
+        if let Abs::Ref(addr) = &o {
+            let addr = *addr;
+            if matches!(&s.heap[&addr], HeapObj::Object { .. } | HeapObj::Closure { known: true, .. }) {
+                if let Found::Accessor { set, .. } = self.lookup_prop(&s.heap, addr, k) {
+                    let strict = self.fn_strict[s.top().func];
+                    if set != Abs::Undef {
+                        s.top_mut().ostack.push(set);
+                        s.top_mut().ostack.push(v);
+                        return self.do_call(s, 1, pc, out, Abs::Ref(addr), RetMode::Discard, Abs::Undef);
+                    } else if !strict {
+                        return self.advance(s);
+                    }
+                }
+                // (A read-only data property on the chain, or a new
+                // property of a non-extensible object: the write is
+                // ignored in sloppy code; in strict code it throws, at
+                // runtime.)
+                if !self.fn_strict[s.top().func] && set_refused(&s.heap, addr, k) {
+                    return self.advance(s);
+                }
+            }
+        }
+        match o {
+            // Static object: update or append the field in the abstract
+            // heap (stays scalar-replaced). A may-throw RHS is committed
+            // first, so a dead object can't drop the exception.
+            Abs::Ref(addr)
+                if matches!(&s.heap[&addr], HeapObj::Object { .. } | HeapObj::Closure { .. })
+                    && {
+                        if k == "prototype" {
+                            self.ensure_prototype(s, addr);
+                        }
+                        set_resolves_statically(&s.heap, addr, k, &|e| self.ordinary_value(e) || self.react_data_proto(s, e), &|f| self.intrinsic_protos_pristine(f))
+                    } =>
+            {
+                let v = self.emit_if_maythrow(s, pc, 0, v, out);
+                set_heap_data_prop(&mut s.heap, addr, k, v);
+            }
+            // `arr.length = n` on a modeled array, `n` a known length:
+            // the elements past it are gone, or holes are added up to
+            // it (not a great many: such an array is made at runtime).
+            Abs::Ref(addr)
+                if k == "length"
+                    && matches!(&s.heap[&addr], HeapObj::Array(a) if !a.frozen)
+                    && matches!(&v, Abs::Num(n) if n.as_index().is_some_and(|n| {
+                        let len = match &s.heap[&addr] { HeapObj::Array(a) => a.elems.len(), _ => 0 };
+                        n <= len + 4096 && n < u32::MAX as usize
+                    })) =>
+            {
+                let Abs::Num(n) = &v else { unreachable!() };
+                let n = n.as_index().unwrap();
+                if let Some(HeapObj::Array(a)) = s.heap.get_mut(&addr) {
+                    let len = a.elems.len();
+                    if n < len {
+                        a.elems.truncate(n);
+                        a.holes.retain(|h| *h < n);
+                    } else {
+                        for i in len..n {
+                            a.elems.push(Abs::Undef);
+                            a.holes.insert(i);
+                        }
+                    }
+                }
+            }
+            // A property of an array that is no element (`arr.extra =
+            // v`): its own data property, on a standard array (whose
+            // prototypes' members an assignment shadows).
+            Abs::Ref(addr)
+                if k != "length"
+                    && k != "__proto__"
+                    && array_index_key(k).is_none()
+                    && matches!(&s.heap[&addr], HeapObj::Array(a) if !a.frozen && a.standard()
+                        && a.props.iter().find(|p| p.key == *k).is_none_or(|p| matches!(p.val, PVal::Data(_)) && p.attrs & WRITABLE != 0))
+                    && self.pristine("Array")
+                    && self.pristine("Object") =>
+            {
+                let v = self.emit_if_maythrow(s, pc, 0, v, out);
+                if let Some(HeapObj::Array(a)) = s.heap.get_mut(&addr) {
+                    match a.props.iter_mut().find(|p| p.key == *k) {
+                        Some(p) => p.val = PVal::Data(v),
+                        None => a.props.push(Prop::data(k.as_str(), v)),
+                    }
+                }
+            }
+            // A named-property write on a non-object ref (e.g. `arr.foo =
+            // v` on a frozen array): the abstract heap doesn't model it,
+            // so the container escapes and the write residualizes.
+            Abs::Ref(addr) => {
+                let obj_r = self.escape(s, addr, &mut std::collections::HashSet::new(), out);
+                self.forbid_residual_in_try(s, "a property write");
+                let mut escaped = std::collections::HashSet::new();
+                let val = self.operand_rexpr(s, &v, &mut escaped, out);
+                let key = k.clone();
+                self.freeze_readers(s, pc, out, &|e| reads_prop(e, &key));
+                out.push(self.in_mode(s, Op::SetProp { obj: obj_r, key: k.clone(), val }));
+            }
+            // A write to a dynamic object — or a primitive base, where JS
+            // either silently ignores the write (`(5).a = v`) or throws
+            // (`null.a = v`) — residualizes. The value, if itself an
+            // object, escapes too.
+            other => {
+                let obj_r = other.to_rexpr();
+                self.forbid_residual_in_try(s, "a property write");
+                self.react_note_write(s, &obj_r, k, &v);
+                let mut escaped = std::collections::HashSet::new();
+                let val = self.operand_rexpr(s, &v, &mut escaped, out);
+                let key = k.clone();
+                self.freeze_readers(s, pc, out, &|e| reads_prop(e, &key));
+                out.push(self.in_mode(s, Op::SetProp { obj: obj_r, key: k.clone(), val }));
+            }
+        }
+        self.advance(s)
     }
 
     /// `Instr::GetProp(k)`: read property `k` of the value on top of the stack.
