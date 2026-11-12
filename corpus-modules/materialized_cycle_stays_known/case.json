@@ -1,0 +1,1 @@
+{"entry": "main.mjs", "inputs": [[1, [2, 3]], [1, [2, 4]], [1, 2], "x", null, [1, [2, 3], 4]], "repeat": true, "forbid": "export function main\\(\\w+\\) \\{\\s*\\\"use strict\\\";\\s*return __\\w+\\(\\w+, __\\w+\\);"}

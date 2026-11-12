@@ -1,0 +1,1 @@
+{"entry": "main.mjs", "inputs": [{"name": "a"}, {"name": "b"}, null, {}, {"name": 7}], "repeat": true, "forbid": "split\\(|Hello \\{\\}"}

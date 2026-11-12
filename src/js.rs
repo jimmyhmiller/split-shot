@@ -2193,6 +2193,9 @@ fn entry_check(a: usize, now: Option<&HeapObj>) {
                 if !same {
                     if env_flag!("ENTRY_DEBUG") {
                         eprintln!("[ENTRY] {a} changed");
+                        if env_flag!("ENTRY_CHANGE_DEBUG") {
+                            eprintln!("[ENTRY]   was {:?}\n[ENTRY]   now {:?}", w.snapshot.get(&a), now);
+                        }
                     }
                     w.written.insert(a);
                 }
@@ -15349,6 +15352,18 @@ impl Js {
                 out.push(Op::Return(r));
                 Step::Halt
             } else {
+                // (An activation that branched at runtime returns on each of
+                // its paths: its caller goes on from here on one of several
+                // runtime paths too, as if it had branched itself. So its
+                // forward jumps end blocks, where paths that arrive in one
+                // state are one path again (see `jump_to`: no other path
+                // reaching a target holds only of an activation none of whose
+                // callees branched either), and a recursive call it makes is
+                // weighed for static progress (see `do_call`).
+                // `PE_NO_RETURN_BRANCHED`: the caller as it was.)
+                if f.branched && !env_flag!("PE_NO_RETURN_BRANCHED") {
+                    s.top_mut().branched = true;
+                }
                 match f.ret {
                     RetMode::Value => s.top_mut().ostack.push(v),
                     RetMode::Discard => {}
@@ -21981,6 +21996,207 @@ impl Js {
             && !self.entry.read_globals.borrow().contains(g)
     }
 
+    /// `main`'s static prefix from the boundary state `s` (its frame at the
+    /// `EntryBoundary`): every step from there that leaves no residual code
+    /// and takes no runtime branch, run as the specializer runs it (each
+    /// step exact: a static one is the language's), up to the state before
+    /// the first that does (one that emits code, branches at runtime or
+    /// ends the path), and how it ends: 0 code, 1 a branch, 2 the end. `None`
+    /// when it runs longer than `PREFIX_STEPS` steps.
+    fn static_prefix(&self, mut s: State) -> Option<(State, u8)> {
+        // (A dry run: the side tables its steps record into are restored,
+        // as `join_generalize`'s; its last step, which the state it gives
+        // is from before, records what names objects that state lacks.)
+        let saved = (
+            self.materialized_fids.borrow().clone(),
+            self.shared_fn_objects.borrow().clone(),
+            self.try_taint.get(),
+            self.branched_contexts.borrow().clone(),
+            self.loop_cond_seen.borrow().clone(),
+            self.loop_exit_dynamic.borrow().clone(),
+        );
+        let loading = self.entry.loading.replace(false);
+        let mut at_entry = true;
+        let mut end = None;
+        for _ in 0..PREFIX_STEPS {
+            let before = s.clone();
+            let mut out = Vec::new();
+            match self.step(&mut s, &mut out, at_entry) {
+                Step::Continue if out.is_empty() => at_entry = false,
+                Step::Jump(n) | Step::JumpFresh(n) if out.is_empty() => {
+                    s = n;
+                    at_entry = true;
+                }
+                Step::Continue | Step::Jump(_) | Step::JumpFresh(_) => {
+                    end = Some((before, 0));
+                    break;
+                }
+                Step::Branch { .. } => {
+                    end = Some((before, 1));
+                    break;
+                }
+                Step::Halt => {
+                    end = Some((before, 2));
+                    break;
+                }
+            }
+        }
+        self.entry.loading.set(loading);
+        *self.materialized_fids.borrow_mut() = saved.0;
+        *self.shared_fn_objects.borrow_mut() = saved.1;
+        self.try_taint.set(saved.2);
+        *self.branched_contexts.borrow_mut() = saved.3;
+        *self.loop_cond_seen.borrow_mut() = saved.4;
+        *self.loop_exit_dynamic.borrow_mut() = saved.5;
+        end
+    }
+
+    /// Run `main`'s static prefix once at load, when doing so changes no
+    /// call (see `EntrySplit`): the host calls `main` again and again, so
+    /// the residual is `load; loop { main(input) }`, and the prefix (`P`,
+    /// what a call does before anything depends on its input, or on state
+    /// a call may change) is loop-invariant code when running it a second
+    /// time does what the first did. Then the boundary state is the one
+    /// after `P` (`S1`: a fixed template parsed into a cache, a lazily made
+    /// object made), with the frame still at the boundary, and `main` runs
+    /// `P` again from there, as every call after the first does.
+    ///
+    /// Taken only when, from `S0` (`s`, as `main` sees it: the objects and
+    /// globals a call may change already runtime state):
+    /// - `P` changes objects (else there is nothing to hoist), and no
+    ///   global, and every object it changes or makes and keeps holds only
+    ///   static values or runtime values the boundary state already holds
+    ///   (no input, nothing computed in `main`);
+    /// - none of those is one a call may change (`EntrySplit::dynamic`:
+    ///   one `P` made in an earlier pass), nor reachable from a global code
+    ///   outside may read between calls (`EntrySplit`'s contract);
+    /// - `P` from `S1` ends as `P` from `S0` does, in the same state up to
+    ///   renaming the objects either run made (every object `S0` has pairs
+    ///   with itself).
+    /// Every call then reaches, after `P`, the configuration the first
+    /// reaches: the first from `S0` by running `P`; a later one from `S1`
+    /// changed only in what calls may change, which `P` does not read
+    /// statically (it is runtime state at the boundary). The residual's
+    /// load leaves `S1`, and `main` is specialized from it.
+    /// `PE_NO_PREFIX_HOIST`: never.
+    fn hoist_main_prefix(&self, s: &mut State) {
+        if env_flag!("PE_NO_PREFIX_HOIST") {
+            return;
+        }
+        let debug = env_flag!("ENTRY_DEBUG");
+        // `S0` as `main` sees it: the globals a call may change unknown.
+        let mut s0 = s.clone();
+        if self.entry.all_globals_dynamic.get() {
+            s0.globals = im::OrdMap::new();
+        } else {
+            for g in self.entry.dynamic_globals.borrow().iter() {
+                s0.globals.remove(g);
+            }
+        }
+        let mut start = s0.clone();
+        start.top_mut().pc += 1;
+        let Some((c0, end0)) = self.static_prefix(start.clone()) else {
+            if debug {
+                eprintln!("[ENTRY] prefix: longer than {PREFIX_STEPS} steps");
+            }
+            return;
+        };
+        let changed: Vec<usize> = s0.heap.iter().filter(|(a, o)| c0.heap.get(a).is_some_and(|n| n != *o)).map(|(a, _)| *a).collect();
+        if changed.is_empty() {
+            if debug {
+                let f = c0.top();
+                eprintln!(
+                    "[ENTRY] prefix: changes nothing (ends {end0} in {} at pc {}: {:?}; heap {} -> {}, frames {}, next {} -> {})",
+                    self.names[f.func],
+                    f.pc,
+                    self.code.get(f.pc),
+                    s0.heap.len(),
+                    c0.heap.len(),
+                    c0.frames.iter().map(|f| self.names[f.func].clone()).collect::<Vec<_>>().join(">"),
+                    s0.next_addr,
+                    c0.next_addr
+                );
+            }
+            return;
+        }
+        let reject = |why: &str| {
+            if debug {
+                eprintln!("[ENTRY] prefix: {} objects changed, not hoisted: {why}", changed.len());
+            }
+        };
+        if c0.globals != s0.globals || c0.escaped != s0.escaped || !c0.pending_joins.is_empty() {
+            return reject("it changes a global, escapes an object or leaves a join pending");
+        }
+        // (What `P` leaves in the boundary objects: those it changed and
+        // what they reach that it made.)
+        let mut kept: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for a in &changed {
+            Js::reachable(&c0.heap, *a, &mut kept);
+        }
+        kept.retain(|a| changed.contains(a) || !s0.heap.contains_key(a));
+        let mut load_dyns: std::collections::HashSet<&RExpr> = std::collections::HashSet::new();
+        for (_, o) in s0.heap.iter() {
+            for c in o.children() {
+                if let Abs::Dyn(e) = c {
+                    load_dyns.insert(e);
+                }
+            }
+        }
+        for v in s0.frames.iter().flat_map(|f| f.values()).chain(s0.globals.values().map(|(v, _)| v)) {
+            if let Abs::Dyn(e) = v {
+                load_dyns.insert(e);
+            }
+        }
+        let foreign = kept.iter().any(|a| c0.heap.get(a).is_some_and(|o| o.children().into_iter().any(|c| matches!(c, Abs::Dyn(e) if !load_dyns.contains(e)))));
+        if foreign {
+            return reject("it stores a runtime value the boundary does not hold");
+        }
+        if kept.iter().any(|a| self.entry.dynamic.borrow().contains(a)) {
+            return reject("a call may change what it leaves");
+        }
+        if !self.entry.closed.get() || self.entry.read_every.get() {
+            let mut open: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let roots = s0
+                .globals
+                .iter()
+                .filter(|(g, _)| !(self.entry.closed.get() && self.is_lexical_global(g)))
+                .map(|(_, (v, _))| v)
+                .chain(if self.entry.closed.get() { None } else { Some(s0.fns.values()) }.into_iter().flatten());
+            for v in roots {
+                if let Abs::Ref(a) = v {
+                    Js::reachable(&s0.heap, *a, &mut open);
+                }
+            }
+            if changed.iter().any(|a| open.contains(a)) {
+                return reject("code outside may read what it changes between calls");
+            }
+        }
+        // `S1`: the boundary frame, the objects as `P` leaves them (those
+        // its run let go of, which it did not change, as they were: the
+        // boundary frame may hold them).
+        let mut heap1 = s0.heap.clone();
+        for (a, o) in c0.heap.iter() {
+            if s0.heap.get(a) != Some(o) {
+                heap1.insert(*a, o.clone());
+            }
+        }
+        let mut s1 = start;
+        s1.heap = heap1.clone();
+        s1.next_addr = c0.next_addr;
+        let Some((c1, end1)) = self.static_prefix(s1) else {
+            return reject("from its own end it runs longer");
+        };
+        let before = |a: usize| s0.heap.contains_key(&a);
+        if end0 != end1 || !iso_equal_fixing(&c0, &c1, &before) {
+            return reject("from its own end it does something else");
+        }
+        if debug {
+            eprintln!("[ENTRY] prefix: hoisted ({} objects changed, {} made, ends {end0} at pc {})", changed.len(), kept.len() - changed.len(), c0.top().pc);
+        }
+        s.heap = heap1;
+        s.next_addr = c0.next_addr;
+    }
+
     fn boundary_finish(&self, s: &mut State, generalize: bool, agreeing: bool, out: &mut Vec<Op>) {
         let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
         let mut escaped = std::collections::HashSet::new();
@@ -21989,6 +22205,7 @@ impl Js {
                 self.escape(s, a, &mut escaped, out);
             }
         }
+        self.hoist_main_prefix(s);
         // (What `main` can no longer reach is gone: the top-level code's dead
         // locals, a weak collection's entries for objects nothing else holds.)
         let mut pc_after = s.clone();
@@ -30525,7 +30742,17 @@ fn canonicalize_state(s: &State) -> State {
 /// (the roots, then each object's references breadth first), pairing the
 /// objects each reaches at the same step, and each pair is compared with
 /// its references erased (they are compared by the pairing).
+/// The most steps `Js::static_prefix` runs before giving up (a prefix that
+/// long is not hoisted: see `Js::hoist_main_prefix`).
+const PREFIX_STEPS: usize = 2_000_000;
+
 fn iso_equal(a: &State, b: &State) -> bool {
+    iso_equal_fixing(a, b, &|_| false)
+}
+
+/// `iso_equal`, pairing each object `fixed` holds only with itself: the
+/// two states are the same up to renaming the other objects.
+fn iso_equal_fixing(a: &State, b: &State, fixed: &dyn Fn(usize) -> bool) -> bool {
     use std::collections::HashMap;
     if a.frames.len() != b.frames.len()
         || a.pending_joins != b.pending_joins
@@ -30552,6 +30779,7 @@ fn iso_equal(a: &State, b: &State) -> bool {
     let mut pair = |x: &Abs, y: &Abs, queue: &mut Vec<(usize, usize)>| -> bool {
         match (x, y) {
             (Abs::Ref(p), Abs::Ref(q)) => match (ia.get(p), ib.get(q)) {
+                (None, None) if (fixed(*p) || fixed(*q)) && p != q => false,
                 (None, None) => {
                     let n = ia.len();
                     ia.insert(*p, n);

@@ -206,6 +206,10 @@ struct Pta<'a> {
     global_roots: HashMap<String, usize>,
     /// Variables the load code put a boundary object in.
     seeds: HashMap<usize, Pts>,
+    /// The variable that names each boundary object it names (one
+    /// materialization made for it, or the load code put it in), by
+    /// variable: its address (see `Pta::restores`).
+    names: HashMap<usize, usize>,
     /// Residual functions made where the analysis does not see: called
     /// with anything.
     unreferred: BTreeSet<usize>,
@@ -1355,6 +1359,24 @@ impl<'a> Pta<'a> {
         self.unknown()
     }
 
+    /// Whether `exec` or `test` on `l` leaves it as it is: a boundary
+    /// RegExp of the standard kind, neither global nor sticky, whose
+    /// `lastIndex` holds no object. (RegExpBuiltinExec reads `lastIndex`,
+    /// converting it, and sets it only for a global or sticky one; one
+    /// escaped may hold anything there.)
+    fn regexp_left_alone(&self, l: u32) -> bool {
+        if self.esc.contains(&l) || !self.held_field(l, &Field::named("lastIndex")).is_empty() {
+            return false;
+        }
+        let Loc::B(a) = &self.locs[l as usize] else { return false };
+        match self.snapshot.get(a) {
+            Some(HeapObj::Builtin { kind, data, ext: None }) if kind == "RegExp" && data.len() >= 3 => {
+                matches!(&data[1], Abs::Str(f) if !f.contains('g') && !f.contains('y')) && matches!(&data[2], Abs::Num(_))
+            }
+            _ => false,
+        }
+    }
+
     /// A method of a standard prototype, by name, on `recv`.
     fn method_call(&mut self, m: &str, recv: &Pts, args: &[Pts]) -> Pts {
         let all: Pts = args.iter().flatten().copied().collect();
@@ -1388,14 +1410,18 @@ impl<'a> Pta<'a> {
             let Some(r) = self.call_back_as(args, layout, &given, &this, true) else { return self.unknown_call(Some(recv), args) };
             rets = r;
         }
-        let mutating = MUTATING_METHODS.contains(&m) || m.starts_with("set");
+        // (`exec` and `test` change a RegExp only through its `lastIndex`,
+        // which RegExpBuiltinExec sets only when the RegExp is global or
+        // sticky: see `Pta::regexp_left_alone`.)
+        let left_alone = matches!(m, "exec" | "test") && !env_flag!("PE_NO_REGEXP_LEFT_ALONE") && !recv.is_empty() && recv.iter().all(|&l| self.regexp_left_alone(l));
+        let mutating = !left_alone && (MUTATING_METHODS.contains(&m) || m.starts_with("set"));
         if mutating {
             self.write(recv);
             let f = if matches!(m, "push" | "unshift" | "splice" | "fill" | "sort" | "reverse" | "copyWithin") { Field::Index } else { Field::Internal };
             for &l in recv.iter() {
                 self.add_field(l, f.clone(), &all);
             }
-        } else if !READING_METHODS.contains(&m) {
+        } else if !READING_METHODS.contains(&m) && !left_alone {
             return self.unknown_call(Some(recv), args);
         }
         // (A result made of the receiver and the arguments, and what the
@@ -1781,7 +1807,12 @@ impl<'a> Pta<'a> {
         }
         let base = self.expr(obj);
         let v = self.expr(val);
-        self.write(&base);
+        let restored = match (index, &key) {
+            (None, Field::Name(k)) if !env_flag!("PE_NO_RESTORING_WRITES") => self.restores(obj, k, val),
+            _ => None,
+        };
+        let changed: Pts = base.iter().copied().filter(|l| Some(*l) != restored).collect();
+        self.write(&changed);
         // (A setter of the property runs, given the value.)
         for &l in &base {
             if !matches!(self.locs[l as usize], Loc::Unknown) && !self.esc.contains(&l) && self.may_have_accessors(l) {
@@ -1797,6 +1828,29 @@ impl<'a> Pta<'a> {
                 self.add_field(l, key.clone(), &v);
             }
         }
+    }
+
+    /// The boundary object `obj[k] = val` leaves as the snapshot has it:
+    /// `obj` names it (see `Pta::names`), its own data property `k` holds
+    /// the value `val` is (the same primitive, or the object `val` names),
+    /// so the write cannot make it differ for a later call (see
+    /// `EntryWatch`). It is the boundary object materialization makes, at
+    /// runtime, filling what it holds. (Not when `val` names a copy this
+    /// program makes and `obj` the object itself: a copy is not it.)
+    fn restores(&mut self, obj: &RExpr, k: &str, val: &RExpr) -> Option<u32> {
+        let RExpr::Var(o) = obj else { return None };
+        let a = *self.names.get(o)?;
+        let prop = self.snapshot.get(&a)?.props()?.iter().find(|p| p.key.as_str() == Some(k))?;
+        let PVal::Data(held) = &prop.val else { return None };
+        let same = match (held, val) {
+            (Abs::Ref(b), RExpr::Var(w)) => {
+                let made_here = |v: &usize| self.defined.get(self.prog).is_some_and(|d| d.contains(v));
+                self.names.get(w) == Some(b) && (!made_here(w) || made_here(o))
+            }
+            (Abs::Ref(_) | Abs::Dyn(_), _) => false,
+            (h, e) => h.to_rexpr() == *e,
+        };
+        same.then(|| self.id(Loc::B(a)))
     }
 
     /// A program nested in the current op (`which`: a `try`'s body,
@@ -2097,6 +2151,7 @@ impl Js {
             globals: HashMap::new(),
             global_roots: watch.global_roots.iter().cloned().collect(),
             seeds: HashMap::new(),
+            names: HashMap::new(),
             unreferred: BTreeSet::new(),
             protos: HashMap::new(),
             wraps: HashMap::new(),
@@ -2143,11 +2198,13 @@ impl Js {
             for (v, a) in keys {
                 let b = pta.id(Loc::B(a));
                 pta.seeds.entry(v).or_default().insert(b);
+                pta.names.insert(v, a);
             }
             for (a, v) in &watch.hoisted {
                 if watch.snapshot.contains_key(a) {
                     let b = pta.id(Loc::B(*a));
                     pta.seeds.entry(*v).or_default().insert(b);
+                    pta.names.insert(*v, *a);
                 }
             }
             let u = pta.unknown();
