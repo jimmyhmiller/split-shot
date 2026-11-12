@@ -19144,6 +19144,23 @@ impl Js {
             *self.debug_callee.borrow_mut() = Some(d);
         }
 
+        // `%ThrowTypeError%` called (a strict arguments object's `callee`
+        // read): the TypeError it throws, worded as V8 does.
+        if is_thrower(&s.heap, &callee) && self.pristine("TypeError") && !env_flag!("PE_NO_STATIC_THROWER") {
+            let msg = "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them".to_string();
+            let e = match self.try_builtin_new("TypeError", &[Abs::Str(msg.clone())], s) {
+                Some(e) => e,
+                None => {
+                    let e = self.aux_var(128, pc, 0);
+                    self.emit_temp(s, e, RExpr::New(Box::new(RExpr::Global("TypeError".into())), vec![RExpr::Str(msg)]), pc, out);
+                    Abs::Dyn(RExpr::Var(e))
+                }
+            };
+            if let Abs::Ref(a) = &e {
+                self.creation_pc.borrow_mut().insert(*a, pc);
+            }
+            return self.do_throw(s, e, out);
+        }
         // A modeled proxy called: its handler's `apply` trap, given the
         // target, `this` and the arguments as an array; without one, the
         // target called.
@@ -21192,6 +21209,11 @@ impl Js {
                 let k = self.prop_key(s, &arg(1))?;
                 match &s.heap[&o] {
                     HeapObj::Object { class: ObjClass::Ordinary | ObjClass::FinalCell { .. }, .. } => {}
+                    // (An arguments object: its `length` and `callee` as it
+                    // holds them, and an element unless it is a parameter's
+                    // alias; its `@@iterator`, implied, not here.)
+                    HeapObj::Object { class: ObjClass::Arguments { mapped, .. }, .. }
+                        if k.as_str().is_some_and(|t| t == "length" || t == "callee" || (*mapped == 0 && JsNum::parse(t).as_index().is_some())) => {}
                     HeapObj::Closure { known: true, .. } if !matches!(k.as_str(), Some("name" | "length")) => {
                         if k == "prototype" {
                             self.ensure_prototype(s, o);
@@ -28328,6 +28350,22 @@ impl Js {
         use crate::facts::{T_FUNC, T_OBJ};
         if self.facts_off || env_flag!("PE_NO_MADE_BY") {
             return false;
+        }
+        // (`Object.getPrototypeOf` and its kin given a standard object, a
+        // modeled iterator or collection, no proxy: it reads its internal
+        // slots alone.)
+        let standard_object = |a: &Abs| match a {
+            Abs::Ref(r) => matches!(s.heap.get(r), Some(HeapObj::Builtin { kind, .. }) if kind != PROXY && (is_iterator_kind(kind) || is_collection(kind) || builtin_proto_symbols(kind).is_some())),
+            Abs::Dyn(_) => self.standard_function_in(Some(&s.heap), a).is_some() || self.builtin_object(a),
+            _ => false,
+        };
+        if let Abs::Dyn(RExpr::Get(o, m)) = callee {
+            if let RExpr::Global(g) = &**o {
+                let introspects = matches!((g.as_str(), m.as_str()), ("Object" | "Reflect", "getPrototypeOf") | ("Object", "isExtensible" | "isFrozen" | "isSealed") | ("Reflect", "isExtensible"));
+                if introspects && self.pristine(g) && !args.is_empty() && args.iter().all(standard_object) {
+                    return true;
+                }
+            }
         }
         let primitive = |v: &Abs| match v {
             Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null => true,

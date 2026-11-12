@@ -1059,6 +1059,10 @@
   "merged": 0,
   "gap": 0
  },
+ "throw_type_error_intrinsic.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "token_table_reduce.js": {
   "merged": 0,
   "gap": 0
