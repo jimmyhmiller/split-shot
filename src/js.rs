@@ -14059,7 +14059,8 @@ impl Js {
     }
 
     /// An unmodeled operator decided by what the path knows of its operands:
-    /// `typeof`, `!`, `== null`, and `?:`/`&&`/`||` with a settled condition.
+    /// `typeof`, `!`, `== null`, `?:`/`&&`/`||` with a settled condition, and
+    /// `??` of a left side known nullish or not.
     fn decide_opaque(&self, s: &State, op: &str, xs: &[Abs]) -> Option<Abs> {
         if !xs.iter().any(|x| x.is_dynamic()) {
             return None;
@@ -14076,6 +14077,7 @@ impl Js {
             ("?:", [c, t, f]) => self.truthy_in(s, c).map(|b| if b { t.clone() } else { f.clone() }),
             ("&&", [a, b]) => self.truthy_in(s, a).map(|t| if t { b.clone() } else { a.clone() }),
             ("||", [a, b]) => self.truthy_in(s, a).map(|t| if t { a.clone() } else { b.clone() }),
+            ("??", [a, b]) => crate::facts::decide_nullish(&self.info_abs(s, a)?).map(|n| if n { b.clone() } else { a.clone() }),
             _ => None,
         }
     }
