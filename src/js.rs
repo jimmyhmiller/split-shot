@@ -8410,8 +8410,11 @@ impl Js {
                     // (How the first two differ.)
                     let ((a, ea, _), (b, eb, _)) = (&ends[0], &ends[1]);
                     if ea != eb {
-                        eprintln!("[ENTRY]   exports {ea:?} | {eb:?}");
+                        let only_a: Vec<&usize> = ea.iter().filter(|v| !eb.contains(v)).collect();
+                        let only_b: Vec<&usize> = eb.iter().filter(|v| !ea.contains(v)).collect();
+                        eprintln!("[ENTRY]   exports only in one {only_a:?} | {only_b:?}");
                     }
+                    eprintln!("[ENTRY]   keys equal {}", self.key(a) == self.key(b));
                     if a.globals != b.globals {
                         eprintln!("[ENTRY]   globals {:?} | {:?}", a.globals.keys().collect::<Vec<_>>(), b.globals.keys().collect::<Vec<_>>());
                     }
@@ -8421,11 +8424,19 @@ impl Js {
                     if a.top().locals != b.top().locals {
                         eprintln!("[ENTRY]   locals {:?} | {:?}", a.top().locals, b.top().locals);
                     }
+                    // (Up to the objects' addresses, as the key compares.)
+                    let (ca, cb) = (canonicalize_state(a), canonicalize_state(b));
+                    if ca.fns != cb.fns {
+                        eprintln!("[ENTRY]   fns {:?} | {:?}", ca.fns, cb.fns);
+                    }
+                    if ca.escaped != cb.escaped {
+                        eprintln!("[ENTRY]   escaped {:?} | {:?}", ca.escaped, cb.escaped);
+                    }
                     let mut n = 0;
-                    for (addr, o) in a.heap.iter() {
-                        if b.heap.get(addr) != Some(o) && n < 6 {
+                    for (addr, o) in ca.heap.iter() {
+                        if cb.heap.get(addr) != Some(o) && n < 6 {
                             n += 1;
-                            eprintln!("[ENTRY]   heap @{addr}: {} | {}", format!("{o:?}").chars().take(200).collect::<String>(), format!("{:?}", b.heap.get(addr)).chars().take(200).collect::<String>());
+                            eprintln!("[ENTRY]   heap @{addr}: {} | {}", format!("{o:?}").chars().take(240).collect::<String>(), format!("{:?}", cb.heap.get(addr)).chars().take(240).collect::<String>());
                         }
                     }
                     let other = ends.iter().position(|(st, ex, _)| self.key(st) != key || *ex != ends[0].1).unwrap_or(1);
@@ -22005,6 +22016,68 @@ impl Js {
             *self.entry.hoist.borrow_mut() = hoist;
             made.insert(boundary_placeholder(k), ops);
         }
+        // `main` is specialized from the first end state, and reads the
+        // variables it names an object by (one made runtime state or made
+        // once at load, named by its address there): on every other path,
+        // the object at the same place of its state (see `canonical_order`)
+        // goes to that variable too, and the paths export the same.
+        let mut boundary = self.entry.boundary.borrow_mut();
+        let n = raw.len();
+        if n > 1 && boundary.len() >= n {
+            let base = boundary.len() - n;
+            let (first_state, first_exports, first_hoisted) = boundary[base].clone();
+            let first_order = canonical_order(&first_state);
+            for j in 1..n {
+                let (st, exports, hoisted) = boundary[base + j].clone();
+                let order = canonical_order(&st);
+                if order.len() != first_order.len() {
+                    continue;
+                }
+                let to_first: HashMap<usize, usize> = order.iter().copied().zip(first_order.iter().copied()).collect();
+                let by_var: HashMap<usize, usize> = hoisted.iter().map(|(a, v)| (*v, *a)).collect();
+                // (Each variable naming an object by its address here: the
+                // first's naming the same object. Through temporaries: one
+                // name may be another object's on the other path.)
+                let mut pairs: Vec<(usize, usize)> = Vec::new();
+                let mut all = true;
+                for v in exports.iter() {
+                    let target = if let Some(a) = by_var.get(v) {
+                        Some(to_first.get(a).and_then(|a0| first_hoisted.get(a0)).copied())
+                    } else if let Some(a) = self.escape_addr(*v).filter(|a| st.heap.contains_key(a)) {
+                        Some(to_first.get(&a).map(|a0| self.escape_var(*a0)))
+                    } else {
+                        // (A variable named by its place in the state, the
+                        // same on every path: see `boundary_finish`.)
+                        None
+                    };
+                    match target {
+                        None if first_exports.contains(v) => {}
+                        Some(Some(t)) if first_exports.contains(&t) => {
+                            if t != *v {
+                                pairs.push((*v, t));
+                            }
+                        }
+                        _ => all = false,
+                    }
+                }
+                let mut renames = Vec::new();
+                let temps: Vec<usize> = pairs.iter().map(|_| self.fresh_var()).collect();
+                for ((v, _), tmp) in pairs.iter().zip(&temps) {
+                    renames.push(Op::Assign { var: *tmp, expr: RExpr::Var(*v) });
+                }
+                for ((_, t), tmp) in pairs.iter().zip(&temps) {
+                    renames.push(Op::Assign { var: *t, expr: RExpr::Var(*tmp) });
+                }
+                if all {
+                    let (k, _) = &raw[j];
+                    if let Some(ops) = made.get_mut(&boundary_placeholder(*k)) {
+                        ops.extend(renames);
+                    }
+                    boundary[base + j].1 = first_exports.clone();
+                }
+            }
+        }
+        drop(boundary);
         for b in load.blocks.iter_mut() {
             let mut i = 0;
             while i < b.ops.len() {
@@ -30012,6 +30085,32 @@ fn canonical_var_order(s: &State) -> Vec<usize> {
             }
         }
         i += 1;
+    }
+    order
+}
+
+/// The state's objects in the order `canonicalize_state` numbers them.
+fn canonical_order(s: &State) -> Vec<usize> {
+    let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut order: Vec<usize> = Vec::new();
+    for v in s.fns.values().chain(s.globals.values().map(|(v, _)| v)).chain(s.frames.iter().flat_map(|f| f.values())) {
+        if let Abs::Ref(a) = v {
+            if seen.insert(*a) {
+                order.push(*a);
+            }
+        }
+    }
+    let mut i = 0;
+    while i < order.len() {
+        let addr = order[i];
+        i += 1;
+        if let Some(obj) = s.heap.get(&addr) {
+            obj.for_each_child_ref(&mut |c| {
+                if seen.insert(c) {
+                    order.push(c);
+                }
+            });
+        }
     }
     order
 }

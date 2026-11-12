@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": ["1", "2", "1", "x"],
+  "repeat": true,
+  "forbid": "ops\\[|\\.double\\b"
+}
