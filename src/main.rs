@@ -121,6 +121,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, obj(vec![("x", num(3)), ("y", num(4))])),
                 Return(bin(Add, get(var(1), "x"), get(var(1), "y"))),
@@ -154,6 +155,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, obj(vec![("x", var(0)), ("y", num(10))])),
                 Return(bin(Mul, get(var(1), "x"), get(var(1), "y"))),
@@ -187,6 +189,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, arr(vec![num(10), num(20), num(30)])),
                 Let(2, num(0)),
@@ -230,6 +233,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(closure(1, vec![var(0)]))],
                 source_text: None,
             },
@@ -253,6 +257,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(bin(Add, var(1), var(0)))],
                 source_text: None,
             },
@@ -276,6 +281,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![
                     Let(1, call(func(0), vec![num(5)])),
                     Return(call(var(1), vec![var(0)])),
@@ -313,6 +319,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![
                     If(
                         bin(Eq, get(var(0), "op"), str_("lit")),
@@ -358,6 +365,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(call(
                     func(0),
                     vec![
@@ -410,6 +418,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, obj(vec![("count", num(0))])),
                 SetProp(var(1), "count".to_string(), bin(Sub, var(0), num(1))),
@@ -448,6 +457,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, num(0)),
                 Let(2, num(0)),
@@ -490,6 +500,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Return(obj(vec![
                 ("doubled", bin(Mul, var(0), num(2))),
                 ("plus1", bin(Add, var(0), num(1))),
@@ -523,6 +534,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![If(
                 bin(Gt, var(0), num(0)),
                 vec![Return(obj(vec![("sign", num(1)), ("val", var(0))]))],
@@ -561,6 +573,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Return(obj(vec![
                 ("pair", arr(vec![var(0), bin(Mul, var(0), var(0))])),
                 ("meta", obj(vec![("x", var(0))])),
@@ -596,6 +609,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(bin(Mul, var(0), num(2)))],
                 source_text: None,
             },
@@ -619,6 +633,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![
                     Let(2, arr(vec![])),
                     Let(3, num(0)),
@@ -653,6 +668,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(call(
                     func(1),
                     vec![
@@ -691,6 +707,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(bin(Add, var(0), var(1)))],
                 source_text: None,
             },
@@ -714,6 +731,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![
                     Let(3, var(2)),
                     Let(4, num(0)),
@@ -748,6 +766,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(call(
                     func(1),
                     vec![
@@ -788,6 +807,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(bin(Gt, var(0), num(2)))],
                 source_text: None,
             },
@@ -811,6 +831,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![
                     Let(2, arr(vec![])),
                     Let(3, num(0)),
@@ -849,6 +870,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(call(
                     func(1),
                     vec![
@@ -888,6 +910,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, arr(vec![])),
                 Let(2, num(0)),
@@ -930,6 +953,7 @@ fn js_demos() {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Let(1, arr(vec![])),
                 Let(2, num(0)),
@@ -974,6 +998,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(bin(Gt, var(0), num(0)))],
                 source_text: None,
             },
@@ -997,6 +1022,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![
                     Let(2, arr(vec![])),
                     Let(3, num(0)),
@@ -1035,6 +1061,7 @@ fn js_demos() {
                 kind: FnKind::Normal,
                 is_async: false,
                 strict: false,
+                made_from_source: None,
                 body: vec![Return(call(
                     func(1),
                     vec![

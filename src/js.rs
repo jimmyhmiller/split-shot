@@ -412,6 +412,10 @@ pub struct FuncDef {
     /// Its source text (`Function.prototype.toString`'s result for it), when
     /// it has one in the program's source.
     pub source_text: Option<String>,
+    /// A function `Function(...)` makes of these strings (its parameters,
+    /// then its body), compiled ahead of the call: an unmodified `Function`
+    /// called with them makes a closure of it (see `Js::from_source`).
+    pub made_from_source: Option<Vec<String>>,
     pub body: Vec<Stmt>,
 }
 
@@ -1827,7 +1831,7 @@ fn liftable_field(o: &HeapObj, j: usize) -> bool {
 }
 
 impl EndAgreement {
-    fn of(ends: &[State]) -> EndAgreement {
+    fn of(ends: &[State], unwritten: &std::collections::HashSet<String>) -> EndAgreement {
         let n = ends.len();
         let mut ag = EndAgreement { keep: vec![EndKeep::default(); n] };
         if ends.iter().any(|e| e.frames.len() != 1 || e.top().locals.len() != ends[0].top().locals.len()) {
@@ -1845,7 +1849,7 @@ impl EndAgreement {
             .iter()
             .map(|e| {
                 let mut r: std::collections::HashSet<usize> = e.escaped.iter().copied().collect();
-                r.extend(e.globals.values().filter_map(|(v, dirty)| match v {
+                r.extend(e.globals.iter().filter(|(g, _)| !unwritten.contains(*g)).filter_map(|(_, (v, dirty))| match v {
                     Abs::Ref(a) if *dirty => Some(*a),
                     _ => None,
                 }));
@@ -4523,6 +4527,10 @@ pub struct Js {
     fn_class_source: Vec<Option<ClassSourceCaps>>,
     /// Each function's source text, when known (`FuncDef::source_text`).
     fn_source_text: Vec<Option<std::rc::Rc<str>>>,
+    /// The functions `Function(...)` makes of literal strings, by those
+    /// strings (see `FuncDef::made_from_source`).
+    from_source: HashMap<Vec<String>, usize>,
+    fn_made_from_source: Vec<Option<Vec<String>>>,
     /// Per function: `FuncDef::this_forward`.
     fn_this_forward: Vec<Option<usize>>,
     /// While a function's own prototype is being materialized: that
@@ -5611,6 +5619,8 @@ impl Js {
             symbol_temps: std::cell::RefCell::new(std::collections::HashSet::new()),
             fn_class_source: program.iter().map(|f| f.class_source.clone()).collect(),
             fn_source_text: program.iter().map(|f| f.source_text.as_deref().map(std::rc::Rc::from)).collect(),
+            from_source: program.iter().enumerate().filter_map(|(i, f)| f.made_from_source.clone().map(|a| (a, i))).collect(),
+            fn_made_from_source: program.iter().map(|f| f.made_from_source.clone()).collect(),
             fn_this_forward: program.iter().map(|f| f.this_forward).collect(),
             pending_proto: std::cell::Cell::new(None),
             proto_taken: std::cell::Cell::new(false),
@@ -7816,6 +7826,11 @@ impl Js {
     /// (else a fresh function object, from a factory of no captures).
     fn closure_value(&self, rfid: usize, addr: usize, o: &HeapObj, caps: Vec<RExpr>) -> RExpr {
         let HeapObj::Closure { fid, once, .. } = o else { unreachable!("not a closure") };
+        // (One `Function(...)` made of strings: made so again, a function
+        // whose source is that, see `FuncDef::made_from_source`.)
+        if let Some(strings) = &self.fn_made_from_source[*fid] {
+            return RExpr::New(Box::new(RExpr::Global("Function".into())), strings.iter().map(|t| RExpr::Str(t.clone())).collect());
+        }
         if !caps.is_empty() {
             return RExpr::FnRef { rfid, caps };
         }
@@ -8377,13 +8392,42 @@ impl Js {
         }
         if self.entry.generalize.get() && ends.len() > 1 {
             let key = self.key(&ends[0].0);
-            if ends.iter().all(|(st, ex, _)| self.key(st) == key && *ex == ends[0].1) {
+            // (The same variables exported, in whatever order: each path
+            // assigns them all, and `main` is specialized from the first.)
+            let sorted = |ex: &Vec<usize>| {
+                let mut ex = ex.clone();
+                ex.sort_unstable();
+                ex
+            };
+            let first = sorted(&ends[0].1);
+            if ends.iter().all(|(st, ex, _)| self.key(st) == key && sorted(ex) == first) {
                 ends.truncate(1);
             } else if deferred && !names_input {
                 // (Kept what the paths agreed on, and they still did not
                 // meet: once more, none of it.)
                 if env_flag!("ENTRY_DEBUG") {
                     eprintln!("[ENTRY] {} end states keeping what they agree on did not meet", ends.len());
+                    // (How the first two differ.)
+                    let ((a, ea, _), (b, eb, _)) = (&ends[0], &ends[1]);
+                    if ea != eb {
+                        eprintln!("[ENTRY]   exports {ea:?} | {eb:?}");
+                    }
+                    if a.globals != b.globals {
+                        eprintln!("[ENTRY]   globals {:?} | {:?}", a.globals.keys().collect::<Vec<_>>(), b.globals.keys().collect::<Vec<_>>());
+                    }
+                    if a.facts != b.facts {
+                        eprintln!("[ENTRY]   facts {:?} | {:?}", a.facts.keys().collect::<Vec<_>>(), b.facts.keys().collect::<Vec<_>>());
+                    }
+                    if a.top().locals != b.top().locals {
+                        eprintln!("[ENTRY]   locals {:?} | {:?}", a.top().locals, b.top().locals);
+                    }
+                    let mut n = 0;
+                    for (addr, o) in a.heap.iter() {
+                        if b.heap.get(addr) != Some(o) && n < 6 {
+                            n += 1;
+                            eprintln!("[ENTRY]   heap @{addr}: {} | {}", format!("{o:?}").chars().take(200).collect::<String>(), format!("{:?}", b.heap.get(addr)).chars().take(200).collect::<String>());
+                        }
+                    }
                     let other = ends.iter().position(|(st, ex, _)| self.key(st) != key || *ex != ends[0].1).unwrap_or(1);
                     eprintln!("[ENTRY]   end state 0 and {other}:");
                     let (a, b) = (&ends[0], &ends[other]);
@@ -12764,6 +12808,20 @@ impl Js {
                 }
                 let i = s.top_mut().ostack.pop().unwrap();
                 let a = s.top_mut().ostack.pop().unwrap();
+                // (The global object's property of a global the host does not
+                // have: `undefined`, see `host_absent`.)
+                if let Abs::Str(k) = &i {
+                    if is_global_object(&a) && !s.globals.contains_key(k.as_str()) && self.host_absent(s, k) {
+                        return self.push(s, Abs::Undef);
+                    }
+                }
+                // (A standard function's well-known symbol it has no key of:
+                // `undefined`, see `standard_symbol_in`.)
+                if let (Some(f), Some(k)) = (self.standard_function(&a), self.well_known_symbol(&i)) {
+                    if !self.standard_symbol_in(&f, k, false) {
+                        return self.push(s, Abs::Undef);
+                    }
+                }
                 // (A symbol key known statically: up the modeled chain.)
                 if let (Abs::Ref(addr), Some(sym)) = (&a, self.sym_of(&i)) {
                     let addr = *addr;
@@ -13269,6 +13327,12 @@ impl Js {
                     }
                     self.forbid_residual_in_try(s, "a `new` expression");
                 }
+                // (`new Function(...)` of strings compiled ahead: as a call.)
+                if let Some(f) = self.function_from_source(s, &callee, &args) {
+                    s.top_mut().pc += 1;
+                    s.top_mut().ostack.push(f);
+                    return Step::Continue;
+                }
                 let callee_r = match callee {
                     Abs::Dyn(r) => r,
                     // `new` of a known function/closure: it becomes a residual
@@ -13465,6 +13529,26 @@ impl Js {
                     // standard member of its prototypes is in it; a
                     // registered or fresh symbol, which no standard prototype
                     // has as a key, is not.
+                    // (A well-known or registered symbol in a modeled
+                    // object: up its chain, see `sym_lookup`.)
+                    if let (Some(sym), Abs::Ref(addr)) = (self.sym_of(&operands[0]), &operands[1]) {
+                        match self.sym_lookup(&s.heap, *addr, &sym) {
+                            Found::Data(_) | Found::Accessor { .. } => return self.push(s, Abs::Bool(true)),
+                            Found::Missing => return self.push(s, Abs::Bool(false)),
+                            Found::Unknown => {}
+                        }
+                    }
+                    // (A well-known or registered symbol in a standard
+                        // function: see `standard_symbol_in`.)
+                    if let Some(f) = self.standard_function(&operands[1]) {
+                        if let Some(k) = self.well_known_symbol(&operands[0]) {
+                            let present = self.standard_symbol_in(&f, k, false);
+                            return self.push(s, Abs::Bool(present));
+                        }
+                        if matches!(self.sym_of(&operands[0]), Some(Sym::Registered(_))) {
+                            return self.push(s, Abs::Bool(false));
+                        }
+                    }
                     if let Some(m) = self.made_by(s, &operands[1]) {
                         let proto = RExpr::Get(Box::new(RExpr::Global(m.to_string())), "prototype".into());
                         if matches!(&operands[0], Abs::Str(k) if self.standard_has(&proto, k)) {
@@ -14302,6 +14386,14 @@ impl Js {
                         i
                     });
                 }
+                // (The global object, its properties anyone's.)
+                if matches!(e, RExpr::Global(g) if g == "globalThis") && self.pristine("globalThis") {
+                    return Some(crate::facts::Info { truthy: Some(true), ..crate::facts::Info::of_types(crate::facts::T_OBJ) });
+                }
+                // (A well-known symbol, `Symbol.iterator`.)
+                if self.well_known_symbol(v).is_some() {
+                    return Some(crate::facts::Info { truthy: Some(true), ..crate::facts::Info::of_types(crate::facts::T_SYM) });
+                }
                 // (A standard global, or a static method of one: a function
                 // or object, so truthy.)
                 let standard = match e {
@@ -14373,6 +14465,10 @@ impl Js {
             if g == h && crate::pristine::BUILTIN_GLOBALS.contains(&g.as_str()) && matches!(builtin_typeof(g), Some("function" | "object")) && self.pristine(g) {
                 return Some(Abs::Bool(op == Bop::Eq));
             }
+        }
+        // (And a standard method read the same way twice: `Object.create`.)
+        if matches!(op, Bop::Eq | Bop::Ne) && a == b && self.standard_function(a).is_some() {
+            return Some(Abs::Bool(op == Bop::Eq));
         }
         let (ia, ib) = (self.info_abs(s, a)?, self.info_abs(s, b)?);
         let r = match op {
@@ -19075,6 +19171,53 @@ impl Js {
                 }
             }
         }
+        // `Function("a", "return a")` (unmodified) of strings compiled ahead:
+        // a new function of that code, see `FuncDef::made_from_source`.
+        if let Some(f) = self.function_from_source(s, &callee, &args) {
+            s.top_mut().pc += 1;
+            self.finish_call(s, f, Abs::Undef, ret, pc, out);
+            return Step::Continue;
+        }
+        // `Object.prototype.toString.call(WeakMap)` and its kin, the method
+        // read as a runtime value: see `standard_fn_introspection`.
+        if let (Abs::Dyn(RExpr::Get(f, k)), Some(recv)) = (&callee, args.first()) {
+            if k == "call" && this == Abs::Dyn((**f).clone()) {
+                if let Some(v) = self.standard_fn_introspection(s, &this, recv, &args[1..]) {
+                    s.top_mut().pc += 1;
+                    self.finish_call(s, v, Abs::Undef, ret, pc, out);
+                    return Step::Continue;
+                }
+            }
+        }
+        // `RegExp(pattern, flags)` of strings: `new RegExp(pattern, flags)`,
+        // a new regular expression either way.
+        if let (Abs::Dyn(RExpr::Global(g)), Some(Abs::Str(_))) = (&callee, args.first()) {
+            if g == "RegExp" && self.pristine("RegExp") && args.iter().all(|a| matches!(a, Abs::Str(_) | Abs::Undef)) {
+                if let Some(r) = self.try_builtin_new("RegExp", &args, s) {
+                    if let Abs::Ref(a) = &r {
+                        self.creation_pc.borrow_mut().insert(*a, pc);
+                    }
+                    s.top_mut().pc += 1;
+                    self.finish_call(s, r, Abs::Undef, ret, pc, out);
+                    return Step::Continue;
+                }
+            }
+        }
+        // `Object(v)` (unmodified) of a value known to be an object (a
+        // modeled one among them): it.
+        if let (Abs::Dyn(RExpr::Global(g)), [v]) = (&callee, args.as_slice()) {
+            let object = match v {
+                Abs::Ref(_) => true,
+                Abs::Dyn(_) => self.info_abs(s, v).is_some_and(|i| i.types != 0 && i.types & !(crate::facts::T_OBJ | crate::facts::T_FUNC) == 0),
+                _ => false,
+            };
+            if g == "Object" && self.pristine("Object") && object {
+                let v = v.clone();
+                s.top_mut().pc += 1;
+                self.finish_call(s, v, Abs::Undef, ret, pc, out);
+                return Step::Continue;
+            }
+        }
         // `console.log(...)` (an unmodified console) of values that print
         // without running code (primitives): it only writes output, so
         // nothing of the program's state is touched.
@@ -19440,6 +19583,15 @@ impl Js {
                     // prototype's method (`call.call(String.prototype.slice,
                     // s, 1)`, a call-bound method): `F.call(s, 1)`, which
                     // reads no property of `F` but `Function.prototype`'s.
+                    // (`Object.prototype.toString.call(WeakMap)` and its kin:
+                    // see `standard_fn_introspection`.)
+                    if let ("call", Some(recv)) = (method, args.first()) {
+                        if let Some(v) = self.standard_fn_introspection(s, &this, recv, &args[1..]) {
+                            s.top_mut().pc += 1;
+                            self.finish_call(s, v, Abs::Undef, ret, pc, out);
+                            return Step::Continue;
+                        }
+                    }
                     if let (Abs::Dyn(e), "call" | "apply") = (&this, method) {
                         if self.standard_method_read(s, e) && self.pristine("Function") {
                             let n = args.len();
@@ -21645,6 +21797,19 @@ impl Js {
     /// and the state and those variables recorded as an end state.
     /// (`agreeing`: the paths kept what they agree on, and name those
     /// variables by where the state holds them.)
+    /// Is the global `g` one the load code does not write out at the
+    /// boundary: a closed script's lexical binding `main` does not assign,
+    /// which no residual code was found to read (see `boundary_finish`)? It
+    /// stays known, its object too.
+    fn global_left_unwritten(&self, g: &str) -> bool {
+        self.entry.closed.get()
+            && self.is_lexical_global(g)
+            && !self.entry.all_globals_dynamic.get()
+            && !self.entry.dynamic_globals.borrow().contains(g)
+            && !self.entry.read_every.get()
+            && !self.entry.read_globals.borrow().contains(g)
+    }
+
     fn boundary_finish(&self, s: &mut State, generalize: bool, agreeing: bool, out: &mut Vec<Op>) {
         let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
         let mut escaped = std::collections::HashSet::new();
@@ -21680,7 +21845,7 @@ impl Js {
             }
         }
         for (name, v) in dirty {
-            if closed_lexical(&name) && !self.entry.read_every.get() && !self.entry.read_globals.borrow().contains(&name) {
+            if self.global_left_unwritten(&name) {
                 self.entry.skipped.borrow_mut().insert(name.clone());
                 region_note_globals();
                 s.globals.insert(name, (v, false));
@@ -21801,7 +21966,11 @@ impl Js {
             .collect();
         let raw: Vec<(usize, State)> = self.entry.raw_ends.borrow().iter().cloned().enumerate().filter(|(k, _)| marks.contains(&boundary_placeholder(*k))).collect();
         let states: Vec<State> = raw.iter().map(|(_, st)| st.clone()).collect();
-        let ag = EndAgreement::of(&states);
+        // (A global the load code leaves unwritten keeps its object known on
+        // every path: see `global_left_unwritten`.)
+        let unwritten: std::collections::HashSet<String> =
+            states.iter().flat_map(|st| st.globals.keys().cloned()).filter(|g| self.global_left_unwritten(g)).collect();
+        let ag = EndAgreement::of(&states, &unwritten);
         let mut made: HashMap<String, Vec<Op>> = HashMap::new();
         for (j, (k, st)) in raw.iter().enumerate() {
             let k = *k;
@@ -21816,8 +21985,24 @@ impl Js {
                     keep.same_locals
                 );
             }
-            self.generalize_agreeing(&mut st, &ag.keep[j], &mut ops);
+            self.generalize_agreeing(&mut st, &ag.keep[j], &unwritten, &mut ops);
+            // (What the split made runtime state, or makes once at load, it
+            // names by the address in the first end state's heap, which
+            // `main` is specialized from: in this one's, the object matched
+            // with it.)
+            let to_here = |set: &std::collections::BTreeSet<usize>| -> std::collections::BTreeSet<usize> {
+                let here: HashMap<usize, usize> = ag.keep[j].objects.iter().map(|(a, (m, _))| (*m, *a)).collect();
+                let first: HashMap<usize, usize> = ag.keep[0].objects.iter().map(|(a, (m, _))| (*a, *m)).collect();
+                set.iter().filter_map(|a| first.get(a).and_then(|m| here.get(m)).copied()).collect()
+            };
+            let (dynamic, hoist) = (self.entry.dynamic.borrow().clone(), self.entry.hoist.borrow().clone());
+            if j > 0 {
+                *self.entry.dynamic.borrow_mut() = to_here(&dynamic);
+                *self.entry.hoist.borrow_mut() = to_here(&hoist);
+            }
             self.boundary_finish(&mut st, true, true, &mut ops);
+            *self.entry.dynamic.borrow_mut() = dynamic;
+            *self.entry.hoist.borrow_mut() = hoist;
             made.insert(boundary_placeholder(k), ops);
         }
         for b in load.blocks.iter_mut() {
@@ -21844,7 +22029,7 @@ impl Js {
     /// of the variables; a field the paths gave different runtime values
     /// goes to one variable; everything else is made at runtime here.
     /// Every path does the same, so they meet.
-    fn generalize_agreeing(&self, s: &mut State, keep: &EndKeep, out: &mut Vec<Op>) {
+    fn generalize_agreeing(&self, s: &mut State, keep: &EndKeep, unwritten: &std::collections::HashSet<String>, out: &mut Vec<Op>) {
         let _why = self.why.merging(why::Merge::Whole);
         s.gc();
         let fi = s.frames.len() - 1;
@@ -21881,9 +22066,19 @@ impl Js {
             .filter(|&k| s.frames[fi].locals[k] != input && !keep.same_locals.get(k).copied().unwrap_or(false))
             .collect();
         self.materialize(s, &slots, out);
-        // (Tracked globals: written out; those the paths disagree on
-        // forgotten.)
+        // (Tracked globals: written out, but those the load code leaves
+        // unwritten (see `global_left_unwritten`); those the paths disagree
+        // on forgotten.)
+        let left: Vec<(String, (Abs, bool))> = s.globals.iter().filter(|(g, _)| unwritten.contains(*g)).map(|(g, v)| (g.clone(), v.clone())).collect();
+        for (g, _) in &left {
+            region_note_globals();
+            s.globals.remove(g);
+        }
         self.sync_globals(s, false, out);
+        for (g, v) in left {
+            region_note_globals();
+            s.globals.insert(g, v);
+        }
         // (A reference still held to an object made runtime state: its
         // variable, so no object made runtime state stays in the state, to
         // be named by its address, another on each path.)
@@ -23107,6 +23302,23 @@ impl Js {
                 Abs::Null => Some("null".into()),
             }
         };
+        // (Of a standard function: `[object Function]`, and whether a
+        // symbol is its own key, see `standard_symbol_in`.)
+        if let Some(f) = self.standard_function(this) {
+            match method {
+                "toString" => return Some(Abs::Str("[object Function]".into())),
+                "hasOwnProperty" => {
+                    let key = args.first().unwrap_or(&Abs::Undef);
+                    if let Some(k) = self.well_known_symbol(key) {
+                        return Some(Abs::Bool(self.standard_symbol_in(&f, k, true)));
+                    }
+                    if matches!(self.sym_of(key), Some(Sym::Registered(_))) {
+                        return Some(Abs::Bool(false));
+                    }
+                }
+                _ => {}
+            }
+        }
         // (`toString` of a primitive: its type's tag, none of the standard
         // prototypes naming another.)
         if method == "toString" && self.pristine("Object") {
@@ -27818,6 +28030,122 @@ impl Js {
             && standard_prototype_chain(&kind).iter().all(|c| self.pristine(c))
     }
 
+    /// `Function(...args)` or `new Function(...args)` of an unmodified
+    /// `Function`, every argument a string the program compiled ahead (see
+    /// `FuncDef::made_from_source`): a new closure of that function, made in
+    /// the global scope.
+    fn function_from_source(&self, s: &mut State, callee: &Abs, args: &[Abs]) -> Option<Abs> {
+        if !matches!(callee, Abs::Dyn(RExpr::Global(g)) if g == "Function") || !self.pristine("Function") || env_flag!("PE_NO_FUNCTION_SOURCE") {
+            return None;
+        }
+        let strings: Option<Vec<String>> = args.iter().map(|a| if let Abs::Str(t) = a { Some(t.clone()) } else { None }).collect();
+        let fid = *self.from_source.get(&strings?)?;
+        Some(Abs::Ref(s.alloc(HeapObj::closure(fid, vec![]))))
+    }
+
+    /// The name of the standard function `v` is, unmodified: a standard
+    /// constructor or function (`WeakMap`, `parseInt`), a standard static
+    /// method (`Object.create`) or prototype method
+    /// (`Object.prototype.hasOwnProperty`). With its constructor when it is
+    /// one (see `standard_symbol_in`).
+    fn standard_function(&self, v: &Abs) -> Option<(String, Option<String>)> {
+        self.standard_function_in(None, v)
+    }
+
+    /// `standard_function`, a modeled intrinsic method with no property of
+    /// its own (`Object.prototype.hasOwnProperty` read from a variable) too
+    /// when the heap is given.
+    fn standard_function_in(&self, heap: Option<&Heap>, v: &Abs) -> Option<(String, Option<String>)> {
+        if !self.pristine("Function") || !self.pristine("Object") {
+            return None;
+        }
+        if let (Abs::Ref(a), Some(heap)) = (v, heap) {
+            let Some(HeapObj::Builtin { kind, data, ext: None }) = heap.get(a) else { return None };
+            if !data.is_empty() || kind.ends_with(ACCESSOR_GET) || kind.ends_with(ACCESSOR_SET) {
+                return None;
+            }
+            return self.standard_function_in(None, &Abs::Dyn(intrinsic_method_expr(kind)?));
+        }
+        let Abs::Dyn(e) = v else { return None };
+        match e {
+            RExpr::Global(g) if builtin_typeof(g) == Some("function") && self.pristine(g) => Some((g.clone(), Some(g.clone()))),
+            RExpr::Get(o, m) => match &**o {
+                RExpr::Global(g) if standard_static_method(g, m) && self.pristine(g) => Some((m.clone(), None)),
+                RExpr::Get(c, p) if p == "prototype" && m != "constructor" => match &**c {
+                    RExpr::Global(g) if standard_prototype_method(g, m) && self.pristine(g) => Some((m.clone(), None)),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Does the standard function `f` (see `standard_function`) have the
+    /// well-known symbol `sym` as a key, own (`own`) or up its chain? A
+    /// constructor whose instances are made through `@@species` has that
+    /// (own, or a typed array's from `%TypedArray%`); every function inherits
+    /// `@@hasInstance` from `Function.prototype`; no other.
+    fn standard_symbol_in(&self, f: &(String, Option<String>), sym: &str, own: bool) -> bool {
+        let species_own = matches!(f.1.as_deref(), Some("Array" | "ArrayBuffer" | "Map" | "Promise" | "RegExp" | "Set" | "SharedArrayBuffer"));
+        let species_inherited = f.1.as_deref().is_some_and(|c| TYPED_ARRAYS.contains(&c));
+        match sym {
+            "species" => species_own || (!own && species_inherited),
+            "hasInstance" => !own,
+            _ => false,
+        }
+    }
+
+    /// A standard introspection of a standard function `recv` (see
+    /// `standard_function`), by the standard method `m` (`f` read as
+    /// `Object.prototype.toString`, ...) called on it with `args`:
+    /// `Object.prototype.toString` gives `"[object Function]"`,
+    /// `Function.prototype.toString` its native source, and
+    /// `Object.prototype.hasOwnProperty` of a symbol whether it is its own.
+    fn standard_fn_introspection(&self, s: &State, f: &Abs, recv: &Abs, args: &[Abs]) -> Option<Abs> {
+        let target = self.standard_function_in(Some(&s.heap), recv)?;
+        // (The method read as a runtime value, `Object.prototype.toString`,
+        // or the modeled intrinsic.)
+        let (g, m): (String, String) = match f {
+            Abs::Dyn(RExpr::Get(p, m)) => {
+                let RExpr::Get(c, proto) = &**p else { return None };
+                let RExpr::Global(g) = &**c else { return None };
+                if proto != "prototype" {
+                    return None;
+                }
+                (g.clone(), m.clone())
+            }
+            Abs::Ref(a) => match s.heap.get(a) {
+                Some(HeapObj::Builtin { kind, .. }) => {
+                    let (g, m) = kind.split_once(".prototype.")?;
+                    (g.to_string(), m.to_string())
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if !self.pristine(&g) {
+            return None;
+        }
+        match (g.as_str(), m.as_str()) {
+            ("Object", "toString") => Some(Abs::Str("[object Function]".into())),
+            ("Function", "toString") => Some(Abs::Str(format!("function {}() {{ [native code] }}", target.0))),
+            ("Object", "hasOwnProperty") => {
+                let key = args.first()?;
+                let sym = self.well_known_symbol(key).map(|k| k.to_string());
+                match (sym, self.sym_of(key)) {
+                    (Some(k), _) => Some(Abs::Bool(self.standard_symbol_in(&target, &k, true))),
+                    (None, Some(Sym::Registered(_))) => Some(Abs::Bool(false)),
+                    _ => None,
+                }
+            }
+            _ => {
+                let _ = s;
+                None
+            }
+        }
+    }
+
     fn call_nonthrowing(&self, s: &State, callee: &RExpr, args: &[Abs]) -> bool {
         if self.is_symbol_call(callee, args) {
             return true;
@@ -28320,7 +28648,9 @@ impl Js {
     /// Does unfolding this call of a recursive function, every argument a
     /// runtime value, make progress: specialized on a copy of the state up
     /// to its return, does it meet no call of the same function repeating
-    /// an active one (see `do_call`)? Runtime branches may be taken.
+    /// an active one (see `do_call`), and make straight-line code? (Code
+    /// that branches at runtime is one residual function's, shared by every
+    /// call, rather than a copy at each: see `call_unfolds`.)
     fn recursion_progresses(&self, s: &State, callee: &Abs, args: &[Abs], this: &Abs, pc: usize) -> bool {
         let Abs::Ref(a) = callee else { return false };
         let Some(HeapObj::Closure { fid, .. }) = s.heap.get(a) else { return false };
@@ -28341,15 +28671,21 @@ impl Js {
         let _ = self.do_call(&mut probe, args.len(), pc, &mut sink, this.clone(), RetMode::Value, Abs::Undef);
         self.recursion_probe_entry.set(false);
         let unfolded = probe.frames.len() == 2;
+        let mut straight = true;
         if unfolded && !self.recursion_stuck.get() {
             let resume = probe.frames[0].pc;
             let saved_probing = self.probing.replace(true);
             let saved_taint = self.try_taint.replace(false);
             self.halt_at.borrow_mut().push(resume);
+            // (It stops at the first conditional transfer: one decides it.)
+            let saved_straight = (self.straight_probe.replace(true), self.straight_failed.replace(false));
             let pending = (std::mem::take(&mut *self.pending_info.borrow_mut()), std::mem::take(&mut *self.pending_fixed.borrow_mut()));
-            let _ = crate::engine::specialize(self, probe);
+            let prog = crate::engine::specialize(self, probe);
             *self.pending_info.borrow_mut() = pending.0;
             *self.pending_fixed.borrow_mut() = pending.1;
+            straight = !self.straight_failed.get() && prog.blocks.iter().all(|b| !matches!(b.term, Terminator::Cond { .. }));
+            self.straight_probe.set(saved_straight.0);
+            self.straight_failed.set(saved_straight.1);
             self.halt_at.borrow_mut().pop();
             self.probing.set(saved_probing);
             self.try_taint.set(saved_taint);
@@ -28358,9 +28694,9 @@ impl Js {
         let stuck = self.recursion_stuck.replace(saved_stuck);
         self.recursion_probed.borrow_mut().pop();
         if env_flag!("RESID_DEBUG") {
-            eprintln!("[RESID] probe {}: unfolded={unfolded} stuck={stuck}", self.names[fid]);
+            eprintln!("[RESID] probe {}: unfolded={unfolded} stuck={stuck} straight={straight}", self.names[fid]);
         }
-        unfolded && !stuck
+        unfolded && !stuck && straight
     }
 
     fn call_unfolds(&self, s: State, callee: Abs, args: &[Abs], this: &Abs, pc: usize) -> bool {
@@ -30547,6 +30883,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::If(
                 bin(Bop::Eq, get(var(0), "op"), str_("lit")),
                 vec![Stmt::Return(get(var(0), "val"))],
@@ -30616,6 +30953,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(call(
                 func(0),
                 vec![ast, obj(vec![("x", var(0))])],
@@ -30666,6 +31004,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Switch(
                 get(var(0), "op"),
                 vec![
@@ -30741,6 +31080,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(call(func(0), vec![ast, obj(vec![("x", var(0))])]))],
             source_text: None,
         };
@@ -30798,6 +31138,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Stmt::Switch(
                     var(0),
@@ -30853,6 +31194,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(obj(vec![
                 ("pair", arr(vec![var(0), bin(Bop::Mul, var(0), var(0))])),
                 (
@@ -30905,6 +31247,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(bin(Bop::Mul, var(0), num(2)))],
             source_text: None,
         };
@@ -30928,6 +31271,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Stmt::Let(2, arr(vec![])),
                 Stmt::Let(3, num(0)),
@@ -30962,6 +31306,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(call(
                 func(1),
                 vec![
@@ -31015,6 +31360,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Stmt::Let(1, arr(vec![])),
                 Stmt::Let(2, num(0)),
@@ -31075,6 +31421,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(bin(Bop::Gt, var(0), num(0)))],
             source_text: None,
         };
@@ -31098,6 +31445,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Stmt::Let(2, arr(vec![])),
                 Stmt::Let(3, num(0)),
@@ -31137,6 +31485,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![Stmt::Return(call(
                 func(1),
                 vec![
@@ -31286,6 +31635,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Stmt::Switch(
                     get(var(0), "op"),
@@ -31372,6 +31722,7 @@ mod tests {
             kind: FnKind::Normal,
             is_async: false,
             strict: false,
+            made_from_source: None,
             body: vec![
                 Stmt::Let(1, arr(vec![num(0); 8])),
                 Stmt::Let(2, arr(vec![])),

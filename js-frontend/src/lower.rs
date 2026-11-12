@@ -789,6 +789,9 @@ const SCRIPT_INPUT: &str = "%input";
 
 #[derive(Default)]
 struct Compiler {
+    /// The functions made ahead of `Function(...)` calls of literal strings,
+    /// by those strings (see `lift_function_source`).
+    function_sources: HashMap<Vec<String>, Option<usize>>,
     /// How many tagged templates have been lowered: each is a site of its
     /// own (see `lower_tagged_template`).
     template_sites: usize,
@@ -1400,6 +1403,7 @@ impl Compiler {
                 is_async,
                 strict: self.decls[i].strict,
                 source_text,
+                made_from_source: None,
                 body,
             });
         }
@@ -3614,6 +3618,7 @@ impl Compiler {
             is_async: opts.is_async,
             strict: ctx.strict,
             source_text,
+            made_from_source: None,
             body: stmts,
         });
         Ok((fid, captures))
@@ -4789,6 +4794,7 @@ impl Compiler {
                 Ok(acc)
             }
             ast::Expr::New(n) => {
+                self.lift_function_source(&n.callee, n.args.as_deref(), ctx);
                 let callee = self.lower_expr(&n.callee, ctx)?;
                 let mut args = Vec::new();
                 if let Some(arg_list) = &n.args {
@@ -4948,7 +4954,60 @@ impl Compiler {
         }
     }
 
+    /// For `Function(...)` or `new Function(...)` of literal strings, the
+    /// global `Function` (no binding of that name in scope): the function it
+    /// makes, compiled ahead from the source it is made of (`function
+    /// anonymous(params\n) {\nbody\n}`, in the global scope), for the
+    /// engine to take when `Function` is the standard one (see
+    /// `FuncDef::made_from_source`). Code that does not compile is left to
+    /// the runtime's call.
+    fn lift_function_source(&mut self, callee: &ast::Expr, args: Option<&[ast::ExprOrSpread]>, ctx: &FnCtx) {
+        if !matches!(unparen(callee), ast::Expr::Ident(id) if &*id.sym == "Function") || ctx.resolve_binding("Function").is_some() || self.name_to_fid.contains_key("Function") {
+            return;
+        }
+        let strings: Option<Vec<String>> = args
+            .unwrap_or(&[])
+            .iter()
+            .map(|a| match (&a.spread, unparen(&a.expr)) {
+                (None, ast::Expr::Lit(ast::Lit::Str(st))) => Some(st.value.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        let Some(strings) = strings else { return };
+        if self.function_sources.contains_key(&strings) {
+            return;
+        }
+        let (params, body) = match strings.split_last() {
+            Some((body, params)) => (params.join(","), body.clone()),
+            None => (String::new(), String::new()),
+        };
+        let text = format!("function anonymous({params}\n) {{\n{body}\n}}");
+        let lifted = (|| -> R<usize> {
+            let module = crate::parse_model(&format!("({text});"))?;
+            let [ast::ModuleItem::Stmt(ast::Stmt::Expr(e))] = module.body.as_slice() else { return Err("not one expression".into()) };
+            let ast::Expr::Fn(f) = unparen(&e.expr) else { return Err("not a function".into()) };
+            if f.function.is_async || f.function.is_generator {
+                return Err("not a plain function".into());
+            }
+            let params: Vec<ast::Pat> = f.function.params.iter().map(|p| p.pat.clone()).collect();
+            let body = f.function.body.as_ref().ok_or("no body")?.stmts.clone();
+            let global = FnCtx::new(HashSet::new());
+            let (fid, captures) = self.lift_arrow(&params, ArrowBody::BlockOwned(body), &global, LiftOpts::new(FnKind::Normal).named("anonymous"))?;
+            if !captures.is_empty() {
+                return Err("captures".into());
+            }
+            let i = fid - self.decls.len();
+            self.lifted[i].source_text = Some(text.clone());
+            self.lifted[i].made_from_source = Some(strings.clone());
+            Ok(fid)
+        })();
+        self.function_sources.insert(strings, lifted.ok());
+    }
+
     fn lower_call(&mut self, c: &ast::CallExpr, ctx: &mut FnCtx) -> R<Expr> {
+        if let ast::Callee::Expr(e) = &c.callee {
+            self.lift_function_source(e, Some(&c.args), ctx);
+        }
         // A direct `eval(...)` runs its code in this function's scope, which
         // specialization renames and removes: only code that cannot tell
         // (see `eval_code_is_scope_free`) runs, as an indirect eval.
