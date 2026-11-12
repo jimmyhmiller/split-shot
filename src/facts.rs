@@ -205,11 +205,17 @@ pub struct Info {
     /// object whose chain reaches it makes an own data property: see
     /// `set_resolves_statically`.)
     pub ordinary: bool,
+    /// The value is an object the standard constructor of this name made
+    /// (`new Date(t)`), as made: its [[Prototype]] that constructor's
+    /// `prototype`, and no own property. Until code that may change either
+    /// runs: a pending read of the value's property of any key stands for
+    /// it (see `Js::freeze_readers`).
+    pub made_by: Option<std::rc::Rc<str>>,
 }
 
 impl Info {
     pub fn top() -> Info {
-        Info { types: T_ALL, lo: None, hi: None, nan: true, truthy: None, eq: None, ne: Vec::new(), cases: None, fixed: Vec::new(), props: Vec::new(), callee: None, ordinary: false }
+        Info { types: T_ALL, lo: None, hi: None, nan: true, truthy: None, eq: None, ne: Vec::new(), cases: None, fixed: Vec::new(), props: Vec::new(), callee: None, ordinary: false, made_by: None }
     }
 
     pub fn of_types(types: u16) -> Info {
@@ -314,6 +320,7 @@ impl Info {
                 .collect(),
             callee: if self.callee == o.callee { self.callee.clone() } else { None },
             ordinary: self.ordinary && o.ordinary,
+            made_by: if self.made_by == o.made_by { self.made_by.clone() } else { None },
         }
     }
 

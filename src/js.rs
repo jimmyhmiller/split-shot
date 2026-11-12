@@ -8522,6 +8522,16 @@ impl Js {
         let added = dynamic.len() > before || hoist_grew || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
         if env_flag!("ENTRY_DEBUG") {
             eprintln!("[ENTRY] conflicts: dynamic {:?} globals {:?} all {} (runtime writes {runtime_writes}) -> again {added}", dynamic, globals, self.entry.all_globals_dynamic.get());
+            // (`ENTRY_DUMP`: the pass's `main`, block by block.)
+            if env_flag!("ENTRY_DUMP") {
+                for (i, b) in main.blocks.iter().enumerate() {
+                    eprintln!("[ENTRY]   block {i}:");
+                    for op in &b.ops {
+                        eprintln!("[ENTRY]     {op:?}");
+                    }
+                    eprintln!("[ENTRY]     -> {:?}", b.term);
+                }
+            }
         }
         added
     }
@@ -9420,6 +9430,32 @@ fn ignored_after(g: &str) -> Option<usize> {
 }
 
 /// The standard error constructors.
+impl Js {
+    /// Does `new g(...)`, of the standard constructor `g`, give an object
+    /// that is not a function whatever its arguments? (Not `Object`, which
+    /// gives back an object it is given, nor `Function` or `Proxy`.)
+    fn constructs_plain_object(g: &str) -> bool {
+        matches!(
+            g,
+            "Date" | "Map" | "Set" | "WeakMap" | "WeakSet" | "WeakRef" | "RegExp" | "Array" | "Number" | "String" | "Boolean" | "Promise" | "ArrayBuffer" | "DataView"
+        ) || STANDARD_ERRORS.contains(&g)
+            || TYPED_ARRAYS.contains(&g)
+    }
+
+    /// Is an instance `new g(...)` makes, of the standard constructor `g`,
+    /// made with no own property, whatever its arguments (see
+    /// `facts::Info::made_by`)? (Not an array, a string object or a typed
+    /// array, with their elements; an error, with its `message` and
+    /// `stack`; nor a regular expression, with its `lastIndex`.)
+    fn constructs_bare_object(g: &str) -> bool {
+        matches!(g, "Date" | "Map" | "Set" | "WeakMap" | "WeakSet" | "WeakRef" | "Number" | "Boolean" | "Promise" | "ArrayBuffer" | "DataView")
+    }
+}
+
+/// The key of no read: `x[ANY_KEY_VAR]` stands for a read of a property of
+/// `x` of any key (see `facts::Info::made_by`).
+const ANY_KEY_VAR: usize = usize::MAX;
+
 const STANDARD_ERRORS: &[&str] = &["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError"];
 
 /// (`MEM_DEBUG`: the process's peak resident size, from `getrusage`.)
@@ -13072,6 +13108,14 @@ impl Js {
                     arg_rs.push(self.operand_rexpr(s, &a, &mut escaped, out));
                 }
                 let dst = self.opaque_call_var(pc);
+                // (A standard constructor's instance is an object that is
+                // not callable, whatever it was given.)
+                if let RExpr::Global(g) = &callee_r {
+                    if self.pristine(g) && Js::constructs_plain_object(g) {
+                        let made_by = Js::constructs_bare_object(g).then(|| std::rc::Rc::from(g.as_str()));
+                        self.pending_info.borrow_mut().insert(dst, crate::facts::Info { truthy: Some(true), made_by, ..crate::facts::Info::of_types(crate::facts::T_OBJ) });
+                    }
+                }
                 self.emit_temp(s, dst, RExpr::New(Box::new(callee_r), arg_rs), pc, out);
                 s.top_mut().pc += 1;
                 s.top_mut().ostack.push(Abs::Dyn(RExpr::Var(dst)));
@@ -13219,6 +13263,21 @@ impl Js {
                     self.sync_globals(s, false, out);
                 }
                 if op == "in" && operands.len() == 2 {
+                    // A key of an object a standard constructor made, which
+                    // has no own property (see `facts::Info::made_by`): a
+                    // standard member of its prototypes is in it; a
+                    // registered or fresh symbol, which no standard prototype
+                    // has as a key, is not.
+                    if let Some(m) = self.made_by(s, &operands[1]) {
+                        let proto = RExpr::Get(Box::new(RExpr::Global(m.to_string())), "prototype".into());
+                        if matches!(&operands[0], Abs::Str(k) if self.standard_has(&proto, k)) {
+                            return self.push(s, Abs::Bool(true));
+                        }
+                        let fresh = matches!(&operands[0], Abs::Dyn(RExpr::Var(v)) if self.symbol_temps.borrow().contains(v));
+                        if (fresh || matches!(self.sym_of(&operands[0]), Some(Sym::Registered(_)))) && standard_prototype_chain(&m).iter().all(|c| self.pristine(c)) {
+                            return self.push(s, Abs::Bool(false));
+                        }
+                    }
                     // A standard member of a standard constructor or
                     // prototype (`"prototype" in String`, `"indexOf" in
                     // String.prototype`).
@@ -13511,7 +13570,7 @@ impl Js {
                         // now, before either.
                         let c = if self.if_arm_calls[pc] {
                             s.top_mut().ostack.push(c);
-                            self.freeze_before_opaque_call(s, pc, out);
+                            self.freeze_before_opaque_call_with(s, pc, out, false);
                             s.top_mut().ostack.pop().unwrap()
                         } else {
                             c
@@ -13805,7 +13864,7 @@ impl Js {
     /// otherwise the same and the loop ties; an object's identity facts are
     /// finitely many.
     fn identity_info(full: Info) -> Info {
-        Info { types: full.types, callee: full.callee, fixed: full.fixed, ordinary: full.ordinary, ..Info::top() }
+        Info { types: full.types, callee: full.callee, fixed: full.fixed, ordinary: full.ordinary, made_by: full.made_by, ..Info::top() }
     }
 
     /// Update `st`'s facts for the variables `ops` define, in order: an
@@ -19885,8 +19944,11 @@ impl Js {
                 if !nonthrow {
                     self.forbid_residual_in_try(s, "an unmodeled call");
                 }
-                // (A fresh symbol runs no code: nothing it could change.)
-                if !symbol_call {
+                // (A fresh symbol runs no code: nothing it could change. Nor
+                // does a standard method that changes no property, see
+                // `call_runs_no_code`.)
+                let quiet = symbol_call || self.call_runs_no_code(s, &callee, &this, &args);
+                if !quiet {
                     self.freeze_before_opaque_call(s, pc, out);
                 }
                 // An intrinsic method (`Map.prototype.get`, ...) called on a
@@ -19917,12 +19979,12 @@ impl Js {
                 for a in args {
                     arg_rs.push(self.operand_rexpr(s, &a, &mut escaped, out));
                 }
-                if !symbol_call {
+                if !quiet {
                     let fids = self.runtime_reachable_fns(false);
                     self.forget_fns(s, &fids, out);
                 }
                 // (A provably total built-in neither reads nor writes globals.)
-                if !nonthrow {
+                if !nonthrow && !quiet {
                     self.sync_globals(s, true, out);
                 }
                 // A member callee read from the receiver renders as the method
@@ -20262,7 +20324,26 @@ impl Js {
     /// is `c.prototype` on `o`'s prototype chain?), for a modeled function `c`
     /// or the global constructors `Object`/`Array`/`Function`. (Functions with
     /// a custom `Symbol.hasInstance` cannot be written in this subset.)
+    /// The standard constructor that made the runtime object `o`, while
+    /// that is known (see `facts::Info::made_by`), and neither it nor its
+    /// `prototype` has been changed.
+    fn made_by(&self, s: &State, o: &Abs) -> Option<std::rc::Rc<str>> {
+        let Abs::Dyn(RExpr::Var(v)) = o else { return None };
+        if self.facts_off || env_flag!("PE_NO_MADE_BY") {
+            return None;
+        }
+        s.facts.get(v)?.made_by.clone().filter(|g| self.pristine(g))
+    }
+
     fn static_instanceof(&self, s: &mut State, o: &Abs, c: &Abs) -> Option<bool> {
+        // (An object a standard constructor made: an instance of it and of
+        // `Object`; of no other standard constructor, whose `prototype` no
+        // standard prototype it inherits is.)
+        if let (Some(m), Abs::Dyn(RExpr::Global(g))) = (self.made_by(s, o), c) {
+            if builtin_typeof(g) == Some("function") && self.pristine(g) && self.pristine("Function") && self.pristine("Object") {
+                return Some(*g == *m || g == "Object");
+            }
+        }
         // The chain of `o`'s prototypes that are modeled objects, and how it
         // ends: at `null`, or at an intrinsic prototype.
         let chain = |s: &State, o: &Abs| -> Option<(Vec<usize>, Abs)> {
@@ -20279,6 +20360,11 @@ impl Js {
                     HeapObj::Array(a) if a.standard() => return Some((out, Abs::Undef)),
                     HeapObj::Array(a) => a.proto.clone(),
                     HeapObj::Builtin { ext: Some(e), .. } if e.proto != INTRINSIC_PROTO => e.proto.clone(),
+                    // (A modeled date, collection or regular expression: its
+                    // constructor's `prototype`.)
+                    HeapObj::Builtin { kind, .. } if matches!(kind.as_str(), "Date" | "Map" | "Set" | "WeakMap" | "WeakSet" | "RegExp") && self.pristine(kind) => {
+                        return Some((out, Abs::Dyn(RExpr::Get(Box::new(RExpr::Global(kind.clone())), "prototype".into()))));
+                    }
                     HeapObj::Builtin { .. } | HeapObj::Choice { .. } | HeapObj::Log { .. } => return None,
                 };
                 match proto {
@@ -21888,6 +21974,13 @@ impl Js {
                         return self.push(s, p);
                     }
                 }
+            }
+        }
+        // The `constructor` an object a standard constructor made inherits:
+        // that constructor.
+        if k == "constructor" {
+            if let Some(m) = self.made_by(s, &o) {
+                return self.push(s, Abs::Dyn(RExpr::Global(m.to_string())));
             }
         }
         // A member of the standard `Symbol` it does not have
@@ -23813,7 +23906,9 @@ impl Js {
         }
         match v {
             Abs::Ref(addr) => rec(self, s, *addr, &mut std::collections::HashSet::new()),
-            Abs::Dyn(e) => self.known_object(e),
+            // (Not an object a standard constructor made, which converts as
+            // its standard prototypes do: see `facts::Info::made_by`.)
+            Abs::Dyn(e) => self.known_object(e) && !self.made_by(s, v).is_some_and(|m| standard_prototype_chain(&m).iter().all(|c| self.pristine(c))),
             _ => false,
         }
     }
@@ -26034,6 +26129,16 @@ impl Js {
         // nothing can change, `Object.freeze` having made them read-only.)
         if !self.facts_off {
             for a in made.keys() {
+                // (A modeled date or collection with no own property: what
+                // made it, see `facts::Info::made_by`.)
+                if let Some(HeapObj::Builtin { kind, ext: None, .. }) = heap.get(a) {
+                    if matches!(kind.as_str(), "Date" | "Map" | "Set" | "WeakMap" | "WeakSet") {
+                        let var = self.escape_var(*a);
+                        let info = Info { types: crate::facts::T_OBJ, truthy: Some(true), made_by: Some(std::rc::Rc::from(kind.as_str())), ..Info::top() };
+                        s.facts.insert(var, info.clone());
+                        self.pending_info.borrow_mut().insert(var, info);
+                    }
+                }
                 let fixed_props: Vec<&Prop> = match heap.get(a) {
                     Some(HeapObj::Object { props, class: ObjClass::FinalCell { .. }, .. }) => props.first().into_iter().collect(),
                     Some(HeapObj::Object { props, class: ObjClass::Ordinary, extensible: false, .. })
@@ -26725,6 +26830,12 @@ impl Js {
     /// operand `stack[sp]` read once, then used after intervening calls moved
     /// `sp` or mutated `stack`.
     fn freeze_before_opaque_call(&self, s: &mut State, pc: usize, out: &mut Vec<Op>) {
+        self.freeze_before_opaque_call_with(s, pc, out, true)
+    }
+
+    /// `freeze_before_opaque_call`, keeping the facts when `changes` is
+    /// false (see `freeze_readers_with`).
+    fn freeze_before_opaque_call_with(&self, s: &mut State, pc: usize, out: &mut Vec<Op>, changes: bool) {
         // (A standard built-in, or a member path of one such as `Math.max`,
         // cannot change: a program that may write it does not assume it.)
         fn builtin_path(js: &Js, e: &RExpr) -> bool {
@@ -26750,7 +26861,7 @@ impl Js {
         // (What is known of the values read, for the reads that change
         // with nothing: see below.)
         let view = s.clone();
-        self.freeze_readers(s, pc, out, &|e| {
+        self.freeze_readers_with(s, pc, out, &|e| {
             matches!(e, RExpr::Get(..) | RExpr::Index(..) | RExpr::Global(..))
                 && !builtin_path(self, e)
                 && !matches!(e, RExpr::Get(b, _) if modules.contains(b))
@@ -26759,23 +26870,49 @@ impl Js {
                 // (Nor a standard method a primitive finds on its prototype,
                 // `"s".replace`: no call changes either.)
                 && !self.standard_method_read(&view, e)
-        });
+        }, changes);
     }
 
     fn freeze_readers(&self, s: &mut State, pc: usize, out: &mut Vec<Op>, reads: &dyn Fn(&RExpr) -> bool) {
+        self.freeze_readers_with(s, pc, out, reads, true)
+    }
+
+    /// `freeze_readers`, keeping the facts when `changes` is false: the
+    /// pending reads made values before code that may change what they read
+    /// runs, not because any does.
+    fn freeze_readers_with(&self, s: &mut State, pc: usize, out: &mut Vec<Op>, reads: &dyn Fn(&RExpr) -> bool, changes: bool) {
+        if changes {
+            self.drop_stale_facts(s, pc, reads);
+        }
+        self.freeze_pending(s, pc, out, reads);
+    }
+
+    fn drop_stale_facts(&self, s: &mut State, pc: usize, reads: &dyn Fn(&RExpr) -> bool) {
         // (What is known of a runtime object's property is a pending read
         // of it, as `v.k` or `v["k"]`: code that may change either drops it.)
         let affected = |v: usize, k: &str| {
             reads(&RExpr::Get(Box::new(RExpr::Var(v)), k.to_string()))
                 || reads(&RExpr::Index(Box::new(RExpr::Var(v)), Box::new(RExpr::Str(k.to_string()))))
         };
-        let stale: Vec<usize> = s.facts.iter().filter(|(v, i)| i.props.iter().any(|(k, _)| affected(**v, k))).map(|(v, _)| *v).collect();
+        // (So is what is known of how it was made, as a read of a property
+        // of any key: see `facts::Info::made_by`.)
+        let unmade = |v: usize, i: &Info| i.made_by.is_some() && reads(&RExpr::Index(Box::new(RExpr::Var(v)), Box::new(RExpr::Var(ANY_KEY_VAR))));
+        let stale: Vec<usize> = s.facts.iter().filter(|(v, i)| i.props.iter().any(|(k, _)| affected(**v, k)) || unmade(**v, i)).map(|(v, _)| *v).collect();
         for v in stale {
             if let Some(mut i) = s.facts.get(&v).cloned() {
                 i.props.retain(|(k, _)| !affected(v, k));
+                if unmade(v, &i) {
+                    if env_flag!("MADE_DEBUG") {
+                        eprintln!("[MADE] pc={pc} v{v} {:?} dropped at {:?}", i.made_by, self.code.get(pc));
+                    }
+                    i.made_by = None;
+                }
                 s.facts.insert(v, i);
             }
         }
+    }
+
+    fn freeze_pending(&self, s: &mut State, pc: usize, out: &mut Vec<Op>, reads: &dyn Fn(&RExpr) -> bool) {
         let fi = s.frames.len() - 1;
         for slot in 0..s.frames[fi].locals.len() {
             if let Abs::Dyn(e) = &s.frames[fi].locals[slot] {
@@ -27425,6 +27562,38 @@ impl Js {
             && self.pristine("Symbol")
             && args.len() <= 1
             && args.iter().all(|a| matches!(a, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null))
+    }
+
+    /// Does a call run no code of the program and change no property of
+    /// any object, given only primitives (whose conversions run none): a
+    /// standard function of `Math`, or a standard method of an object a
+    /// standard constructor made, which reads none of its properties (see
+    /// `facts::Info::made_by`)? (It may change the object's internal state,
+    /// a date's time or a map's entries, which no pending read reads.)
+    fn call_runs_no_code(&self, s: &State, callee: &Abs, this: &Abs, args: &[Abs]) -> bool {
+        use crate::facts::{T_FUNC, T_OBJ};
+        if self.facts_off || env_flag!("PE_NO_MADE_BY") {
+            return false;
+        }
+        let primitive = |v: &Abs| match v {
+            Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null => true,
+            Abs::Dyn(_) => self.info_abs(s, v).is_some_and(|i| i.types != 0 && i.types & (T_OBJ | T_FUNC) == 0),
+            Abs::Ref(_) => false,
+        };
+        if !args.iter().all(primitive) {
+            return false;
+        }
+        let Abs::Dyn(RExpr::Get(o, m)) = callee else { return false };
+        if let RExpr::Global(g) = &**o {
+            return g == "Math" && standard_static_method("Math", m) && self.pristine("Math");
+        }
+        let Some(kind) = self.made_by(s, this) else { return false };
+        // (`toJSON` reads the date's `toISOString`.)
+        matches!(this, Abs::Dyn(t) if **o == *t)
+            && matches!(&*kind, "Date" | "Map" | "Set" | "WeakMap" | "WeakSet")
+            && standard_prototype_method(&kind, m)
+            && !matches!(m.as_str(), "constructor" | "toJSON")
+            && standard_prototype_chain(&kind).iter().all(|c| self.pristine(c))
     }
 
     fn call_nonthrowing(&self, s: &State, callee: &RExpr, args: &[Abs]) -> bool {
@@ -29607,7 +29776,21 @@ fn visit_rexpr(e: &RExpr, f: &mut dyn FnMut(&RExpr)) {
 /// static property read of it).
 fn program_globals_read(prog: &Program<Op, Cond>, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
     fn expr(e: &RExpr, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
+        let function_prototype = |e: &RExpr| matches!(e, RExpr::Get(f, p) if p == "prototype" && matches!(&**f, RExpr::Global(g) if g == "Function"));
         match e {
+            // (`Function.prototype` and its methods make no code from a
+            // string; its `constructor` is `Function`.)
+            RExpr::Get(o, k) if function_prototype(o) => {
+                if k == "constructor" {
+                    *every = true;
+                }
+                read.insert("Function".into());
+                return;
+            }
+            _ if function_prototype(e) => {
+                read.insert("Function".into());
+                return;
+            }
             RExpr::Get(o, k) if is_global_object(&Abs::Dyn((**o).clone())) => {
                 read.insert(k.clone());
             }

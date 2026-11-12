@@ -883,6 +883,10 @@
   "merged": 0,
   "gap": 0
  },
+ "runtime_instance_changed_prototype.js": {
+  "merged": 0,
+  "gap": 13
+ },
  "script_closures.js": {
   "merged": 0,
   "gap": 8
