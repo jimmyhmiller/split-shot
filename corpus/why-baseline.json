@@ -123,6 +123,14 @@
   "merged": 0,
   "gap": 5
  },
+ "builtin_instance_own_symbols.js": {
+  "merged": 0,
+  "gap": 15
+ },
+ "builtin_instance_tags.js": {
+  "merged": 0,
+  "gap": 16
+ },
  "builtin_method_callbacks.js": {
   "merged": 0,
   "gap": 0
@@ -421,7 +429,7 @@
  },
  "for_await.js": {
   "merged": 0,
-  "gap": 3
+  "gap": 2
  },
  "forof_dynamic.js": {
   "merged": 0,

@@ -7590,6 +7590,47 @@ impl Js {
                 cur = t;
                 continue;
             }
+            // (A standard array: its own, then `Array.prototype`'s.)
+            if let HeapObj::Array(a) = o {
+                if !a.standard() || !self.pristine("Array") || !self.intrinsic_protos_pristine(false) {
+                    return Found::Unknown;
+                }
+                if let Some(p) = key.as_ref().and_then(|key| o.own_key(key)) {
+                    return match &p.val {
+                        PVal::Data(v) => Found::Data(v.clone()),
+                        PVal::Accessor { get, set } => Found::Accessor { get: get.clone(), set: set.clone() },
+                    };
+                }
+                return match k {
+                    Some(Sym::WellKnown(n)) if matches!(n.as_str(), "iterator" | "unscopables") => Found::Unknown,
+                    _ => Found::Missing,
+                };
+            }
+            // (A modeled date, collection or buffer: its own, then its
+            // standard prototype's, see `builtin_proto_symbols`.)
+            if let HeapObj::Builtin { kind, ext, .. } = o {
+                let Some(protos) = builtin_proto_symbols(kind) else { return Found::Unknown };
+                if !self.pristine(collection_ctor(kind)) || !self.intrinsic_protos_pristine(false) {
+                    return Found::Unknown;
+                }
+                if let Some(p) = key.as_ref().and_then(|key| o.own_key(key)) {
+                    return match &p.val {
+                        PVal::Data(v) => Found::Data(v.clone()),
+                        PVal::Accessor { get, set } => Found::Accessor { get: get.clone(), set: set.clone() },
+                    };
+                }
+                if ext.as_ref().is_some_and(|e| e.proto != INTRINSIC_PROTO) {
+                    return Found::Unknown;
+                }
+                return match k {
+                    Some(Sym::WellKnown(n)) => match protos.iter().find(|(m, _)| *m == n.as_str()) {
+                        Some((_, Some(tag))) => Found::Data(Abs::Str(tag.to_string())),
+                        Some((_, None)) => Found::Unknown,
+                        None => Found::Missing,
+                    },
+                    _ => Found::Missing,
+                };
+            }
             let function = match o {
                 HeapObj::Object { .. } => false,
                 HeapObj::Closure { known: true, .. } => true,
@@ -9749,6 +9790,25 @@ fn proxy_or_bound_ops(js: &Js, kind: &str, dst: usize, addr: usize, parts: Vec<R
 /// name, length, ...args]`, `name` and `length` its own, as `bind` made
 /// them from `f`'s then.
 const BOUND_FUNCTION: &str = "BoundFunction";
+
+/// The well-known symbols the standard prototype of a modeled built-in of
+/// this kind has (and `Object.prototype`, which has none): with the string
+/// value of `@@toStringTag`, `None` for a method. `None` for a kind not
+/// listed.
+fn builtin_proto_symbols(kind: &str) -> Option<&'static [(&'static str, Option<&'static str>)]> {
+    Some(match kind {
+        "Map" => &[("iterator", None), ("toStringTag", Some("Map"))],
+        "Set" => &[("iterator", None), ("toStringTag", Some("Set"))],
+        "WeakMap" => &[("toStringTag", Some("WeakMap"))],
+        "WeakSet" => &[("toStringTag", Some("WeakSet"))],
+        "DataView" => &[("toStringTag", Some("DataView"))],
+        "ArrayBuffer" => &[("toStringTag", Some("ArrayBuffer"))],
+        "Promise" => &[("toStringTag", Some("Promise"))],
+        "Date" => &[("toPrimitive", None)],
+        "RegExp" => &[("match", None), ("matchAll", None), ("replace", None), ("search", None), ("split", None)],
+        _ => return None,
+    })
+}
 
 /// Can a property be added to the object (its `[[Extensible]]`; only an
 /// ordinary object is modeled as non-extensible)?
@@ -12436,6 +12496,17 @@ impl Js {
                 let v = s.top_mut().ostack.pop().unwrap();
                 let i = s.top_mut().ostack.pop().unwrap();
                 let a = s.top_mut().ostack.pop().unwrap();
+                // (An object a standard constructor made, which has no own
+                // property: its prototype's read-only `@@toStringTag` or
+                // `@@toPrimitive`, see below.)
+                if let (Some(m), Some(n)) = (self.made_by(s, &a), self.well_known_symbol(&i).map(str::to_string)) {
+                    let read_only = matches!(n.as_str(), "toStringTag" | "toPrimitive") && builtin_proto_symbols(&m).is_some_and(|t| t.iter().any(|(k, _)| *k == n.as_str()));
+                    if read_only && standard_prototype_chain(&m).iter().all(|c| self.pristine(c)) && self.pristine("TypeError") {
+                        if let Some(step) = self.read_only_symbol_write(s, &m, &n, v.clone(), pc, out) {
+                            return step;
+                        }
+                    }
+                }
                 // (A symbol key known statically, an own data property made or
                 // updated: see `sym_set_static`.)
                 if let (Abs::Ref(addr), Some(sym)) = (&a, self.sym_of(&i)) {
@@ -12444,6 +12515,22 @@ impl Js {
                         let v = self.emit_if_maythrow(s, pc, 0, v, out);
                         set_heap_data_prop(&mut s.heap, addr, PKey::Sym(sym), v);
                         return self.advance(s);
+                    }
+                    // (A modeled date, collection or buffer's read-only
+                    // `@@toStringTag` or `@@toPrimitive`, its prototype's: the
+                    // assignment fails, a TypeError in strict code, nothing in
+                    // sloppy code.)
+                    if let (Some(HeapObj::Builtin { kind, .. }), Sym::WellKnown(n)) = (s.heap.get(&addr), &sym) {
+                        let read_only = matches!(n.as_str(), "toStringTag" | "toPrimitive")
+                            && builtin_proto_symbols(kind).is_some_and(|t| t.iter().any(|(m, _)| *m == n.as_str()))
+                            && s.heap[&addr].own_key(&PKey::Sym(sym.clone())).is_none()
+                            && matches!(self.sym_lookup(&s.heap, addr, &sym), Found::Data(_) | Found::Unknown);
+                        if read_only && self.pristine(collection_ctor(kind)) && self.pristine("TypeError") {
+                            let (kind, n) = (collection_ctor(kind).to_string(), n.clone());
+                            if let Some(step) = self.read_only_symbol_write(s, &kind, &n, v.clone(), pc, out) {
+                                return step;
+                            }
+                        }
                     }
                 }
                 let i = object_key(&s.heap, &a, i);
@@ -12824,6 +12911,18 @@ impl Js {
                 if let Abs::Str(k) = &i {
                     if is_global_object(&a) && !s.globals.contains_key(k.as_str()) && self.host_absent(s, k) {
                         return self.push(s, Abs::Undef);
+                    }
+                }
+                // (A well-known symbol of an object a standard constructor
+                // made, which has no own property: its prototype's, see
+                // `builtin_proto_symbols`.)
+                if let (Some(m), Some(k)) = (self.made_by(s, &a), self.well_known_symbol(&i)) {
+                    if let Some(table) = builtin_proto_symbols(&m).filter(|_| standard_prototype_chain(&m).iter().all(|c| self.pristine(c))) {
+                        match table.iter().find(|(n, _)| *n == k) {
+                            Some((_, Some(tag))) => return self.push(s, Abs::Str(tag.to_string())),
+                            None => return self.push(s, Abs::Undef),
+                            Some((_, None)) => {}
+                        }
                     }
                 }
                 // (A standard function's well-known symbol it has no key of:
@@ -13564,6 +13663,14 @@ impl Js {
                         let proto = RExpr::Get(Box::new(RExpr::Global(m.to_string())), "prototype".into());
                         if matches!(&operands[0], Abs::Str(k) if self.standard_has(&proto, k)) {
                             return self.push(s, Abs::Bool(true));
+                        }
+                        // (A well-known symbol: its prototype's, see
+                        // `builtin_proto_symbols`.)
+                        if let (Some(k), Some(table)) = (self.well_known_symbol(&operands[0]), builtin_proto_symbols(&m)) {
+                            if standard_prototype_chain(&m).iter().all(|c| self.pristine(c)) {
+                                let present = table.iter().any(|(n, _)| *n == k);
+                                return self.push(s, Abs::Bool(present));
+                            }
                         }
                         let fresh = matches!(&operands[0], Abs::Dyn(RExpr::Var(v)) if self.symbol_temps.borrow().contains(v));
                         if (fresh || matches!(self.sym_of(&operands[0]), Some(Sym::Registered(_)))) && standard_prototype_chain(&m).iter().all(|c| self.pristine(c)) {
@@ -20276,6 +20383,7 @@ impl Js {
                 self.note_global_definition(s, &callee, &args);
                 let assign_info = self
                     .object_assign_info(s, &callee, &args)
+                    .or_else(|| self.promise_call_info(&callee, &args))
                     .or_else(|| self.react_call_result_info(s, &callee))
                     .or_else(|| self.standard_call_info(&callee))
                     .or_else(|| self.string_method_result_info(s, &callee))
@@ -23375,6 +23483,27 @@ impl Js {
                 Abs::Null => Some("null".into()),
             }
         };
+        // (Of an object a standard constructor made, which has no own
+        // property (see `facts::Info::made_by`): none is its own, and its
+        // tag is its prototype's.)
+        if let Some(m) = self.made_by(s, this) {
+            if standard_prototype_chain(&m).iter().all(|c| self.pristine(c)) {
+                match method {
+                    "hasOwnProperty" | "propertyIsEnumerable" => return Some(Abs::Bool(false)),
+                    "toString" => {
+                        let tag = builtin_proto_symbols(&m).and_then(|t| t.iter().find(|(n, _)| *n == "toStringTag").and_then(|(_, v)| *v));
+                        let tag = match (&*m, tag) {
+                            (_, Some(t)) => t.to_string(),
+                            ("Date", _) => "Date".to_string(),
+                            ("Number" | "Boolean", _) => m.to_string(),
+                            (_, None) => "Object".to_string(),
+                        };
+                        return Some(Abs::Str(format!("[object {tag}]")));
+                    }
+                    _ => {}
+                }
+            }
+        }
         // (Of a standard function: `[object Function]`, and whether a
         // symbol is its own key, see `standard_symbol_in`.)
         if let Some(f) = self.standard_function(this) {
@@ -23421,6 +23550,18 @@ impl Js {
             _ => return None,
         };
         let obj = &s.heap[&addr];
+        // (A symbol key: an own property of that key, which a modeled
+        // object, array or built-in holds as one; an arguments object's
+        // `@@iterator` it does not.)
+        if let ("hasOwnProperty", Some(sym)) = (method, args.first().and_then(|k| self.sym_of(k))) {
+            let arguments_iterator = matches!(obj, HeapObj::Object { class: ObjClass::Arguments { .. }, .. }) && sym == Sym::WellKnown("iterator".into());
+            if matches!(obj, HeapObj::Object { .. } | HeapObj::Array(_) | HeapObj::Builtin { .. } | HeapObj::Closure { known: true, .. }) && !arguments_iterator {
+                if matches!(obj, HeapObj::Builtin { kind, .. } if builtin_proto_symbols(kind).is_none()) {
+                    return None;
+                }
+                return Some(Abs::Bool(obj.own_key(&PKey::Sym(sym)).is_some()));
+            }
+        }
         match method {
             "hasOwnProperty" | "propertyIsEnumerable" => {
                 let k = key()?;
@@ -23483,6 +23624,17 @@ impl Js {
                 }
             }
             "toString" => match obj {
+                // (A collection or buffer: its `@@toStringTag`, its
+                // prototype's unless it has one of its own that is no
+                // string, then `Object`, its kind having no tag of its own.)
+                HeapObj::Builtin { kind, ext: None, .. } if kind == "RegExp" && self.pristine("RegExp") => Some(Abs::Str("[object RegExp]".into())),
+                HeapObj::Builtin { kind, .. } if matches!(kind.as_str(), "Map" | "Set" | "WeakMap" | "WeakSet" | "DataView" | "ArrayBuffer") => {
+                    match self.sym_lookup(&s.heap, addr, &Sym::WellKnown("toStringTag".into())) {
+                        Found::Data(Abs::Str(t)) => Some(Abs::Str(format!("[object {t}]"))),
+                        Found::Data(_) | Found::Missing => Some(Abs::Str("[object Object]".into())),
+                        _ => None,
+                    }
+                }
                 HeapObj::Generator { .. } => Some(Abs::Str("[object Generator]".into())),
                 HeapObj::Array(a) if a.standard() && !a.props.iter().any(|p| p.key.is_sym()) => Some(Abs::Str("[object Array]".into())),
                 HeapObj::Array(_) => None,
@@ -28114,6 +28266,41 @@ impl Js {
         let strings: Option<Vec<String>> = args.iter().map(|a| if let Abs::Str(t) = a { Some(t.clone()) } else { None }).collect();
         let fid = *self.from_source.get(&strings?)?;
         Some(Abs::Ref(s.alloc(HeapObj::closure(fid, vec![]))))
+    }
+
+    /// `o[Symbol.<n>] = v` of an object the standard constructor `kind` made
+    /// with no own property of that key, whose prototype holds it read-only:
+    /// the assignment fails, a TypeError in strict code (worded as V8 does),
+    /// nothing in sloppy code.
+    fn read_only_symbol_write(&self, s: &mut State, kind: &str, n: &str, v: Abs, pc: usize, out: &mut Vec<Op>) -> Option<Step<Js>> {
+        let _ = self.emit_if_maythrow(s, pc, 0, v, out);
+        if !self.fn_strict[s.top().func] {
+            return Some(self.advance(s));
+        }
+        let what = if kind == "Date" { "[object Date]".to_string() } else { format!("#<{kind}>") };
+        let msg = format!("Cannot assign to read only property 'Symbol(Symbol.{n})' of object '{what}'");
+        let e = match self.try_builtin_new("TypeError", &[Abs::Str(msg.clone())], s) {
+            Some(e) => e,
+            None => {
+                let e = self.aux_var(127, pc, 0);
+                self.emit_temp(s, e, RExpr::New(Box::new(RExpr::Global("TypeError".into())), vec![RExpr::Str(msg)]), pc, out);
+                Abs::Dyn(RExpr::Var(e))
+            }
+        };
+        if let Abs::Ref(a) = &e {
+            self.creation_pc.borrow_mut().insert(*a, pc);
+        }
+        Some(self.do_throw(s, e, out))
+    }
+
+    /// `Promise.resolve(v)` or `Promise.reject(v)` (unmodified) of a
+    /// primitive: a new promise, with no own property (see
+    /// `facts::Info::made_by`). (A promise given back as it is, otherwise.)
+    fn promise_call_info(&self, callee: &Abs, args: &[Abs]) -> Option<Info> {
+        let Abs::Dyn(RExpr::Get(o, m)) = callee else { return None };
+        let primitive = |a: &Abs| matches!(a, Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null);
+        (matches!(&**o, RExpr::Global(g) if g == "Promise") && matches!(m.as_str(), "resolve" | "reject") && self.pristine("Promise") && args.iter().all(primitive))
+            .then(|| Info { truthy: Some(true), made_by: Some(std::rc::Rc::from("Promise")), ..Info::of_types(crate::facts::T_OBJ) })
     }
 
     /// The name of the standard function `v` is, unmodified: a standard
