@@ -1,0 +1,164 @@
+[
+  {
+    "file": "jimmy-webpack-61e4f1d8ea5e60b0.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  },
+  {
+    "file": "jimmy-index-5e47ab184246d863.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "interop",
+    "verdict": "pass",
+    "calls": 18,
+    "scope": "returned values on repeated calls"
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "status",
+    "verdict": "pass",
+    "calls": 16,
+    "scope": "returned values on repeated calls"
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "interop-native-error",
+    "verdict": "pass",
+    "calls": 18,
+    "scope": "returned values on repeated calls"
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "status-native-error",
+    "verdict": "pass",
+    "calls": 16,
+    "scope": "returned values on repeated calls"
+  },
+  {
+    "file": "nextjs-064lo86lqxabn.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  },
+  {
+    "file": "nextjs-turbopack-2cxt_o3113dgu.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": {
+          "name": "ReferenceError",
+          "message": "document is not defined"
+        }
+      },
+      {
+        "browser": true,
+        "error": {
+          "name": "ReferenceError",
+          "message": "URL is not defined"
+        }
+      }
+    ]
+  },
+  {
+    "file": "nextjs-0be5zeybd87bq.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  },
+  {
+    "file": "nextjs-2q6evjwm-565v.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  },
+  {
+    "file": "nextjs-3ggouivzyl6i4.js",
+    "mode": "ambient",
+    "verdict": "pass",
+    "scope": "registration shape and entry identity",
+    "observations": [
+      {
+        "browser": false,
+        "error": null
+      },
+      {
+        "browser": true,
+        "error": null
+      }
+    ]
+  }
+]

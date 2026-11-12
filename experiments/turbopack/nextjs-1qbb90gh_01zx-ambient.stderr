@@ -1,0 +1,1 @@
+error: assigning to a named function expression's own name `e` (immutable) is not supported

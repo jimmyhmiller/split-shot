@@ -1,0 +1,4 @@
+
+thread 'main' (206526083) panicked at src/js.rs:12984:30:
+`new` of a non-constructor value: Undef
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

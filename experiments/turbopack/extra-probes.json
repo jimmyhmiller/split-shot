@@ -1,0 +1,11 @@
+{
+  "large_chunk_20M": {
+    "result": "timeout",
+    "limit_seconds": 30
+  },
+  "caught_invalid_constructor": {
+    "node": 7,
+    "evaluator_exit": 101,
+    "result": "panic"
+  }
+}

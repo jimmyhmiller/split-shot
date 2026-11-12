@@ -1,0 +1,65 @@
+Production bundle experiment — 2026-11-11
+
+Sources: live jimmyhmiller.com (Webpack) and nextjs.org (Turbopack).
+Exact URLs, SHA-256 hashes and downloaded byte counts: sources.json.
+
+Reproduction on macOS:
+  cargo build --release -p js-frontend --bin js-frontend
+  python3 experiments/turbopack/run.py
+  node experiments/turbopack/verify.cjs
+
+run.py uses the pinned downloaded files, not fresh network downloads.
+Budget: 2 million residual-expression nodes, 30 seconds per process.
+Current uncommitted evaluator changes were present; evaluator source was not changed.
+
+file | mode | input bytes | residual bytes | seconds | result
+jimmy-webpack-61e4f1d8ea5e60b0.js | ambient | 3487 | 9741 | 0.025 | emitted
+jimmy-index-5e47ab184246d863.js | ambient | 14214 | 24792 | 0.037 | emitted
+nextjs-0tjyqs9lrtcyp.js | ambient | 32366 | 75532 | 0.15 | emitted
+nextjs-0tjyqs9lrtcyp.js | interop | 32521 | 68 | 0.019 | emitted
+nextjs-0tjyqs9lrtcyp.js | status | 32554 | 165 | 0.021 | emitted
+nextjs-0tjyqs9lrtcyp.js | interop-native-error | 32477 | 75804 | 0.118 | emitted
+nextjs-0tjyqs9lrtcyp.js | status-native-error | 32510 | 75837 | 0.119 | emitted
+nextjs-064lo86lqxabn.js | ambient | 135783 | 415492 | 3.424 | emitted
+nextjs-3njl687qe8dmd.js | ambient | 229543 | 0 | 1.362 | error
+nextjs-1qbb90gh_01zx.js | ambient | 28181 | 0 | 0.016 | error
+nextjs-turbopack-2cxt_o3113dgu.js | ambient | 13309 | 52015 | 0.188 | emitted
+nextjs-0be5zeybd87bq.js | ambient | 20112 | 40972 | 0.076 | emitted
+nextjs-2q6evjwm-565v.js | ambient | 26966 | 57770 | 0.115 | emitted
+nextjs-3ggouivzyl6i4.js | ambient | 25987 | 93088 | 0.429 | emitted
+
+Interpretation and limits:
+8/10 standalone chunks emit residual JS, at 1.74–3.91 times the input size.
+Input is minified production code; output is formatted, so raw size growth is
+not an instruction-count or runtime-performance measurement.
+Standalone main is an identity entry, added to let the CLI process script-load
+effects. The registration tests check module IDs, nested registration structure,
+factory presence, and early errors with and without a document object. Factory
+bodies are not comprehensively exercised. Neither complete Next.js hydration nor
+browser performance is tested. Turbopack runtime execution reaches matching early
+ReferenceErrors in the deliberately limited VM environment.
+
+Selected-module cases retain the whole unmodified 32,326-byte downloaded chunk
+inside main. A local registration queue and fixed factory index select the real
+411752 interop helper or 432979 HTTP status helper. These factories require no
+imports, so no fabricated require implementation or extracted factory is used.
+The small residuals require an explicit synthetic Error constructor with no stack;
+this disables the chunk's debug-ID path in this controlled host environment.
+The native Error comparison is retained: 75,804/75,837 bytes instead of 68/165.
+That comparison shows a precision barrier; it does not establish its internal
+root cause. Tiny residuals are not a claim that the full application shrank.
+Both configurations pass 18 interop / 16 status calls against their original
+wrappers. Interop tests include ES-module and ordinary-object inputs; status
+checks include a string '404' which must not match numeric 404.
+
+Blockers:
+- 1qbb90gh_01zx: assignment to named function expression is rejected.
+- 3njl687qe8dmd: 2M budget exceeded; a separate 20M attempt was terminated
+  after 30 seconds. Merely raising the budget did not give a quick result.
+- caught-invalid-constructor.js: Node returns 7, evaluator panics rather than
+  handling the thrown TypeError. Logged in split-shot-bugs with reproducer.
+
+Next useful work: investigate why native Error/debug instrumentation loses
+precision, fix catchable invalid-constructor handling, support named function
+self-assignment, and then select dependency-bearing modules through the actual
+Turbopack runtime before attempting full application specialization.

@@ -1,0 +1,128 @@
+[
+  {
+    "file": "jimmy-webpack-61e4f1d8ea5e60b0.js",
+    "mode": "ambient",
+    "input_bytes": 3487,
+    "residual_bytes": 9741,
+    "seconds": 0.025,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "jimmy-index-5e47ab184246d863.js",
+    "mode": "ambient",
+    "input_bytes": 14214,
+    "residual_bytes": 24792,
+    "seconds": 0.037,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "ambient",
+    "input_bytes": 32366,
+    "residual_bytes": 75532,
+    "seconds": 0.15,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "interop",
+    "input_bytes": 32521,
+    "residual_bytes": 68,
+    "seconds": 0.019,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "status",
+    "input_bytes": 32554,
+    "residual_bytes": 165,
+    "seconds": 0.021,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "interop-native-error",
+    "input_bytes": 32477,
+    "residual_bytes": 75804,
+    "seconds": 0.118,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "mode": "status-native-error",
+    "input_bytes": 32510,
+    "residual_bytes": 75837,
+    "seconds": 0.119,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-064lo86lqxabn.js",
+    "mode": "ambient",
+    "input_bytes": 135783,
+    "residual_bytes": 415492,
+    "seconds": 3.424,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-3njl687qe8dmd.js",
+    "mode": "ambient",
+    "input_bytes": 229543,
+    "residual_bytes": 0,
+    "seconds": 1.362,
+    "verdict": "error",
+    "detail": "\nthread 'main' (206534930) panicked at src/js.rs:11232:17:\nspecialization budget exceeded (2000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+  },
+  {
+    "file": "nextjs-1qbb90gh_01zx.js",
+    "mode": "ambient",
+    "input_bytes": 28181,
+    "residual_bytes": 0,
+    "seconds": 0.016,
+    "verdict": "error",
+    "detail": "error: assigning to a named function expression's own name `e` (immutable) is not supported\n"
+  },
+  {
+    "file": "nextjs-turbopack-2cxt_o3113dgu.js",
+    "mode": "ambient",
+    "input_bytes": 13309,
+    "residual_bytes": 52015,
+    "seconds": 0.188,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-0be5zeybd87bq.js",
+    "mode": "ambient",
+    "input_bytes": 20112,
+    "residual_bytes": 40972,
+    "seconds": 0.076,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-2q6evjwm-565v.js",
+    "mode": "ambient",
+    "input_bytes": 26966,
+    "residual_bytes": 57770,
+    "seconds": 0.115,
+    "verdict": "emitted",
+    "detail": ""
+  },
+  {
+    "file": "nextjs-3ggouivzyl6i4.js",
+    "mode": "ambient",
+    "input_bytes": 25987,
+    "residual_bytes": 93088,
+    "seconds": 0.429,
+    "verdict": "emitted",
+    "detail": ""
+  }
+]

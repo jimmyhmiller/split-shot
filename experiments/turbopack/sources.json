@@ -1,0 +1,62 @@
+[
+  {
+    "file": "jimmy-webpack-61e4f1d8ea5e60b0.js",
+    "url": "https://jimmyhmiller.com/_next/static/chunks/webpack-61e4f1d8ea5e60b0.js",
+    "bytes": 3447,
+    "sha256": "941a60376760f5710f94c28f0774a56610d7ee5cc7e28249ffa14ec5c560fb95"
+  },
+  {
+    "file": "jimmy-index-5e47ab184246d863.js",
+    "url": "https://jimmyhmiller.com/_next/static/chunks/pages/index-5e47ab184246d863.js",
+    "bytes": 14174,
+    "sha256": "ff6cf4e638c16c9a9476bad515268ef11e9c2baf4611f09b05c0eef148daaa1e"
+  },
+  {
+    "file": "nextjs-0tjyqs9lrtcyp.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/0tjyqs9lrtcyp.js",
+    "bytes": 32326,
+    "sha256": "ee9bf211f7f09f7f5df0fc2e8294dfe764bbb0a87520159060eb32de58cfd0fe"
+  },
+  {
+    "file": "nextjs-064lo86lqxabn.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/064lo86lqxabn.js",
+    "bytes": 135743,
+    "sha256": "ea9e194bba859e5f338241c33ff5e90fd8ea9e8b6a046a962d0793cea230c866"
+  },
+  {
+    "file": "nextjs-3njl687qe8dmd.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/3njl687qe8dmd.js",
+    "bytes": 229503,
+    "sha256": "7aade1f3959ec566b09287268da9a21cceb43f4c35f8c54f5d06b1e93aee1caf"
+  },
+  {
+    "file": "nextjs-1qbb90gh_01zx.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/1qbb90gh_01zx.js",
+    "bytes": 28141,
+    "sha256": "ed3212b6518b71239ec36b6942ab8795b6515767770ede94a92b10cd797751b8"
+  },
+  {
+    "file": "nextjs-turbopack-2cxt_o3113dgu.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/turbopack-2cxt_o3113dgu.js",
+    "bytes": 13269,
+    "sha256": "3eae0d0c40865801745fff91b68a761a1b8a9911d7f873ca1599e16c52620852"
+  },
+  {
+    "file": "nextjs-0be5zeybd87bq.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/0be5zeybd87bq.js",
+    "bytes": 20072,
+    "sha256": "9020644fb6dab4c27b7239b1ef592eefcb1196973c1a4a30cdf1f92a8a370180"
+  },
+  {
+    "file": "nextjs-2q6evjwm-565v.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/2q6evjwm-565v.js",
+    "bytes": 26926,
+    "sha256": "d43801f5709cc869420aea453dde724024c1a18db85e0b76b2bc4f4de674e9d3"
+  },
+  {
+    "file": "nextjs-3ggouivzyl6i4.js",
+    "url": "https://nextjs.org/_next/static/immutable/chunks/3ggouivzyl6i4.js",
+    "bytes": 25947,
+    "sha256": "11148ec4ef4b0588e10061e835e11004a7928fc84b2085a38fcfeb0adf844928"
+  }
+]
