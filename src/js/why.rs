@@ -129,11 +129,14 @@ impl Ledger {
     }
 
     /// The residual gets `expr` at `pc`: a call of a standard built-in, when
-    /// it is one (an object that flows into runtime code at that pc flows
-    /// into that call).
-    pub(super) fn emitted(&self, pc: usize, expr: &RExpr) {
+    /// it is one whose operands specialization all knew (`known`), so a
+    /// model of it could have folded it: an object that flows into runtime
+    /// code at that pc flows into that call. (Given a runtime value too, the
+    /// call is the run's, as are the objects it is given: what the call's
+    /// operands are reaches them, see `Analysis::call`.)
+    pub(super) fn emitted(&self, pc: usize, expr: &RExpr, known: bool) {
         if let RExpr::Call(c, _) | RExpr::New(c, _) = expr {
-            if let Some(name) = builtin_callee(c) {
+            if let Some(name) = builtin_callee(c).filter(|_| known) {
                 self.builtins.borrow_mut().insert(pc, name);
             }
         }
@@ -1516,6 +1519,31 @@ fn defs_and_uses(prog: &Program<Op, Cond>, defs: &mut Vec<(usize, RExpr)>, used:
 }
 
 impl Js {
+    /// Are the operands of the residual call `expr` (its arguments, and the
+    /// receiver of a method of one) all values specialization knew: a
+    /// constant, a materialized object, a function of known code, a
+    /// standard built-in read by name, a literal of such?
+    pub(super) fn why_operands_known(&self, expr: &RExpr) -> bool {
+        let (RExpr::Call(c, args) | RExpr::New(c, args)) = expr else { return false };
+        let recv_known = match &**c {
+            RExpr::BoundMethod { recv, .. } => self.why_known_operand(recv),
+            _ => true,
+        };
+        recv_known && args.iter().all(|a| self.why_known_operand(a))
+    }
+
+    fn why_known_operand(&self, e: &RExpr) -> bool {
+        match e {
+            e if is_const(e) => true,
+            RExpr::Var(v) => matches!(self.var_ids.borrow().keys.get(v), Some(VarKey::Escape(_))),
+            RExpr::FnRef { caps, .. } => caps.iter().all(|c| self.why_known_operand(c)),
+            RExpr::NewFn { .. } => true,
+            RExpr::ObjectLit(fields) => fields.iter().all(|(_, x)| self.why_known_operand(x)),
+            RExpr::ArrayLit(xs) => xs.iter().all(|x| self.why_known_operand(x)),
+            _ => matches!(global_chain(e), Some((root, _)) if is_builtin_global(&root)),
+        }
+    }
+
     /// Is residual variable `v` one that holds an object the residual made
     /// (a materialized object, a merged local or field that may hold one, a
     /// temp of a call that makes one)?

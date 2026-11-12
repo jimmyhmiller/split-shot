@@ -177,11 +177,11 @@
  },
  "class_extends_builtin.js": {
   "merged": 0,
-  "gap": 10
+  "gap": 0
  },
  "class_extends_null.js": {
   "merged": 0,
-  "gap": 12
+  "gap": 0
  },
  "class_from_source.js": {
   "merged": 0,
@@ -353,7 +353,7 @@
  },
  "esbuild_cjs_interop.js": {
   "merged": 0,
-  "gap": 3
+  "gap": 0
  },
  "escape_on_one_path.js": {
   "merged": 0,
@@ -417,7 +417,7 @@
  },
  "fresh_symbol_key_holders.js": {
   "merged": 0,
-  "gap": 40
+  "gap": 33
  },
  "fresh_symbol_key_read.js": {
   "merged": 0,
@@ -473,7 +473,7 @@
  },
  "generator_values_read_once.js": {
   "merged": 0,
-  "gap": 17
+  "gap": 8
  },
  "generators.js": {
   "merged": 0,
@@ -625,7 +625,7 @@
  },
  "native_constructor_prototypes.js": {
   "merged": 0,
-  "gap": 31
+  "gap": 2
  },
  "native_distinct_capture_cells.js": {
   "merged": 0,
@@ -653,7 +653,7 @@
  },
  "native_source_code_guards.js": {
   "merged": 0,
-  "gap": 54
+  "gap": 2
  },
  "new_object_and_string.js": {
   "merged": 0,
@@ -737,7 +737,7 @@
  },
  "pristine_reflective_by_value.js": {
   "merged": 0,
-  "gap": 12
+  "gap": 11
  },
  "pristine_reviver_this.js": {
   "merged": 0,
@@ -793,7 +793,7 @@
  },
  "receiver_read_once.js": {
   "merged": 0,
-  "gap": 11
+  "gap": 2
  },
  "recursion_after_dynamic_branch.js": {
   "merged": 0,
@@ -981,7 +981,7 @@
  },
  "tagged_templates.js": {
   "merged": 0,
-  "gap": 75
+  "gap": 72
  },
  "temporal_dead_zone.js": {
   "merged": 0,

@@ -26436,7 +26436,7 @@ impl Js {
         if makes_object(&expr) {
             self.object_temps.borrow_mut().insert(dst);
         }
-        self.why.emitted(pc, &expr);
+        self.why.emitted(pc, &expr, self.why_operands_known(&expr));
         out.push(Op::Eval { dst, expr });
     }
 
