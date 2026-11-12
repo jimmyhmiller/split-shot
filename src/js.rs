@@ -4586,6 +4586,15 @@ pub struct Js {
     /// made one of them a residual function taking a cell's value and also
     /// another form (two copies of its code). Persists across passes.
     no_unbox_fids: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// Per function, how far each capture of its closures is known (see
+    /// `CapCeil`): lowered where the forms its closures asked for in a pass
+    /// differ, so that they ask for one. Persists across passes; its
+    /// version counts its changes (see `cap_forms_and`'s memo).
+    cap_ceilings: std::cell::RefCell<HashMap<usize, Vec<CapCeil>>>,
+    cap_ceilings_version: std::cell::Cell<usize>,
+    /// Per function, the distinct capture forms its closures asked for in
+    /// this pass (`residual_fn_for_closure`).
+    cap_requests: std::cell::RefCell<HashMap<usize, Vec<Vec<CapForm>>>>,
     /// Residual generator functions resuming a suspended generator activation,
     /// by (function, resume pc, operand stack depth); see `resume_fn_for`.
     resume_memo: std::cell::RefCell<HashMap<(usize, usize, usize), usize>>,
@@ -4814,13 +4823,25 @@ enum CapForm {
     FinalCell(Shape),
 }
 
+/// How much of a capture a function's closures may know (see
+/// `Js::cap_ceilings`), from most to least: as its form says (`Free`); a
+/// final cell's value, nothing known of it (`Unknown`, the forms asked for
+/// it knowing different things); the capture as it is, a final cell as
+/// the cell (`Cell`, the forms differing more).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum CapCeil {
+    Free,
+    Unknown,
+    Cell,
+}
+
 /// A closure's capture forms (`Js::cap_forms_and`) and what they were
 /// computed from: its captures, the objects being made, the versions of the
 /// tables consulted, and the heap objects read (see `HEAP_READS`).
 struct CapMemo {
     captured: Vec<Abs>,
     making: Vec<usize>,
-    versions: (usize, usize),
+    versions: (usize, usize, usize),
     reads: Vec<(usize, Option<std::rc::Rc<HeapObj>>)>,
     forms: Vec<CapForm>,
 }
@@ -5534,6 +5555,9 @@ impl Js {
             fn_memo: std::cell::RefCell::new(HashMap::new()),
             fn_variant_memo: std::cell::RefCell::new(HashMap::new()),
             no_unbox_fids: std::cell::RefCell::new(std::collections::HashSet::new()),
+            cap_ceilings: Default::default(),
+            cap_ceilings_version: std::cell::Cell::new(0),
+            cap_requests: Default::default(),
             resume_memo: std::cell::RefCell::new(HashMap::new()),
             halt_at: std::cell::RefCell::new(Vec::new()),
             entry: EntrySplit::default(),
@@ -6087,7 +6111,7 @@ impl Js {
             m.sort_unstable();
             m
         };
-        let versions = (self.no_unbox_fids.borrow().len(), self.declared_types.borrow().len());
+        let versions = (self.no_unbox_fids.borrow().len(), self.cap_ceilings_version.get(), self.declared_types.borrow().len());
         let key = (fid, addr, with);
         let hit = self.cap_memo.borrow().get(&key).and_then(|m| {
             (m.captured.as_slice() == captured && m.making == making && m.versions == versions && heap.reads_unchanged(&m.reads)).then(|| m.forms.clone())
@@ -6151,13 +6175,16 @@ impl Js {
             }
             _ => false,
         };
+        // (How far each may be known: see `cap_ceilings`.)
+        let ceilings = self.cap_ceilings.borrow().get(&fid).cloned().unwrap_or_default();
+        let ceil = |i: usize| ceilings.get(i).copied().unwrap_or(CapCeil::Free);
         // (How each is passed: its final cell's value, or as it is.)
         let unboxed: Vec<Option<Abs>> = captured
             .iter()
             .enumerate()
             .map(|(i, c)| {
                 let cell = self.fn_cell_captures[fid].get(i).copied().unwrap_or(false);
-                Js::final_cell_value(heap, c).filter(|v| cell && !plain && !reaches_made(v))
+                Js::final_cell_value(heap, c).filter(|v| cell && !plain && ceil(i) != CapCeil::Cell && !reaches_made(v))
             })
             .collect();
         // (The values it is given, its captures first: one met again in
@@ -6170,9 +6197,10 @@ impl Js {
         for (i, c) in captured.iter().enumerate() {
             let cell = self.fn_cell_captures[fid].get(i).copied().unwrap_or(false);
             let form = match (cell, &unboxed[i]) {
+                (true, Some(_)) if ceil(i) == CapCeil::Unknown => CapForm::FinalCell(Shape::Runtime),
                 (true, Some(v)) => CapForm::FinalCell(self.shape_of(v, heap, &mut budget, &mut Vec::new(), &mut taker)),
                 (true, None) => CapForm::PASSED,
-                (false, _) if reaches_made(c) => CapForm::PASSED,
+                (false, _) if ceil(i) != CapCeil::Free || reaches_made(c) => CapForm::PASSED,
                 // (A capture that is no cell and no primitive is passed in
                 // any case; what is known of a function needs room.)
                 (false, _) => CapForm::Value(self.shape_of(c, heap, &mut budget, &mut Vec::new(), &mut taker)),
@@ -6619,7 +6647,49 @@ impl Js {
         self.proto_taken.set(s.proto_taken);
     }
 
+    /// Lower the ceilings of `fid`'s captures (see `cap_ceilings`) where the
+    /// forms its closures asked for this pass differ: different final
+    /// cells' forms to the value unknown, any other difference to the
+    /// capture as it is. Whether any was lowered.
+    fn lower_cap_ceilings(&self, fid: usize) -> bool {
+        if env_flag!("PE_NO_CAP_CEILINGS") {
+            return false;
+        }
+        let ncap = self.ncaptured[fid];
+        let req = self.cap_requests.borrow();
+        let Some(asked) = req.get(&fid) else { return false };
+        let mut ceilings = self.cap_ceilings.borrow_mut();
+        let cur = ceilings.entry(fid).or_insert_with(|| vec![CapCeil::Free; ncap]);
+        let mut lowered = false;
+        for i in 0..ncap {
+            let col: Vec<&CapForm> = asked.iter().filter_map(|f| f.get(i)).collect();
+            let Some(first) = col.first() else { continue };
+            let need = if col.iter().all(|f| f == first) {
+                CapCeil::Free
+            } else if col.iter().all(|f| matches!(f, CapForm::FinalCell(_))) {
+                CapCeil::Unknown
+            } else {
+                CapCeil::Cell
+            };
+            if need > cur[i] {
+                cur[i] = need;
+                lowered = true;
+            }
+        }
+        if lowered {
+            self.cap_ceilings_version.set(self.cap_ceilings_version.get() + 1);
+        }
+        lowered
+    }
+
     fn residual_fn_for_closure(&self, fid: usize, forms: &[CapForm]) -> usize {
+        {
+            let mut req = self.cap_requests.borrow_mut();
+            let asked = req.entry(fid).or_default();
+            if !asked.iter().any(|f| f.as_slice() == forms) {
+                asked.push(forms.to_vec());
+            }
+        }
         if forms.iter().all(|f| *f == CapForm::PASSED) || env_flag!("PE_NO_CAPTURE_VARIANTS") {
             return self.residual_fn_for(fid);
         }
@@ -8010,7 +8080,9 @@ impl Js {
                 added = true;
             }
             // A function made both as one taking final cells' values and in
-            // another form: its closures pass cells, and specialize again.
+            // another form: its closures know less of the captures their
+            // forms differ in (see `lower_cap_ceilings`), or, those agreeing,
+            // pass cells; and specialize again.
             {
                 let fns = self.residual_fns.borrow();
                 let mut forms: HashMap<usize, (usize, bool)> = HashMap::new();
@@ -8023,7 +8095,7 @@ impl Js {
                 }
                 let mut no = self.no_unbox_fids.borrow_mut();
                 for (f, (n, unboxed)) in forms {
-                    if n >= 2 && unboxed && no.insert(f) {
+                    if n >= 2 && unboxed && (self.lower_cap_ceilings(f) || no.insert(f)) {
                         added = true;
                     }
                 }
@@ -8461,6 +8533,7 @@ impl Js {
         self.residual_fns.borrow_mut().clear();
         self.fn_memo.borrow_mut().clear();
         self.fn_variant_memo.borrow_mut().clear();
+        self.cap_requests.borrow_mut().clear();
         self.react_root_memo.borrow_mut().clear();
         if let Some(r) = &self.react {
             r.reset();

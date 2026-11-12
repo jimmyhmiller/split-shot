@@ -151,6 +151,10 @@
   "merged": 0,
   "gap": 10
  },
+ "capture_forms_agree_one_copy.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "capture_intrinsic_method.js": {
   "merged": 0,
   "gap": 11
