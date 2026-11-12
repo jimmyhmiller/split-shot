@@ -351,6 +351,10 @@
   "merged": 0,
   "gap": 0
  },
+ "entry_state_written_through_aliases.js": {
+  "merged": 0,
+  "gap": 32
+ },
  "entry_weak_memo.js": {
   "merged": 0,
   "gap": 4
