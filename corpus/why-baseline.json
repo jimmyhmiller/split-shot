@@ -657,7 +657,7 @@
  },
  "native_constructor_prototypes.js": {
   "merged": 0,
-  "gap": 2
+  "gap": 0
  },
  "native_distinct_capture_cells.js": {
   "merged": 0,
@@ -838,6 +838,10 @@
  "recursion_after_dynamic_branch.js": {
   "merged": 0,
   "gap": 2
+ },
+ "recursion_with_runtime_args_that_ends.js": {
+  "merged": 36,
+  "gap": 0
  },
  "recursive_static_builtins.js": {
   "merged": 0,

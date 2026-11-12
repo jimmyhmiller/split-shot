@@ -4487,6 +4487,13 @@ pub struct Js {
     /// `prelude_gives_up`), wherever in it (a nested program too).
     unfold_probes: std::cell::Cell<usize>,
     unfold_gave_up: std::cell::Cell<bool>,
+    /// The functions whose recursive call with runtime arguments a probe is
+    /// unfolding (see `recursion_progresses`), and whether it met one of
+    /// their calls that repeats an active one; the next call is the probed
+    /// one itself.
+    recursion_probed: std::cell::RefCell<Vec<usize>>,
+    recursion_stuck: std::cell::Cell<bool>,
+    recursion_probe_entry: std::cell::Cell<bool>,
     /// Residual variables holding a variable's `{value}` cell (a residual
     /// function's capture of one): reading their `value` runs nothing.
     cell_vars: std::cell::RefCell<std::collections::HashSet<usize>>,
@@ -5592,6 +5599,9 @@ impl Js {
             straight_failed: std::cell::Cell::new(false),
             unfold_probes: std::cell::Cell::new(0),
             unfold_gave_up: std::cell::Cell::new(false),
+            recursion_probed: std::cell::RefCell::new(Vec::new()),
+            recursion_stuck: std::cell::Cell::new(false),
+            recursion_probe_entry: std::cell::Cell::new(false),
             building_fns: std::cell::RefCell::new(std::collections::HashSet::new()),
             referenced_building: std::cell::RefCell::new(std::collections::HashSet::new()),
             fn_cell_captures: program.iter().map(|f| f.cell_captures.clone()).collect(),
@@ -20256,8 +20266,23 @@ impl Js {
         // the tree's.)
         let captures_progress = !captured.is_empty()
             && s.frames.iter().filter(|f| f.func == fid).all(|f| skel_progress(&f.entry_skel, &now));
+        // (Every argument dynamic: unfolded only where that makes progress.
+        // An active activation in this same context it would repeat; else a
+        // probe of its unfolding tells whether that ends without such a
+        // call, see `recursion_progresses`: a calculator's `calculate(n)` of
+        // a number returns it.)
+        let all_dynamic = recursive && !args.is_empty() && args.iter().all(|a| a.is_dynamic()) && !captures_progress;
+        let probed_entry = self.recursion_probe_entry.replace(false);
+        let all_dynamic_stuck = all_dynamic && !probed_entry && {
+            let repeats = s.frames.iter().any(|f| f.func == fid && *f.entry_skel == *now);
+            let probing = !self.recursion_probed.borrow().is_empty();
+            repeats || probing || env_flag!("PE_NO_RECURSION_PROBE") || !self.recursion_progresses(s, &callee, &args, &this, pc)
+        };
+        if all_dynamic_stuck && self.recursion_probed.borrow().contains(&fid) {
+            self.recursion_stuck.set(true);
+        }
         let dynamic_recursion = recursive
-            && ((!args.is_empty() && args.iter().all(|a| a.is_dynamic()) && !captures_progress)
+            && (all_dynamic_stuck
                 || (s.top().dyn_ctl
                     && !context.is_empty()
                     && s.frames.iter().enumerate().any(|(i, f)| {
@@ -28292,6 +28317,52 @@ impl Js {
 
     /// Would calling `callee` (a closure in `s`) here unfold to straight-line
     /// code (see `prelude_unfolds`)?
+    /// Does unfolding this call of a recursive function, every argument a
+    /// runtime value, make progress: specialized on a copy of the state up
+    /// to its return, does it meet no call of the same function repeating
+    /// an active one (see `do_call`)? Runtime branches may be taken.
+    fn recursion_progresses(&self, s: &State, callee: &Abs, args: &[Abs], this: &Abs, pc: usize) -> bool {
+        let Abs::Ref(a) = callee else { return false };
+        let Some(HeapObj::Closure { fid, .. }) = s.heap.get(a) else { return false };
+        let fid = *fid;
+        let mut probe = s.clone();
+        let top = probe.frames.pop().expect("a calling frame");
+        probe.frames = vec![top];
+        probe.handlers.clear();
+        probe.pending_joins.clear();
+        probe.top_mut().ostack.push(callee.clone());
+        probe.top_mut().ostack.extend(args.iter().cloned());
+        self.recursion_probed.borrow_mut().push(fid);
+        let saved_stuck = self.recursion_stuck.replace(false);
+        // (What the probe's branches would record is not the real run's.)
+        let contexts = self.branched_contexts.borrow().clone();
+        let mut sink = Vec::new();
+        self.recursion_probe_entry.set(true);
+        let _ = self.do_call(&mut probe, args.len(), pc, &mut sink, this.clone(), RetMode::Value, Abs::Undef);
+        self.recursion_probe_entry.set(false);
+        let unfolded = probe.frames.len() == 2;
+        if unfolded && !self.recursion_stuck.get() {
+            let resume = probe.frames[0].pc;
+            let saved_probing = self.probing.replace(true);
+            let saved_taint = self.try_taint.replace(false);
+            self.halt_at.borrow_mut().push(resume);
+            let pending = (std::mem::take(&mut *self.pending_info.borrow_mut()), std::mem::take(&mut *self.pending_fixed.borrow_mut()));
+            let _ = crate::engine::specialize(self, probe);
+            *self.pending_info.borrow_mut() = pending.0;
+            *self.pending_fixed.borrow_mut() = pending.1;
+            self.halt_at.borrow_mut().pop();
+            self.probing.set(saved_probing);
+            self.try_taint.set(saved_taint);
+        }
+        *self.branched_contexts.borrow_mut() = contexts;
+        let stuck = self.recursion_stuck.replace(saved_stuck);
+        self.recursion_probed.borrow_mut().pop();
+        if env_flag!("RESID_DEBUG") {
+            eprintln!("[RESID] probe {}: unfolded={unfolded} stuck={stuck}", self.names[fid]);
+        }
+        unfolded && !stuck
+    }
+
     fn call_unfolds(&self, s: State, callee: Abs, args: &[Abs], this: &Abs, pc: usize) -> bool {
         let fid = match &callee {
             Abs::Ref(a) => match &s.heap[a] {
