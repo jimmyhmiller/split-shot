@@ -10983,15 +10983,33 @@ fn skel_list_instance(old: &[Skel], new: &[Skel]) -> bool {
 /// Does a recursive call with argument skeletons `new` make static progress
 /// over an activation entered with `old`: some argument moved to a different
 /// static STRUCTURE (both arrays/objects/closures, neither an instance of the
-/// other), like a walk into another AST node? A changed primitive (a flag, a
-/// name) is not progress. Different argument counts count as progress (not the
-/// same kind of call).
+/// other), like a walk into another AST node? Consuming a proper suffix of a
+/// static string also makes progress, as in a regex interpreter advancing its
+/// pattern pointer. Other changed primitives (a flag, a name, a counter) are
+/// not progress. Different argument counts count as progress (not the same kind
+/// of call).
 fn skel_progress(old: &[Skel], new: &[Skel]) -> bool {
     let structured = |k: &Skel| matches!(k, Skel::Arr(..) | Skel::Obj(..) | Skel::Clo(..) | Skel::Ref(_));
     old.len() != new.len()
         || old.iter().zip(new).any(|(o, n)| {
-            structured(o) && structured(n) && !skel_instance(o, n) && !skel_instance(n, o)
+            match (o, n) {
+                (Skel::Prim(Abs::Str(a)), Skel::Prim(Abs::Str(b))) => a.len() > b.len() && a.ends_with(b),
+                _ => structured(o) && structured(n) && !skel_instance(o, n) && !skel_instance(n, o),
+            }
         })
+}
+
+#[test]
+fn static_string_recursion_progress_requires_a_proper_suffix() {
+    let string = |s: &str| Skel::Prim(Abs::Str(s.to_owned()));
+    assert!(skel_progress(&[string("ab*c$")], &[string("b*c$")]));
+    assert!(skel_progress(&[string("é😀")], &[string("😀")]));
+    assert!(skel_progress(&[string("$")], &[string("")]));
+    assert!(!skel_progress(&[string("abc")], &[string("abc")]));
+    assert!(!skel_progress(&[string("abc")], &[string("ab")]));
+    assert!(!skel_progress(&[string("abc")], &[string("xyz")]));
+    assert!(!skel_progress(&[string("bc")], &[string("abc")]));
+    assert!(!skel_progress(&[Skel::Num], &[Skel::Num]));
 }
 
 /// Does any value in the state (frames' locals and operand stacks, heap

@@ -323,6 +323,24 @@ mod tests {
     }
 
     #[test]
+    fn static_pattern_suffix_recursion_specializes_under_dynamic_control() {
+        let src = r#"
+            function consume(pattern, text, pos) {
+                if (pattern.length === 0) return pos === text.length;
+                if (text[pos] !== pattern[0]) return false;
+                return consume(pattern.slice(1), text, pos + 1);
+            }
+            function main(text) { return consume("abc", text, 0); }
+        "#;
+        let js = to_js(src).unwrap();
+        assert!(!js.contains(".slice(") && !js.contains("function __rf"), "static suffix traversal should unfold:\n{js}");
+        assert_node_equiv_with(src, r#"
+            for (const text of ["", "a", "ab", "abc", "abcd", "abd", "abc\n", "😀"])
+                out.push(main(text));
+        "#);
+    }
+
+    #[test]
     fn static_depth_recursion_folds_to_constant() {
         // A recursive function called with a static counter is fully unrolled.
         let src = "
