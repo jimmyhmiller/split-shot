@@ -48,6 +48,20 @@ fn main() -> ExitCode {
     // annotations are not taken as facts about values.
     let ts_flag = raw.iter().any(|a| a == "--ts");
     let trust_types = !raw.iter().any(|a| a == "--no-trust-types");
+    // `--host-globals A,B,..`: the host's global object has the engine's
+    // globals and these, and no other the program does not define.
+    let host_globals: Option<Vec<String>> = match raw.iter().position(|a| a == "--host-globals") {
+        Some(i) if i + 1 < raw.len() => {
+            let list = raw.remove(i + 1);
+            raw.remove(i);
+            Some(list.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect())
+        }
+        Some(_) => {
+            eprintln!("--host-globals needs a comma-separated list of names (it may be empty: \"\")");
+            return ExitCode::FAILURE;
+        }
+        None => None,
+    };
     // `--entry NAME`: specialize the function NAME (default `main`).
     let entry = match raw.iter().position(|a| a == "--entry") {
         Some(i) if i + 1 < raw.len() => {
@@ -136,6 +150,7 @@ fn main() -> ExitCode {
         eprintln!("  --source-names  name the residual's variables as the program names them, where one stands for one");
         eprintln!("  --prepack-intrinsics  the environment defines Prepack's intrinsics (__abstract, ...)");
         eprintln!("  --closed-script  no other script reads this one's top-level let/const/class");
+        eprintln!("  --host-globals A,B  the host's globals besides the engine's: any other one the program does not define is absent");
         eprintln!("  --react       rely on React's contract: fold component trees (__optimizeReactComponentTree)");
         eprintln!("  --ts          the file is TypeScript (also for a .ts file); its annotations are facts");
         eprintln!("  --no-trust-types  do not take TypeScript annotations as facts");
@@ -192,10 +207,10 @@ fn main() -> ExitCode {
         (src, entry)
     };
     let typescript = !module_program && (ts_flag || path.ends_with(".ts"));
-    if emit_js && (entry != "main" || typescript || module_program || source_names || why || why_json.is_some()) {
+    if emit_js && (entry != "main" || typescript || module_program || source_names || why || why_json.is_some() || host_globals.is_some()) {
         // (A program of modules is linked to one script whose top-level
         // names are the linker's own: no other script reads them.)
-        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react, source_names };
+        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react, source_names, host_globals: host_globals.clone() };
         // (`PE_REPEAT=n`: the whole compilation run n times more first, its
         // output dropped: one process to profile.)
         let repeat: usize = std::env::var("PE_REPEAT").ok().map(|n| n.parse().expect("PE_REPEAT is a count")).unwrap_or(0);

@@ -80,6 +80,9 @@ pub fn to_js_why(
     if opts.closed_script {
         vm.set_closed_script();
     }
+    if let Some(names) = &opts.host_globals {
+        vm.set_host_globals(names.clone());
+    }
     let t = phase("engine setup", t);
     let mut prog = vm.specialize_program();
     let t = phase("specialize", t);

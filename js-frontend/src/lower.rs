@@ -94,6 +94,10 @@ pub struct LowerOpts {
     /// The residual names each variable that stands for one of the
     /// program's as the source does (see `codegen::set_source_names`).
     pub source_names: bool,
+    /// The host's globals besides the engine's, when declared: any other
+    /// global the program does not define is absent (see the engine's
+    /// `Js::set_host_globals`).
+    pub host_globals: Option<Vec<String>>,
 }
 
 /// `compile_full`, with the lowering options.
@@ -2912,8 +2916,9 @@ impl Compiler {
             }
             let name = name.map(|n| ast::Ident::new_no_ctxt(n.into(), Default::default()));
             let i = ctor_fid - self.decls.len();
+            let named_globals: Vec<String> = globals.iter().cloned().collect();
             self.lifted_sources[i] = Some(FnSource { node: FnNode::Class { class: c, name, hint }, captures: vars, globals, strict: true, rerun: false });
-            self.lifted[i].class_source = Some(partial::js::ClassSourceCaps { caps: source_caps, users });
+            self.lifted[i].class_source = Some(partial::js::ClassSourceCaps { caps: source_caps, users, globals: named_globals });
             return Ok(Expr::Seq(stmts, Box::new(Expr::MarkClass(Box::new(Expr::Var(class_slot))))));
         }
         Ok(Expr::Seq(stmts, Box::new(Expr::Var(class_slot))))

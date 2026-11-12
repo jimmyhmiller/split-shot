@@ -28,6 +28,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { hostArgs } = require('./corpus-host.js');
 
 const root = path.resolve(__dirname, '..');
 const argv = process.argv.slice(2);
@@ -61,7 +62,7 @@ const rows = [];
 const kinds = new Map();
 for (const f of files) {
   const out = path.join(tmp, f + '.json');
-  const r = spawnSync(bin, ['--js', '--why-json', out, path.join(dir, f)], { encoding: 'utf8', timeout: 120000 });
+  const r = spawnSync(bin, ['--js', ...hostArgs(fs.readFileSync(path.join(dir, f), 'utf8')), '--why-json', out, path.join(dir, f)], { encoding: 'utf8', timeout: 120000 });
   if (r.status !== 0 || !fs.existsSync(out)) {
     const err = ((r.stderr || '') + (r.error ? String(r.error) : '')).trim().split('\n').filter((l) => l && !l.startsWith('note:'));
     rows.push({ file: f, failed: err[err.length - 1] || 'exit ' + r.status });

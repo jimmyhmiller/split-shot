@@ -21,6 +21,10 @@
 //                                  `main` must not match (what main computes
 //                                  folded, whatever else main defines)
 //   // max-lines: <n>              the residual must have at most n lines
+//   // host-globals: declared      the specializer is told the host's globals
+//                                  (`--host-globals`): those of the context
+//                                  programs run in (corpus-host.js), besides
+//                                  the engine's
 //
 // Every file gets one verdict:
 //   PASS         residual agrees with the original on every input and meets
@@ -87,6 +91,9 @@ for (let i = 0; i < argv.length; i++) {
 
 const TIMEOUT_MS = 2000;
 
+// (The context a program runs in: see corpus-host.js.)
+const { sandbox, hostArgs } = require('./corpus-host.js');
+
 function header(src, key) {
   const m = src.match(new RegExp('^//\\s*' + key + ':\\s*(.*)$', 'm'));
   return m ? m[1].trim() : null;
@@ -95,8 +102,7 @@ function header(src, key) {
 // `main(input)` awaited: its settled value or rejection, after the
 // microtask queue has drained.
 async function observeAsync(code, input) {
-  const sandbox = { console: { log() {} }, TextDecoder, TextEncoder };
-  const ctx = vm.createContext(sandbox);
+  const ctx = vm.createContext(sandbox());
   try {
     vm.runInContext(code + '\n;globalThis.__main = main;', ctx, { timeout: TIMEOUT_MS });
   } catch (e) {
@@ -119,8 +125,7 @@ async function observeAsync(code, input) {
 }
 
 function observe(code, input, after) {
-  const sandbox = { console: { log() {} }, TextDecoder, TextEncoder };
-  const ctx = vm.createContext(sandbox);
+  const ctx = vm.createContext(sandbox());
   try {
     vm.runInContext(code + '\n;globalThis.__main = main;', ctx, { timeout: TIMEOUT_MS });
   } catch (e) {
@@ -166,8 +171,7 @@ function observe(code, input, after) {
 // runs once when it loads, as it would for any caller; whatever main changes
 // in the state that code made, the next call sees.
 async function observeRepeated(code, inputs, isAsync) {
-  const sandbox = { console: { log() {} }, TextDecoder, TextEncoder };
-  const ctx = vm.createContext(sandbox);
+  const ctx = vm.createContext(sandbox());
   try {
     vm.runInContext(code + '\n;globalThis.__main = main;', ctx, { timeout: TIMEOUT_MS });
   } catch (e) {
@@ -229,7 +233,7 @@ for (const f of files) {
   }
   const inputs = JSON.parse(inputsH);
   const t0 = Date.now();
-  const r = spawnSync(bin, ['--js', file], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(bin, ['--js', ...hostArgs(src), file], { encoding: 'utf8', timeout: 60000 });
   const ms = Date.now() - t0;
   if (r.status !== 0) {
     const err = (r.stderr || '') + (r.error ? String(r.error) : '');

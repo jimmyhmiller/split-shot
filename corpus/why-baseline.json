@@ -519,6 +519,10 @@
   "merged": 0,
   "gap": 0
  },
+ "host_globals_declared.js": {
+  "merged": 0,
+  "gap": 3
+ },
  "if_conversion.js": {
   "merged": 0,
   "gap": 4

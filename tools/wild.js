@@ -32,7 +32,9 @@
 //      then runs in a bare `node:vm` context, where the residual will run: a
 //      case that differs there from Node (it wants `process`, say) is
 //      `skipped`, since no residual could be compared fairly.
-//   3. `js-frontend --js --budget 100M --why-json` specializes the bundle.
+//   3. `js-frontend --js --budget 100M --host-globals ... --why-json`
+//      specializes the bundle, told the globals the context it runs in has
+//      besides the engine's (`sandboxGlobals`): any other is absent.
 //   4. The residual runs in `node:vm` contexts (a fresh one per input, and
 //      one for the repeated calls) and every result, or thrown error by name
 //      and message, is compared with the oracle's.
@@ -176,8 +178,11 @@ async function bundle(casePath, dir) {
 
 // ---------------------------------------------------------------- observing
 
-function newContext() {
-  const sandbox = {
+// The globals the host gives besides the engine's: the residual runs where
+// only these are, and the specializer is told so (`--host-globals`), so a
+// library's probe of any other (`typeof process`, `typeof define`) folds.
+function sandboxGlobals() {
+  return {
     console: { log() {}, warn() {}, error() {}, info() {}, debug() {} },
     setTimeout,
     clearTimeout,
@@ -187,7 +192,11 @@ function newContext() {
     TextDecoder,
     structuredClone,
   };
-  return vm.createContext(sandbox);
+}
+const HOST_GLOBALS = Object.keys(sandboxGlobals());
+
+function newContext() {
+  return vm.createContext(sandboxGlobals());
 }
 
 // A script loaded in a fresh context, or why it does not load.
@@ -297,7 +306,7 @@ async function specialize(dir) {
   if (!fs.existsSync(bin)) throw new Error(`no specializer at ${bin}`);
   // (`--source-names`: an engine's TypeError quotes the source text of what
   // was called, `input.slice is not a function`.)
-  const args = ['--js', '--source-names', '--budget', '100M', '--why-json', 'why.json', 'bundle.mjs'];
+  const args = ['--js', '--source-names', '--budget', '100M', '--host-globals', HOST_GLOBALS.join(','), '--why-json', 'why.json', 'bundle.mjs'];
   const timed = process.platform === 'darwin' && fs.existsSync('/usr/bin/time');
   const cmd = timed ? '/usr/bin/time' : bin;
   const cmdArgs = timed ? ['-l', bin, ...args] : args;

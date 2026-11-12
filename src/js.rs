@@ -4402,6 +4402,18 @@ pub struct Js {
     /// them; see `pristine`), and whether that holds for all of them.
     unpristine: std::cell::RefCell<std::collections::BTreeSet<String>>,
     all_unpristine: std::cell::Cell<bool>,
+    /// The host's globals besides the engine's (`set_host_globals`), when
+    /// declared: any other global is absent while the program defines it
+    /// nowhere (see `host_absent`).
+    host_globals: Option<std::collections::HashSet<String>>,
+    /// Globals not to take as absent: the residual may write them (see
+    /// `crate::pristine::Writes::global_keys`), or code run as it is names
+    /// them; all of them once the residual may write the global object by a
+    /// computed key.
+    present_globals: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    all_globals_present: std::cell::Cell<bool>,
+    /// The globals a pass took as absent.
+    assumed_absent: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// Global bindings the program defines on the global object with
     /// `Object.defineProperty` and kin (an accessor, a read-only value): a
     /// write to one is the runtime's (a setter runs, a read-only one keeps
@@ -4794,6 +4806,50 @@ impl Js {
     pub fn set_closed_script(&mut self) {
         self.entry.closed.set(true);
     }
+
+    /// The host's global object has the engine's globals (`ENGINE_GLOBALS`)
+    /// and these, and no other the program does not define: `typeof` of one
+    /// is `"undefined"`, the global object's property of its name is
+    /// `undefined`, and `in` it is false. A global the residual may write
+    /// (by name, or any by a computed key, see `crate::pristine`) or that
+    /// code run as it is names is not taken as absent, and the program is
+    /// specialized again; a write through some other alias of the global
+    /// object is not looked for, as for the built-ins.
+    pub fn set_host_globals(&mut self, names: Vec<String>) {
+        let mut present = std::collections::BTreeSet::new();
+        for i in &self.code {
+            if let Instr::PushVerbatim(_, globals) = i {
+                present.extend(globals.iter().cloned());
+            }
+        }
+        for c in self.fn_class_source.iter().flatten() {
+            present.extend(c.globals.iter().cloned());
+        }
+        *self.present_globals.borrow_mut() = present;
+        let object_names: Vec<String> = std::iter::once("globalThis".to_string()).chain(names.iter().filter(|n| matches!(n.as_str(), "global" | "window" | "self")).cloned()).collect();
+        HOST_GLOBAL_OBJECT_NAMES.with(|h| *h.borrow_mut() = Some(object_names));
+        self.host_globals = Some(names.into_iter().collect());
+    }
+
+    /// Is the global `g` absent (see `set_host_globals`), as `s` has the
+    /// globals? (Recorded: see `assumed_absent`.)
+    fn host_absent(&self, s: &State, g: &str) -> bool {
+        let Some(host) = &self.host_globals else { return false };
+        if host.contains(g)
+            || ENGINE_GLOBALS.contains(&g)
+            || crate::pristine::BUILTIN_GLOBALS.contains(&g)
+            || is_global_object(&Abs::Dyn(RExpr::Global(g.to_string())))
+            || s.globals.contains_key(g)
+            || self.script_decls.iter().any(|(n, _)| n == g)
+            || self.all_globals_present.get()
+            || self.present_globals.borrow().contains(g)
+            || env_flag!("PE_NO_HOST_ABSENT")
+        {
+            return false;
+        }
+        self.assumed_absent.borrow_mut().insert(g.to_string());
+        true
+    }
 }
 
 /// Prepack's intrinsic functions (see `Js::intrinsics`). (Not `__isAbstract`
@@ -4987,6 +5043,8 @@ pub struct ClassSourceCaps {
     /// `static` for any other member). A source leaving some methods out
     /// is passed only those another member names (`RExpr::ClassSrc::keep`).
     pub users: Vec<Vec<String>>,
+    /// The global names its source names.
+    pub globals: Vec<String>,
 }
 
 /// A generated residual function: `function __rf{id}(cap.., param..) { body }`.
@@ -5056,6 +5114,8 @@ pub struct ResidualFn {
 
 impl Js {
     pub fn new(program: &[FuncDef]) -> Self {
+        // (No host declared yet: see `set_host_globals`.)
+        HOST_GLOBAL_OBJECT_NAMES.with(|h| *h.borrow_mut() = None);
         let mut code = Vec::new();
         let mut entries = vec![0; program.len()];
         let mut nslots = vec![0; program.len()];
@@ -5479,6 +5539,10 @@ impl Js {
             lengths: program.iter().map(|f| f.length).collect(),
             is_async: program.iter().map(|f| f.is_async).collect(),
             unpristine: std::cell::RefCell::new(std::collections::BTreeSet::new()),
+            host_globals: None,
+            present_globals: std::cell::RefCell::new(std::collections::BTreeSet::new()),
+            all_globals_present: std::cell::Cell::new(false),
+            assumed_absent: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             defined_globals: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             defined_globals_all: std::cell::Cell::new(false),
             // (`PE_NO_PRISTINE`: assume nothing about built-ins, for debugging.)
@@ -8102,6 +8166,23 @@ impl Js {
                 if react_again {
                     added = true;
                 }
+                // Globals taken as absent that the residual may write (by
+                // name, or any by a computed key): not so, again.
+                {
+                    let absent = self.assumed_absent.borrow();
+                    if !absent.is_empty() {
+                        if w.wild && !self.all_globals_present.get() {
+                            self.all_globals_present.set(true);
+                            added = true;
+                        } else {
+                            let written: Vec<String> = absent.iter().filter(|g| w.global_keys.contains(*g)).cloned().collect();
+                            if !written.is_empty() {
+                                self.present_globals.borrow_mut().extend(written);
+                                added = true;
+                            }
+                        }
+                    }
+                }
                 let mut assumed = self.assumed_pristine.borrow().clone();
                 // (The residual cleanup deletes unread `Date.now()` and `Math`
                 // calls, relying on these: see `pure_builtin_call`.)
@@ -8655,6 +8736,7 @@ impl Js {
         self.simple_vars.borrow_mut().clear();
         self.resume_memo.borrow_mut().clear();
         self.assumed_pristine.borrow_mut().clear();
+        self.assumed_absent.borrow_mut().clear();
         self.fresh_freezes.set(0);
         self.shared_fn_objects.borrow_mut().clear();
         self.halt_at.borrow_mut().clear();
@@ -9513,6 +9595,16 @@ impl Js {
 /// `x` of any key (see `facts::Info::made_by`).
 const ANY_KEY_VAR: usize = usize::MAX;
 
+/// The globals an engine may give besides the standard built-ins the
+/// specializer models (`crate::pristine::BUILTIN_GLOBALS`): newer and
+/// proposed ones, and V8's own. None is taken as absent (see
+/// `Js::host_absent`), whatever the host declares.
+const ENGINE_GLOBALS: &[&str] = &[
+    "globalThis", "Iterator", "AsyncIterator", "FinalizationRegistry", "SharedArrayBuffer", "Float16Array", "WebAssembly",
+    "DisposableStack", "AsyncDisposableStack", "SuppressedError", "Temporal", "ShadowRealm", "AsyncContext", "Intl",
+    "Atomics", "escape", "unescape", "undefined", "NaN", "Infinity",
+];
+
 const STANDARD_ERRORS: &[&str] = &["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError"];
 
 /// (`MEM_DEBUG`: the process's peak resident size, from `getrusage`.)
@@ -9889,7 +9981,18 @@ fn set_data_prop(o: &mut HeapObj, k: impl Into<PKey>, v: Abs) {
 /// The global object by one of its global names (`globalThis`, `global`,
 /// `window`, `self`), assumed unshadowed and pristine.
 fn is_global_object(v: &Abs) -> bool {
-    matches!(v, Abs::Dyn(RExpr::Global(g)) if matches!(g.as_str(), "globalThis" | "global" | "window" | "self"))
+    let Abs::Dyn(RExpr::Global(g)) = v else { return false };
+    HOST_GLOBAL_OBJECT_NAMES.with(|h| match &*h.borrow() {
+        Some(names) => names.iter().any(|n| n == g),
+        None => matches!(g.as_str(), "globalThis" | "global" | "window" | "self"),
+    })
+}
+
+thread_local! {
+    /// With a declared host (`Js::set_host_globals`): the names of its
+    /// global object, `globalThis` and those of `global`, `window` and
+    /// `self` it declares. (Without one, all four are taken to be it.)
+    static HOST_GLOBAL_OBJECT_NAMES: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The modeled iterator kinds (`HeapObj::Builtin`): `ArrayIterator` holds
@@ -11740,6 +11843,11 @@ impl Js {
                     Some((v, _)) => v.clone(),
                     None => Abs::Dyn(RExpr::Global(name.clone())),
                 };
+                // (A global the host does not have is read as it is, a
+                // ReferenceError at runtime: the operands of a pure `&&` are
+                // evaluated here either way, see `Expr::Opaque`. Its `typeof`
+                // and the global object's property of its name fold, see
+                // `host_absent`.)
                 self.push(s, v)
             }
             // A native `finally` region: only in a residual generator body
@@ -13334,6 +13442,10 @@ impl Js {
                         if s.globals.contains_key(k) && !self.is_lexical_global(k) {
                             return self.push(s, Abs::Bool(true));
                         }
+                        // (One the host does not have: see `host_absent`.)
+                        if self.host_absent(s, k) {
+                            return self.push(s, Abs::Bool(false));
+                        }
                     }
                     self.sync_globals(s, false, out);
                 }
@@ -13447,6 +13559,12 @@ impl Js {
                     }
                 }
                 if op == "typeof" && operands.len() == 1 {
+                    // A global the host does not have: `"undefined"`.
+                    if let Abs::Dyn(RExpr::Global(g)) = &operands[0] {
+                        if self.host_absent(s, g) {
+                            return self.push(s, Abs::Str("undefined".into()));
+                        }
+                    }
                     // A static method of a standard global (`Object.freeze`).
                     if let Abs::Dyn(RExpr::Get(g, m)) = &operands[0] {
                         if let RExpr::Global(g) = &**g {
@@ -22078,7 +22196,11 @@ impl Js {
             return self.push(s, Abs::Str(format!("Symbol.{name}")));
         }
         // `globalThis.undefined`, `.NaN`, `.Infinity`: the global object's
-        // properties no code can change.
+        // properties no code can change. (And one the host does not have,
+        // `undefined`: see `host_absent`.)
+        if is_global_object(&o) && !s.globals.contains_key(k.as_str()) && self.host_absent(s, k) {
+            return self.push(s, Abs::Undef);
+        }
         if is_global_object(&o) {
             match k.as_str() {
                 "undefined" => return self.push(s, Abs::Undef),
