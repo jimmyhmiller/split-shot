@@ -271,6 +271,10 @@
   "merged": 0,
   "gap": 0
  },
+ "counter_cell_across_branches.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "counter_only_inner_loop.js": {
   "merged": 0,
   "gap": 0
@@ -324,7 +328,7 @@
   "gap": 9
  },
  "descent_parser.js": {
-  "merged": 98,
+  "merged": 120,
   "gap": 0
  },
  "destructure.js": {

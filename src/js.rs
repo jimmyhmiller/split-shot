@@ -1421,6 +1421,10 @@ struct PendingJoin {
     /// For the join of the whole `if`: the variable its condition is in,
     /// whose truthiness tells its arms apart (see `consume_pending_joins`).
     cond: Option<usize>,
+    /// For the join of the whole `if`: the variables' cells its arms write,
+    /// kept modeled across it, their value lifted to one variable at the
+    /// join (see `join_cells`).
+    cells: Vec<usize>,
 }
 
 /// What an `if`'s join needs of the state the `if` branched from, to tell
@@ -13960,6 +13964,19 @@ impl Js {
                         // if that reassigns a variable it reads, it is frozen to
                         // the old value like any other live reader.
                         let hm = self.if_heap_modified[pc].clone();
+                        // (A variable's cell an arm writes stays modeled when
+                        // the `if` has one join: its value is lifted there, see
+                        // `join_cells`.)
+                        let cells: Vec<(usize, usize)> = if self.if_forward_joins[pc].is_empty() && self.if_join[pc].is_some() && !self.facts_off && !env_flag!("PE_NO_JOIN_CELLS") {
+                            hm.iter().filter_map(|&sl| match s.top().locals.get(sl) {
+                                Some(Abs::Ref(a)) if self.join_cell(s, *a) => Some((sl, *a)),
+                                _ => None,
+                            }).collect()
+                        } else {
+                            Vec::new()
+                        };
+                        let hm: Vec<usize> = hm.into_iter().filter(|sl| !cells.iter().any(|(c, _)| c == sl)).collect();
+                        let cells: Vec<usize> = cells.into_iter().map(|(_, a)| a).collect();
                         let c = if hm.is_empty() {
                             c
                         } else {
@@ -14003,7 +14020,7 @@ impl Js {
                         // itself tells is learned on each side as well.)
                         let original = r.clone();
                         let (r, cond_var) = match (&self.if_join[pc], r) {
-                            (Some((_, mods)), r) if !mods.is_empty() && !self.facts_off && !env_flag!("PE_NO_JOIN_CASES") => match r {
+                            (Some((_, mods)), r) if (!mods.is_empty() || !self.if_heap_modified[pc].is_empty()) && !self.facts_off && !env_flag!("PE_NO_JOIN_CASES") => match r {
                                 RExpr::Var(v) => (RExpr::Var(v), Some(v)),
                                 r => {
                                     let t = self.aux_var(125, pc, 0);
@@ -14048,15 +14065,15 @@ impl Js {
                         // array), a marker would just make the arms' states differ
                         // by the un-popped stack and block the natural merge.
                         for (end, mods, globals) in &self.if_forward_joins[pc] {
-                            let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: None, cond: None };
+                            let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: None, cond: None, cells: Vec::new() };
                             tstate.pending_joins.push(j.clone());
                             fstate.pending_joins.push(j);
                         }
                         if let Some((end, mods)) = &self.if_join[pc] {
                             let globals = &self.if_global_mods[pc];
-                            if !mods.is_empty() || !globals.is_empty() {
+                            if !mods.is_empty() || !globals.is_empty() || !cells.is_empty() {
                                 let before = BeforeBranch(std::rc::Rc::new((s.heap.clone(), s.escaped.clone(), s.fns.clone(), s.globals.clone(), s.top().branched)));
-                                let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: Some(before), cond: cond_var };
+                                let j = PendingJoin { start: pc, end: *end, depth: s.frames.len(), mods: mods.clone(), globals: globals.clone(), before: Some(before), cond: cond_var, cells: cells.clone() };
                                 tstate.pending_joins.push(j.clone());
                                 fstate.pending_joins.push(j);
                             }
@@ -14306,9 +14323,22 @@ impl Js {
             // holds.)
             let mut defs = Vec::new();
             op_defs_deep(op, &mut defs);
+            // (Its cases dropped, a fact may still hold: what holds of
+            // both, `Info::choice`'s hull.)
             for d in &defs {
                 if mentioned.contains(d) && st.facts.values().any(|i| i.mentions(*d)) {
-                    st.facts = st.facts.iter().filter(|(_, i)| !i.mentions(*d)).map(|(k, i)| (*k, i.clone())).collect();
+                    st.facts = st
+                        .facts
+                        .iter()
+                        .filter_map(|(k, i)| {
+                            if !i.mentions(*d) {
+                                return Some((*k, i.clone()));
+                            }
+                            let mut hull = i.clone();
+                            hull.cases = None;
+                            (!hull.mentions(*d) && !hull.is_top()).then_some((*k, hull))
+                        })
+                        .collect();
                 }
             }
             match op {
@@ -27851,9 +27881,39 @@ impl Js {
         s.frames.len() == 1 && self.halt_at.borrow().last() == Some(&pc)
     }
 
+    /// Is the object at `addr` one an `if` may keep modeled across it while
+    /// its arms write it (see `PendingJoin::cells`): a variable's cell (an
+    /// object of one data property, `value`), holding no object, made by
+    /// the code (its field's variable is named after where)?
+    fn join_cell(&self, s: &State, addr: usize) -> bool {
+        !s.escaped.contains(&addr)
+            && self.creation_pc.borrow().contains_key(&addr)
+            && matches!(s.heap.get(&addr), Some(HeapObj::Object { props, proto: Abs::Undef, class: ObjClass::Ordinary, private, extensible: true })
+                if private.is_empty() && props.len() == 1 && props[0].key == "value" && props[0].attrs == 7 && matches!(props[0].val, PVal::Data(ref v) if !matches!(v, Abs::Ref(_))))
+    }
+
+    /// At an `if`'s join, the cells its arms wrote (`PendingJoin::cells`):
+    /// the fields to lift to their variables, as each arm leaves them; a
+    /// cell an arm left holding an object, or no longer a cell, made
+    /// runtime state.
+    fn join_cells(&self, ns: &mut State, cells: &[usize], out: &mut Vec<Op>) -> Vec<(usize, usize)> {
+        let mut fields = Vec::new();
+        for &a in cells {
+            if !ns.heap.contains_key(&a) || ns.escaped.contains(&a) {
+                continue;
+            }
+            if self.join_cell(ns, a) {
+                fields.push((a, 0));
+            } else {
+                self.escape(ns, a, &mut std::collections::HashSet::new(), out);
+            }
+        }
+        fields
+    }
+
     fn consume_pending_joins(&self, ns: &mut State, target: usize, out: &mut Vec<Op>) {
         while ns.pending_joins.last().map(|j| j.end) == Some(target) {
-            let PendingJoin { mods: m, globals, before, depth, cond, .. } = ns.pending_joins.pop().unwrap();
+            let PendingJoin { mods: m, globals, before, depth, cond, cells, .. } = ns.pending_joins.pop().unwrap();
             // (An arm that did nothing but assign the slots merged here:
             // the other, if it did no more, arrives in this same state and
             // is this path from here on. The activation is then no more
@@ -27909,9 +27969,44 @@ impl Js {
                 })
                 .collect();
             let heap_before = ns.heap.clone();
-            self.materialize(ns, &m, out);
+            let fields = self.join_cells(ns, &cells, out);
+            // (What each lifted field held on this arm, for the case of the
+            // condition it took, below.)
+            let held: Vec<(usize, Option<Info>)> = fields
+                .iter()
+                .map(|&(a, _)| {
+                    let v = match ns.heap.get(&a).map(|o| o.children()) {
+                        Some(kids) => kids.first().map(|v| (*v).clone()),
+                        None => None,
+                    };
+                    let info = match v {
+                        Some(Abs::Dyn(_)) => v.as_ref().and_then(|v| self.info_abs(ns, v)),
+                        Some(Abs::Ref(_)) | None => None,
+                        Some(p) => Info::of_const(&p.to_rexpr()),
+                    };
+                    (a, info)
+                })
+                .collect();
+            self.materialize_with_fields(ns, &m, &fields, out);
             if let Some(c) = cond {
                 if let Some(t) = self.truthy_in(ns, &Abs::Dyn(RExpr::Var(c))) {
+                    // (A cell's value: what it is in each case, its range
+                    // among it, which the variable's assignment would not
+                    // tell, see `identity_info`.)
+                    for (a, info) in &held {
+                        let Some(info) = info.clone() else { continue };
+                        let w = match ns.heap.get(a).map(|o| o.children()) {
+                            Some(kids) => match kids.first() {
+                                Some(Abs::Dyn(RExpr::Var(w))) => *w,
+                                _ => continue,
+                            },
+                            None => continue,
+                        };
+                        let (x, y) = if t { (info, Info::bottom()) } else { (Info::bottom(), info) };
+                        let choice = Info::choice(&RExpr::Var(c), x, y);
+                        self.pending_info.borrow_mut().insert(w, choice.clone());
+                        ns.facts.insert(w, choice);
+                    }
                     for (slot, a) in closures {
                         let Abs::Dyn(RExpr::Var(w)) = ns.frames[fi].locals[slot] else { continue };
                         let Some(info) = self.made_fn_info(&heap_before, a, &HashMap::new(), &ns.escaped) else { continue };

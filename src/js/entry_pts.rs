@@ -227,13 +227,16 @@ struct Pta<'a> {
     written: Pts,
     /// What the code run at runtime has in hand.
     in_hand: Pts,
-    /// The variables the current residual function's body defines: its
-    /// own, from a heap of its own (an `Escape` variable there names its
-    /// object, no boundary object), shadowing the load code's of the same
-    /// name. (Its parameters are shared: its callers give them.)
+    /// The variables the current residual function's body (or the load
+    /// code) defines: its own, from a heap of its own (an `Escape` variable
+    /// there names its object, no boundary object), shadowing the load
+    /// code's of the same name. (Its parameters are shared: its callers
+    /// give them.)
     own: std::collections::HashSet<usize>,
     /// Per program, the variables it defines (see `own`).
     defined: Vec<std::collections::HashSet<usize>>,
+    /// The variables the load code exports to `main`.
+    exports: std::collections::HashSet<usize>,
     /// Whether runtime code calls code that may read the program's globals
     /// (a function not known, `eval` and the standard functions that run
     /// source text): their objects then escape. The code outside only
@@ -1898,7 +1901,20 @@ impl<'a> Pta<'a> {
             self.at = Vec::new();
             self.site = 0;
             self.rfid = *rfid;
-            self.own = if rfid.is_some() { self.defined[i].clone() } else { std::collections::HashSet::new() };
+            // (A residual function's body, and the load code: what it
+            // defines is its own. The load code makes the boundary's objects
+            // into variables named by their address, with which other code
+            // knows them (see `seeds`); on another of its paths, the same
+            // name is another object's.)
+            // (But for what it exports, which `main` reads.)
+            let load = i == 0 && !*runtime && rfid.is_none() && !env_flag!("PE_LOAD_VARS_SHARED");
+            self.own = if rfid.is_some() {
+                self.defined[i].clone()
+            } else if load {
+                self.defined[i].iter().copied().filter(|v| !self.exports.contains(v)).collect()
+            } else {
+                std::collections::HashSet::new()
+            };
             self.runtime = *runtime;
             self.program(p, Env::new());
         }
@@ -2092,6 +2108,7 @@ impl Js {
             written: Pts::new(),
             in_hand: Pts::new(),
             own: std::collections::HashSet::new(),
+            exports: self.entry.exports.borrow().iter().copied().collect(),
             defined: Vec::new(),
             unfollowed: false,
             fn_of_b: HashMap::new(),
