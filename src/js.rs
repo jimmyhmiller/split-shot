@@ -8255,8 +8255,15 @@ impl Js {
                     eprintln!("[ENTRY]   escaped differ");
                     for (tag, x, y) in [("only 0", a, b), ("only 1", b, a)] {
                         for e in x.escaped.iter().filter(|e| !y.escaped.contains(e)).take(12) {
-                            let what = x.heap.get(e).map(|o| format!("{o:?}").chars().take(160).collect::<String>()).unwrap_or_default();
-                            eprintln!("[ENTRY]     escaped {tag}: @{e} {what}");
+                            // (As the other path has it.)
+                            let what = y.heap.get(e).map(|o| {
+                                let name = match o {
+                                    HeapObj::Closure { fid, .. } => format!("{} ", self.names[*fid]),
+                                    _ => String::new(),
+                                };
+                                format!("{name}{o:?}").chars().take(160).collect::<String>()
+                            });
+                            eprintln!("[ENTRY]     escaped {tag}: @{e} {}", what.unwrap_or_default());
                         }
                     }
                 }
