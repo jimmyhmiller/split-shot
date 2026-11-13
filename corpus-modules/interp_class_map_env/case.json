@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{ "n": 0 }, { "n": 1 }, { "n": 2 }, { "n": 7 }, { "n": 12 }],
+  "repeat": true,
+  "forbid": "new Map|\\.lookup\\(|\\.find\\(|\"(Const|Var|Prim|If|Call)\"|\\brun\\b"
+}

@@ -5658,12 +5658,9 @@ impl Js {
                             // (`x[2]`, `x[x.length - 1]`) is a part of the
                             // value read, as a property is: a syntax tree of
                             // arrays is walked so, `x = x[2]`.
-                            // Only with `PE_INDEX_NODES` for now: on, the second projection's
-                            // compiler comes out ten times its size, and the
-                            // S-expression Lisp it is for does not compile yet,
-                            // see the split-shot-reduction pad.)
+                            // `PE_NO_INDEX_NODES`: no part, as before.)
                             let part = match (&index, &base) {
-                                (Some(i), Some(b)) if i.is_empty() && !b.is_empty() && env_flag!("PE_INDEX_NODES") => Some(b.clone()),
+                                (Some(i), Some(b)) if i.is_empty() && !b.is_empty() && !env_flag!("PE_NO_INDEX_NODES") => Some(b.clone()),
                                 _ => None,
                             };
                             reads.push((index.clone().unwrap_or_default(), base));
@@ -7627,7 +7624,12 @@ impl Js {
         // (The captures known as data are not passed: so its calls made
         // while it is built pass them not either.)
         if cap_shapes.iter().any(|sh| matches!(sh, ArgShape::Data(_))) {
-            let keep: Vec<bool> = (0..ntake).map(|i| !matches!(cap_shapes.get(i), Some(ArgShape::Data(_)))).collect();
+            // (Nor what a shape locates under one of them: the body reads
+            // it from that object. Passed, a method of the load code's
+            // class would be a runtime value to the caller from there on.)
+            let tops: Vec<usize> = Js::import_paths(forms).iter().map(|p| p.top).collect();
+            let data = |i: usize| matches!(cap_shapes.get(i), Some(ArgShape::Data(_)));
+            let keep: Vec<bool> = (0..ntake).map(|i| if i < ncap { !data(i) } else { !data(tops[i - ncap]) }).collect();
             let mut rfs = self.residual_fns.borrow_mut();
             let rf = &mut rfs[rfid];
             rf.ncaptured = keep.iter().filter(|k| **k).count();
@@ -9164,7 +9166,15 @@ impl Js {
         for _ in 0..MAX_PASSES {
             self.reset_for_respecialization();
             self.record_violation.set(false);
+            if env_flag!("ARGVAR_DEBUG") || env_flag!("PASS_DEBUG") {
+                eprintln!("[PASS] begin (records off: {})", self.records_off.get());
+            }
             let prog = self.specialize_entry();
+            // (Debugging aid: the first pass's residual as it is, which is
+            // no sound residual when a later pass was needed.)
+            if env_flag!("PE_DEBUG_FIRST_PASS") {
+                return prog;
+            }
             let mut added = false;
             // (A residual function made for a record's shape and refused:
             // the residual calls it. Again, without it.)
@@ -12777,14 +12787,32 @@ impl Client for Js {
         // (The objects this step makes, with where: the states it leaves
         // take them, see `note_site`. A step run inside it keeps its own.)
         let outer_sites = std::mem::take(&mut *self.pending_sites.borrow_mut());
+        // (And those it makes without saying where (a closure, a
+        // collection, an argument list): made by the instruction it runs.
+        // Left to the address table all paths share, such an object would
+        // be told to be made where another path's object at its address
+        // was. `PE_NO_STEP_SITES`: left to it.)
+        let (first_new, step_pc) = (s.next_addr, s.frames.last().map(|f| f.pc));
         self.step_depth.set(self.step_depth.get() + 1);
         let mut r = self.step_inner(s, out, at_entry);
         self.step_depth.set(self.step_depth.get() - 1);
         let made = std::mem::replace(&mut *self.pending_sites.borrow_mut(), outer_sites);
-        if !made.is_empty() {
+        let unsited = step_pc.filter(|_| !env_flag!("PE_NO_STEP_SITES"));
+        if !made.is_empty() || (unsited.is_some() && [&*s].into_iter().chain(match &r {
+            Step::Jump(next) | Step::JumpFresh(next) => vec![next],
+            Step::Branch { t, f, .. } => vec![t, f],
+            Step::Continue | Step::Halt => Vec::new(),
+        }).any(|st| st.next_addr > first_new)) {
             let take = |st: &mut State| {
                 for (a, pc) in &made {
                     st.sites.insert(*a, *pc);
+                }
+                if let Some(pc) = unsited {
+                    for a in first_new..st.next_addr {
+                        if st.heap.contains_key(&a) && !st.sites.contains_key(&a) {
+                            st.sites.insert(a, pc);
+                        }
+                    }
                 }
             };
             take(s);
@@ -13085,14 +13113,22 @@ impl Js {
                         // (Or a form of a syntax tree of arrays, its parts
                         // nested forms and the names and constants between
                         // them: `["list", ["fib", "n"], "xs"]`.
-                        // With `PE_INDEX_NODES`.)
+                        // `PE_NO_INDEX_NODES`: no such list.)
                         let part = |e: &Abs| matches!(e, Abs::Ref(r) if matches!(s.heap.get(r), Some(HeapObj::Closure { .. } | HeapObj::Object { .. })));
                         let form_part = |e: &Abs| match e {
                             Abs::Ref(r) => matches!(s.heap.get(r), Some(HeapObj::Closure { .. } | HeapObj::Object { .. } | HeapObj::Array(_))),
                             Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null => true,
                             _ => false,
                         };
-                        let form = env_flag!("PE_INDEX_NODES") && arr.iter().all(form_part) && arr.iter().any(|e| matches!(e, Abs::Ref(_)));
+                        // (The load code's, unchanged: a list of pairs
+                        // the program builds as it runs, an environment's
+                        // `[[name, value], ...]`, has the same shape and is
+                        // no part of a program.)
+                        let form = !env_flag!("PE_NO_INDEX_NODES")
+                            && arr.len() <= STATEMENT_LIST
+                            && arr.iter().all(form_part)
+                            && arr.iter().any(|e| matches!(e, Abs::Ref(_)))
+                            && self.boundary_data(s, b);
                         if arr.len() <= STATEMENT_LIST && arr.len() > 0 && (arr.iter().all(part) || form) {
                             list = list.max(arr.len());
                         }
@@ -13163,7 +13199,7 @@ impl Js {
                 // arrays ends. `x = test ? x[2] : x[3]`, one a name.)
                 let node = nodes.get(*slot).copied().unwrap_or(false)
                     && (matches!(v, Abs::Ref(a) if !s.escaped.contains(a) && matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))))
-                        || (matches!(v, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && env_flag!("PE_INDEX_NODES")));
+                        || (matches!(v, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && !env_flag!("PE_NO_INDEX_NODES")));
                 node || dispatch.get(*slot).copied().unwrap_or(false)
                     && match v {
                         Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0 => {
@@ -15696,7 +15732,14 @@ impl Js {
         // (An object made anew on each iteration stands for the one it
         // replaced: see `pair_fresh`. Only under runtime control: a loop the
         // specializer runs itself tells its iterations apart.)
-        let fresh = if self.dynamically_controlled(from) { self.pair_fresh(seen, from) } else { HashMap::new() };
+        // (Or `seen` is: the state another path under runtime control was
+        // brought to, which this one now joins. Pairing is then the same
+        // from either side.)
+        let fresh = if self.dynamically_controlled(from) || (self.dynamically_controlled(seen) && !env_flag!("PE_NO_SEEN_PAIRS")) {
+            self.pair_fresh(seen, from)
+        } else {
+            HashMap::new()
+        };
         if env_flag!("GEN_DEBUG") {
             let creation = self.creation_pc.borrow();
             eprintln!(
@@ -15768,13 +15811,46 @@ impl Js {
         // Primitive fields of heap objects updated in place (an array of
         // registers) generalize alongside the locals, in the same simultaneous
         // assignment. Skipped when a heap ref slot is itself being materialized.
-        let fields = if slots.iter().any(|&sl| matches!(g.frames[fi].locals[sl], Abs::Ref(_)))
-            || seen.frames.len() != from.frames.len()
-            || seen.frames[..fi] != from.frames[..fi]
+        // (A closure known to be made once on this path and not on
+        // `seen`'s (or its partner there): not known of the merged one.)
         {
+            let not_once: Vec<usize> = g
+                .heap
+                .iter()
+                .filter_map(|(a, o)| match (o, seen.heap.get(fresh.get(a).unwrap_or(a))) {
+                    (HeapObj::Closure { once: true, fid: f1, .. }, Some(HeapObj::Closure { once: false, fid: f2, .. })) if f1 == f2 => Some(*a),
+                    _ => None,
+                })
+                .collect();
+            for a in not_once {
+                if let Some(HeapObj::Closure { once, .. }) = g.heap.get_mut_quiet(&a) {
+                    *once = false;
+                }
+            }
+        }
+        let fields_skipped = slots.iter().any(|&sl| matches!(g.frames[fi].locals[sl], Abs::Ref(_)))
+            || seen.frames.len() != from.frames.len()
+            || seen.frames[..fi] != from.frames[..fi];
+        // (A field that holds an object here and another value at `seen`'s
+        // visit (an environment's variable bound to a quoted list on one
+        // path and to a call's result on the other): that object becomes a
+        // runtime value, and the field is then lifted as any other. The
+        // field's holder stays modeled. `PE_NO_REF_FIELD_LIFT`: the holder
+        // becomes a runtime value instead, below.)
+        if !fields_skipped && !env_flag!("PE_NO_REF_FIELD_LIFT") {
+            for addr in self.ref_field_targets(seen, &g, &fresh) {
+                if g.heap.contains_key(&addr) && !g.escaped.contains(&addr) {
+                    if env_flag!("GEN_DEBUG") {
+                        eprintln!("[GEN-REF-FIELD] escape @{addr}");
+                    }
+                    self.escape(&mut g, addr, &mut std::collections::HashSet::new(), out);
+                }
+            }
+        }
+        let fields = if fields_skipped {
             Vec::new()
         } else {
-            match self.heap_field_changes(&seen.heap, &from.heap, self.dynamically_controlled(from), from, &fresh) {
+            match self.heap_field_changes(&seen.heap, &g.heap, self.dynamically_controlled(from), from, &fresh) {
                 Some((changes, _)) => {
                     self.adopt_field_owners(&fresh);
                     changes
@@ -19089,6 +19165,14 @@ impl Js {
                     }
                     s.children().into_iter().zip(c.children()).enumerate().map(|(i, (x, y))| (i, x, y)).collect()
                 }
+                // (Two closures that differ only in whether each is known
+                // to be made once (see `HeapObj::Closure::once`): no field
+                // of either changed. What is known of the merged one is
+                // what is known of both, see `generalize_inner`.)
+                (
+                    HeapObj::Closure { fid: f1, captured: c1, props: p1, proto: o1, known: k1, ident: i1, .. },
+                    HeapObj::Closure { fid: f2, captured: c2, props: p2, proto: o2, known: k2, ident: i2, .. },
+                ) if f1 == f2 && c1 == c2 && p1 == p2 && o1 == o2 && k1 == k2 && i1 == i2 => continue,
                 _ => return None,
             };
             // The field's residual name is keyed by the object's creation site.
@@ -19097,7 +19181,12 @@ impl Js {
                 if a == b {
                     continue;
                 }
-                if matches!(a, Abs::Ref(_)) || matches!(b, Abs::Ref(_)) {
+                // (An object at `seen`'s visit where `cand` holds a runtime
+                // value: lifted, `seen`'s object made a runtime value when
+                // its path is brought to the same state, see
+                // `ref_field_targets`.)
+                let lifted_ref = matches!(a, Abs::Ref(_)) && matches!(b, Abs::Dyn(_)) && !env_flag!("PE_NO_REF_FIELD_LIFT");
+                if (matches!(a, Abs::Ref(_)) || matches!(b, Abs::Ref(_))) && !lifted_ref {
                     { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 3"); } return None; }
                 }
                 // A field moving between two STATIC values that a loop's
@@ -19147,6 +19236,55 @@ impl Js {
             }
         }
         Some((changes, grew))
+    }
+
+    /// The objects `cand` holds in fields where `seen` holds another value
+    /// at the same place (see `heap_field_changes`, whose correspondence of
+    /// objects and fields this follows): an environment's variable bound to
+    /// an object on this path and to a runtime value, or another object, on
+    /// the other. Not an object `fresh` pairs with `seen`'s. None when the
+    /// heaps differ in more than fields (`heap_field_changes` would lift
+    /// nothing).
+    fn ref_field_targets(&self, seen: &State, cand: &State, fresh: &HashMap<usize, usize>) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::new();
+        if seen.heap.len() != cand.heap.len() {
+            return out;
+        }
+        for (addr, c) in cand.heap.iter() {
+            let Some(s) = seen.heap.get(fresh.get(addr).unwrap_or(addr)) else { return Vec::new() };
+            if s == c || cand.escaped.contains(addr) {
+                continue;
+            }
+            let comparable = match (s, c) {
+                (HeapObj::Array(a), HeapObj::Array(b)) => a.len() == b.len() && a.props == b.props && a.proto == b.proto,
+                (HeapObj::Object { .. }, HeapObj::Object { .. }) => obj_cell_labels(s) == obj_cell_labels(c),
+                (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None }) => {
+                    k1 == k2 && matches!(k1.as_str(), "Map" | "WeakMap") && d1.len() == d2.len() && !env_flag!("PE_NO_MAP_FIELDS") && {
+                        let stride = collection_stride(k1);
+                        d1.iter().zip(d2.iter()).enumerate().all(|(i, (x, y))| i % stride == 1 || x == y)
+                    }
+                }
+                _ => false,
+            };
+            if !comparable {
+                continue;
+            }
+            for (x, y) in s.children().into_iter().zip(c.children()) {
+                let Abs::Ref(b) = y else { continue };
+                if fresh.contains_key(b) || x == y {
+                    continue;
+                }
+                // (Its own holder, or a function: no value a variable
+                // stands for in place of the modeled object.)
+                if !matches!(cand.heap.get(b), Some(HeapObj::Array(_) | HeapObj::Object { class: ObjClass::Ordinary, .. })) {
+                    continue;
+                }
+                if matches!(x, Abs::Dyn(_) | Abs::Ref(_)) && !out.contains(b) {
+                    out.push(*b);
+                }
+            }
+        }
+        out
     }
 
     /// Make the typed array `new ctor(elems)` in `dst` (`buf` its buffer's
@@ -19812,6 +19950,14 @@ impl Js {
             (HeapObj::Object { .. }, HeapObj::Object { .. }) => obj_cell_labels(s) == obj_cell_labels(f),
             (HeapObj::Closure { fid: f1, captured: c1, known: k1, .. }, HeapObj::Closure { fid: f2, captured: c2, known: k2, .. }) => {
                 f1 == f2 && k1 == k2 && c1.len() == c2.len() && obj_cell_labels(s) == obj_cell_labels(f)
+            }
+            // (A map of the same keys, live alike: an environment frame's
+            // variables, made anew with each frame. Its values correspond.)
+            (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None })
+                if k1 == k2 && matches!(k1.as_str(), "Map" | "WeakMap") && d1.len() == d2.len() && !env_flag!("PE_NO_MAP_FIELDS") =>
+            {
+                let stride = collection_stride(k1);
+                d1.iter().zip(d2.iter()).enumerate().all(|(i, (x, y))| i % stride == 1 || (x == y && !matches!(x, Abs::Ref(_))))
             }
             _ => false,
         };
@@ -22937,8 +23083,9 @@ impl Js {
         // (A call at a leaf of the syntax tree its function walks, a name
         // or a constant in a node pointer's parameter (see
         // `dispatch_nodes`): the walk ends there, it is no place a
-        // recursion passes again. Unfolded. With `PE_INDEX_NODES`.)
-        let leaf_call = env_flag!("PE_INDEX_NODES")
+        // recursion passes again. Unfolded. `PE_NO_INDEX_NODES`: weighed
+        // as any call.)
+        let leaf_call = !env_flag!("PE_NO_INDEX_NODES")
             && self.dispatch_nodes.get(fid).is_some_and(|nodes| {
                 let ncap = self.ncaptured[fid];
                 args.iter().enumerate().any(|(j, a)| nodes.get(ncap + j).copied().unwrap_or(false) && matches!(a, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null))
@@ -22952,6 +23099,19 @@ impl Js {
         let program_list_call = !env_flag!("PE_NO_PROGRAM_LISTS")
             && matches!(&this, Abs::Ref(a) if self.static_program_list(s, *a))
             && self.array_prelude.values().any(|f| *f == fid);
+        // (Nor the function such a method calls per part, its callback,
+        // while the recursion passes through an activation of another
+        // function that walks a syntax tree (see `dispatch_nodes`) since
+        // the callback's earlier activation: that function's next call is
+        // weighed against this one, and it is the one specialized to a
+        // place in the program. The callback closes over the interpreter's
+        // environment, which a residual function of it would be given as a
+        // runtime value.)
+        let list_callback = !env_flag!("PE_NO_PROGRAM_LISTS") && {
+            let top = s.top();
+            self.array_prelude.values().any(|f| *f == top.func) && matches!(&top.this, Abs::Ref(a) if self.static_program_list(s, *a))
+        };
+        let walker = |g: &Frame| g.func != fid && self.dispatch_nodes.get(g.func).is_some_and(|nodes| nodes.iter().any(|n| *n));
         let dynamic_recursion = recursive
             && !leaf_call
             && !program_list_call
@@ -22959,7 +23119,10 @@ impl Js {
                 || (s.top().dyn_ctl
                     && !context.is_empty()
                     && chain.iter().enumerate().any(|(i, f)| {
-                        f.func == fid && !skel_progress(&f.entry_skel, &now) && chain[i..].iter().any(|g| g.branched)
+                        f.func == fid
+                            && !skel_progress(&f.entry_skel, &now)
+                            && chain[i..].iter().any(|g| g.branched)
+                            && !(list_callback && chain[i + 1..].iter().any(|g| walker(g)))
                     })));
         //
         // Shared specializations: a call under dynamic control whose context
@@ -23000,9 +23163,15 @@ impl Js {
             let records: Vec<usize> = s.frames.iter().flat_map(|f| self.dispatch_fields(s, f)).map(|(a, _, _)| a).collect();
             !records.is_empty() && context.iter().chain(std::iter::once(&this)).any(|v| matches!(v, Abs::Ref(a) if records.contains(a)))
         };
+        // (Nor a program list's callback under an activation that walks the
+        // syntax tree (see `list_callback`): what it closes over is that
+        // activation's environment, and the walker's own calls inside it
+        // are the ones bounded and shared.)
+        let callback_of_walker = list_callback && chain.iter().any(|g| walker(g));
         let shared_context = !env_flag!("PE_NO_SHARED_CONTEXTS")
             && branched_before
             && !holds_record
+            && !callback_of_walker
             && (!structured || env_flag!("PE_SHARE_STRUCTURED") || {
                 let mut counts = self.structured_inlined.borrow_mut();
                 let n = counts.entry(key.clone()).or_insert(0);
@@ -30744,7 +30913,7 @@ impl Js {
                     let node = !env_flag!("PE_NO_NODE_POINTS")
                         && self.dispatch_nodes[func].get(slot).copied().unwrap_or(false)
                         && (matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if !ns.escaped.contains(a) && matches!(ns.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))))
-                            || (matches!(&ns.frames[fi].locals[slot], Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && env_flag!("PE_INDEX_NODES")));
+                            || (matches!(&ns.frames[fi].locals[slot], Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && !env_flag!("PE_NO_INDEX_NODES")));
                     !(node
                         || slot < self.drives_dispatch[func].len()
                             && self.drives_dispatch[func][slot]
