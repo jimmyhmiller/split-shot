@@ -2773,6 +2773,11 @@ pub struct State {
     /// whistle lets a loop whose objects only gained keys run once more
     /// (see `whistle_with`). NOT part of the state's identity.
     head_visits: im::HashMap<u64, u32>,
+    /// Where each object this path made was made (the instruction, see
+    /// `Js::note_site`). Per path: two paths number their objects alike, so
+    /// one address is different objects on each. No part of the state's
+    /// identity.
+    sites: im::HashMap<usize, usize>,
     /// What this path knows about residual variables' values (see `facts`):
     /// learned from the branches it took and the expressions it assigned.
     facts: crate::facts::Facts,
@@ -2815,6 +2820,11 @@ impl State {
         let addr = self.next_addr;
         self.next_addr += 1;
         self.heap.insert(addr, obj);
+        // (Where an object another path made at this address was made, kept
+        // through a merge with that path, is not where this one is.)
+        if !self.sites.is_empty() {
+            self.sites.remove(&addr);
+        }
         addr
     }
 
@@ -2845,6 +2855,10 @@ impl State {
         }
         if live.len() != self.heap.len() {
             self.heap.retain(&|a| live.contains(&a));
+        }
+        // (Where the dead were made is no longer asked.)
+        if self.sites.len() > 2 * live.len() + 64 {
+            self.sites.retain(|a, _| live.contains(a));
         }
         self.prune_facts();
     }
@@ -4395,6 +4409,11 @@ enum VarKey {
     /// one factory made, are two fields; an object keeps its address across
     /// a loop's iterations.)
     HeapField(usize, usize, usize),
+    /// Such a field of an object that shares the address its fields are
+    /// named after with another live object (see `Js::field_ranks`), by
+    /// (creation pc, that address, field index, the object's rank among
+    /// them, above 0).
+    HeapFieldRanked(usize, usize, usize, usize),
     /// The parallel-update scratch of such a field.
     HeapFieldTmp(usize, usize, usize),
     /// The pre-write value of a location read by a live value, by (pc, location).
@@ -4757,6 +4776,11 @@ pub struct Js {
     /// The record objects of the body about to be specialized (see
     /// `RECORD_WATCH`), and whether the body last specialized hit its own.
     record_watch_next: std::cell::RefCell<Vec<usize>>,
+    /// Per residual function specialized for its arguments (see
+    /// `make_arg_variant`): the slot of the function each of its parameters
+    /// is (`None`: a record's leaf, no variable of the program), for the
+    /// names the residual gives them.
+    param_slots: std::cell::RefCell<HashMap<usize, Vec<Option<usize>>>>,
     record_watch_hit: std::cell::Cell<bool>,
     /// Per function, how far each capture of its closures is known (see
     /// `CapCeil`): lowered where the forms its closures asked for in a pass
@@ -4872,6 +4896,15 @@ pub struct Js {
     /// iteration of a runtime loop names its fields after the object it
     /// replaced, so the loop carries them in one set of variables.
     field_owner: std::cell::RefCell<HashMap<usize, usize>>,
+    /// The objects the step being run made, with where (see `note_site`):
+    /// the state it leaves takes them (`State::sites`). And how deep in
+    /// steps it is (a step that builds a residual function runs that
+    /// function's steps inside it).
+    pending_sites: std::cell::RefCell<Vec<(usize, usize)>>,
+    step_depth: std::cell::Cell<usize>,
+    /// While `materialize_with_fields` names the fields it lifts: the rank
+    /// of each object that has one (see `field_ranks`).
+    field_rank: std::cell::RefCell<HashMap<usize, usize>>,
     /// Stable residual variable per (creation pc, field index) of a heap object
     /// whose primitive field is generalized at a loop head (see
     /// `heap_field_changes`). Interned so every iteration's state names the field
@@ -5621,9 +5654,21 @@ impl Js {
                         Instr::GetIndex => {
                             let index = slots_of(stack.pop());
                             let base = slots_of(stack.pop());
+                            // (An element at an index no slot gives
+                            // (`x[2]`, `x[x.length - 1]`) is a part of the
+                            // value read, as a property is: a syntax tree of
+                            // arrays is walked so, `x = x[2]`.
+                            // Only with `PE_INDEX_NODES` for now: on, the second projection's
+                            // compiler comes out ten times its size, and the
+                            // S-expression Lisp it is for does not compile yet,
+                            // see the split-shot-reduction pad.)
+                            let part = match (&index, &base) {
+                                (Some(i), Some(b)) if i.is_empty() && !b.is_empty() && env_flag!("PE_INDEX_NODES") => Some(b.clone()),
+                                _ => None,
+                            };
                             reads.push((index.clone().unwrap_or_default(), base));
                             mark(&mut dd, index);
-                            stack.push(Prov::Other);
+                            stack.push(part.map_or(Prov::Other, Prov::Field));
                         }
                         Instr::SetIndexOp => {
                             stack.pop();
@@ -6105,6 +6150,7 @@ impl Js {
             records_off: std::cell::Cell::new(false),
             record_building: std::cell::RefCell::new(Vec::new()),
             record_watch_next: std::cell::RefCell::new(Vec::new()),
+            param_slots: std::cell::RefCell::new(HashMap::new()),
             record_watch_hit: std::cell::Cell::new(false),
             cap_ceilings: Default::default(),
             cap_ceilings_version: std::cell::Cell::new(0),
@@ -6138,6 +6184,9 @@ impl Js {
             eager_stores: std::cell::Cell::new(false),
             creation_pc: std::cell::RefCell::new(HashMap::new()),
             field_owner: std::cell::RefCell::new(HashMap::new()),
+            pending_sites: std::cell::RefCell::new(Vec::new()),
+            step_depth: std::cell::Cell::new(0),
+            field_rank: std::cell::RefCell::new(HashMap::new()),
             var_ids: std::cell::RefCell::new(VarIds::default()),
             passed_leader: std::cell::Cell::new(None),
             block_hist: std::cell::RefCell::new(HashMap::new()),
@@ -7353,13 +7402,10 @@ impl Js {
     /// (see `record_shape`), all or none: none when two share an object,
     /// when an object of one is reached by what the call makes a runtime
     /// value (another argument, a capture, the receiver), or when this
-    /// call's record shapes were refused (`record_refused`). Only with
-    /// `PE_RECORD_VARIANTS` for now.
+    /// call's record shapes were refused (`record_refused`).
+    /// `PE_NO_RECORD_VARIANTS`: none.
     fn record_arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs, shapes: &mut [ArgShape]) {
-        // (Not yet the default: an interpreter's recursion inlined a few
-        // deep still loses the environment where its loops are tied, see
-        // the split-shot-reduction pad. `PE_RECORD_VARIANTS`: on.)
-        if !env_flag!("PE_RECORD_VARIANTS") || self.records_off.get() || self.react.is_some() {
+        if env_flag!("PE_NO_RECORD_VARIANTS") || self.records_off.get() || self.react.is_some() {
             return;
         }
         if self.record_refused.borrow().contains(&(fid, shapes.to_vec())) {
@@ -7565,6 +7611,17 @@ impl Js {
             }
         }
         let has_records = shapes.iter().any(|sh| matches!(sh, ArgShape::Record(_)));
+        {
+            let mut slots: Vec<Option<usize>> = Vec::with_capacity(nparams);
+            for (j, sh) in shapes.iter().enumerate() {
+                match sh {
+                    ArgShape::Runtime => slots.push(Some(ncap + j)),
+                    ArgShape::Record(r) => slots.extend(std::iter::repeat(None).take(r.leaves)),
+                    _ => {}
+                }
+            }
+            self.param_slots.borrow_mut().insert(rfid, slots);
+        }
         let ntake = ncap + Js::import_paths(forms).len();
         self.push_residual_fn(fid, Some(fid), rfid, forms, ntake, nparams);
         // (The captures known as data are not passed: so its calls made
@@ -7604,6 +7661,8 @@ impl Js {
             heap.insert_shared(a, o);
         }
         let mut start = self.body_start_in(fid, rfid, facts, nparams, heap, s.next_addr);
+        // (Where the caller's objects it shares were made.)
+        start.sites = s.sites.clone();
         for (i, c) in caps.into_iter().enumerate() {
             // (A capture known as data: that object; the value passed for
             // it, unread, is then not passed.)
@@ -7634,7 +7693,10 @@ impl Js {
                         Some(Abs::Ref(a)) => self.record_shape(s, *a).map(|(_, addrs, _)| addrs).unwrap_or_default(),
                         _ => Vec::new(),
                     };
-                    let base = start.next_addr;
+                    // (At addresses of their own, which no path's allocations
+                    // reach: where an object was made is kept by address
+                    // (`creation_pc`), for every path at once.)
+                    let base = RECORD_ADDRS + (rfid * self.nparams[fid].max(1) + j) * (REC_NODES + 1);
                     let mut next_leaf = first_param[j].expect("a record argument");
                     for (k, n) in r.nodes.iter().enumerate() {
                         let mut o = n.clone();
@@ -7649,10 +7711,10 @@ impl Js {
                             };
                             *c = v;
                         }
-                        let made = start.alloc(o);
-                        assert_eq!(made, base + k, "a record's objects are made in order");
-                        if let Some(site) = theirs.get(k).and_then(|a| self.creation_pc.borrow().get(a).copied()) {
-                            self.creation_pc.borrow_mut().insert(made, site);
+                        let made = base + k;
+                        start.heap.insert(made, o);
+                        if let Some(site) = theirs.get(k).and_then(|a| self.site_of(s, *a)) {
+                            start.sites.insert(made, site);
                         }
                         record_addrs.push(made);
                     }
@@ -7662,7 +7724,10 @@ impl Js {
         }
         // (Its static context, which its own calls of itself are compared
         // with: see `do_call`.)
-        let context: Vec<Abs> = start.frames[0].locals[ncap..ncap + shapes.len()].iter().chain(start.frames[0].locals[..ncap].iter()).cloned().collect();
+        let mut context: Vec<Abs> = start.frames[0].locals[ncap..ncap + shapes.len()].iter().chain(start.frames[0].locals[..ncap].iter()).cloned().collect();
+        if !env_flag!("PE_NO_THIS_CONTEXT") {
+            context.push(Abs::Dyn(RExpr::This));
+        }
         start.frames[0].entry_skel = skeleton_of(&start.heap, &context).into();
         if has_records {
             self.record_building.borrow_mut().push((fid, Js::without_records(shapes)));
@@ -8101,7 +8166,7 @@ impl Js {
                 branched: false,
                 yields: 0,
                 // A residual function's parameters are all dynamic.
-                entry_skel: vec![Skel::Dyn; nparams + self.ncaptured[fid]].into(),
+                entry_skel: vec![Skel::Dyn; nparams + self.ncaptured[fid] + if env_flag!("PE_NO_THIS_CONTEXT") { 0 } else { 1 }].into(),
                 // A derived constructor has no `this` until its `super(...)`.
                 this: if matches!(self.fn_kinds[fid], FnKind::ClassCtor { derived: true }) {
                     Abs::Undef
@@ -8126,6 +8191,7 @@ impl Js {
             dyn_branches: 0,
             dispatch_seen: im::HashMap::new(),
             head_visits: im::HashMap::new(),
+            sites: im::HashMap::new(),
             facts: if self.facts_off { crate::facts::Facts::new() } else { facts },
         };
         // The body runs at runtime, at any point: what the top-level
@@ -8380,6 +8446,7 @@ impl Js {
             dyn_branches: 0,
             dispatch_seen: im::HashMap::new(),
             head_visits: im::HashMap::new(),
+            sites: im::HashMap::new(),
             facts: crate::facts::Facts::new(),
         };
         self.alloc_fn_objects(&mut start, false);
@@ -8953,6 +9020,7 @@ impl Js {
             dyn_branches: 0,
             dispatch_seen: im::HashMap::new(),
             head_visits: im::HashMap::new(),
+            sites: im::HashMap::new(),
             facts: crate::facts::Facts::new(),
         };
         self.alloc_fn_objects(&mut s, true);
@@ -8969,7 +9037,7 @@ impl Js {
                 *once = true;
             }
             let addr = s.alloc(obj);
-            self.creation_pc.borrow_mut().insert(addr, self.code.len() + 2 * fid);
+            self.note_site(addr, self.code.len() + 2 * fid);
             s.fns.insert(fid, Abs::Ref(addr));
         }
     }
@@ -9031,7 +9099,18 @@ impl Js {
                 if let Some(rf) = fns.get(rfid) {
                     if let Some(fid) = rf.fid {
                         let caps = (0..self.ncaptured[fid]).map(|i| (VarKey::Residual(0, rfid, i), i));
-                        let params = (0..rf.nparams).map(|j| (VarKey::Residual(1, rfid, j), self.ncaptured[fid] + j));
+                        // (A function specialized for its arguments takes
+                        // only some of them, and a record's leaves, which
+                        // are no variable of the program: see `param_slots`.)
+                        let slots = self.param_slots.borrow().get(&rfid).cloned();
+                        let ncap = self.ncaptured[fid];
+                        let params = (0..rf.nparams).filter_map(|j| {
+                            let slot = match &slots {
+                                Some(sl) => (*sl.get(j)?)?,
+                                None => ncap + j,
+                            };
+                            Some((VarKey::Residual(1, rfid, j), slot))
+                        });
                         for (k, slot) in caps.chain(params) {
                             if let (Some(id), Some(n)) = (ids.ids.get(&k), name(fid, slot)) {
                                 made.insert(*id, n);
@@ -9750,6 +9829,7 @@ impl Js {
         self.fn_memo.borrow_mut().clear();
         self.fn_variant_memo.borrow_mut().clear();
         self.arg_variant_memo.borrow_mut().clear();
+        self.param_slots.borrow_mut().clear();
         self.cap_requests.borrow_mut().clear();
         self.react_root_memo.borrow_mut().clear();
         if let Some(r) = &self.react {
@@ -12220,6 +12300,26 @@ fn skel_of(heap: &Heap, v: &Abs, depth: usize) -> Skel {
             Some(o @ HeapObj::Closure { fid, captured, props, .. }) if captured.len() + props.len() <= SKEL_WIDTH => {
                 Skel::Clo(*fid, o.children().into_iter().map(|x| skel_of(heap, x, depth + 1)).collect())
             }
+            // (A map keyed by strings, all live: as an object of those
+            // keys is. An interpreter's environment made anew at each call
+            // is the same structure each time, not another one for being
+            // another map. `PE_NO_MAP_SKELETONS`: by its address.)
+            Some(HeapObj::Builtin { kind, data, ext: None })
+                if kind == "Map"
+                    && data.len() <= 3 * SKEL_WIDTH
+                    && !env_flag!("PE_NO_MAP_SKELETONS")
+                    && data.chunks(3).iter().all(|e| matches!((&e[0], &e[2]), (Abs::Str(_), Abs::Bool(true)))) =>
+            {
+                Skel::Obj(
+                    data.chunks(3)
+                        .iter()
+                        .map(|e| {
+                            let Abs::Str(k) = &e[0] else { unreachable!("a string key") };
+                            (format!("map {k}"), skel_of(heap, &e[1], depth + 1))
+                        })
+                        .collect(),
+                )
+            }
             _ => Skel::Ref(*p),
         },
         other => Skel::Prim(other.clone()),
@@ -12674,7 +12774,29 @@ impl Client for Js {
                 }
             }
         }
-        let r = self.step_inner(s, out, at_entry);
+        // (The objects this step makes, with where: the states it leaves
+        // take them, see `note_site`. A step run inside it keeps its own.)
+        let outer_sites = std::mem::take(&mut *self.pending_sites.borrow_mut());
+        self.step_depth.set(self.step_depth.get() + 1);
+        let mut r = self.step_inner(s, out, at_entry);
+        self.step_depth.set(self.step_depth.get() - 1);
+        let made = std::mem::replace(&mut *self.pending_sites.borrow_mut(), outer_sites);
+        if !made.is_empty() {
+            let take = |st: &mut State| {
+                for (a, pc) in &made {
+                    st.sites.insert(*a, *pc);
+                }
+            };
+            take(s);
+            match &mut r {
+                Step::Jump(next) | Step::JumpFresh(next) => take(next),
+                Step::Branch { t, f, .. } => {
+                    take(t);
+                    take(f);
+                }
+                Step::Continue | Step::Halt => {}
+            }
+        }
         if self.straight_probe.get() && matches!(r, Step::Branch { .. }) {
             self.straight_failed.set(true);
             return Step::Halt;
@@ -12960,7 +13082,18 @@ impl Js {
                 let Abs::Ref(a) = v else { return };
                 let mut consider = |b: usize| {
                     if let Some(HeapObj::Array(arr)) = s.heap.get(&b) {
-                        if arr.len() <= STATEMENT_LIST && arr.len() > 0 && arr.iter().all(|e| matches!(e, Abs::Ref(r) if matches!(s.heap.get(r), Some(HeapObj::Closure { .. } | HeapObj::Object { .. })))) {
+                        // (Or a form of a syntax tree of arrays, its parts
+                        // nested forms and the names and constants between
+                        // them: `["list", ["fib", "n"], "xs"]`.
+                        // With `PE_INDEX_NODES`.)
+                        let part = |e: &Abs| matches!(e, Abs::Ref(r) if matches!(s.heap.get(r), Some(HeapObj::Closure { .. } | HeapObj::Object { .. })));
+                        let form_part = |e: &Abs| match e {
+                            Abs::Ref(r) => matches!(s.heap.get(r), Some(HeapObj::Closure { .. } | HeapObj::Object { .. } | HeapObj::Array(_))),
+                            Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null => true,
+                            _ => false,
+                        };
+                        let form = env_flag!("PE_INDEX_NODES") && arr.iter().all(form_part) && arr.iter().any(|e| matches!(e, Abs::Ref(_)));
+                        if arr.len() <= STATEMENT_LIST && arr.len() > 0 && (arr.iter().all(part) || form) {
                             list = list.max(arr.len());
                         }
                     }
@@ -13025,8 +13158,12 @@ impl Js {
             .filter(|(slot, v)| {
                 // (A node pointer at a node of a modeled structure: the
                 // interpreter's place in its syntax tree.)
+                // (Or at a leaf of it: a static primitive read out of the
+                // structure, a symbol's name or a constant, where a tree of
+                // arrays ends. `x = test ? x[2] : x[3]`, one a name.)
                 let node = nodes.get(*slot).copied().unwrap_or(false)
-                    && matches!(v, Abs::Ref(a) if !s.escaped.contains(a) && matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))));
+                    && (matches!(v, Abs::Ref(a) if !s.escaped.contains(a) && matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))))
+                        || (matches!(v, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && env_flag!("PE_INDEX_NODES")));
                 node || dispatch.get(*slot).copied().unwrap_or(false)
                     && match v {
                         Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0 => {
@@ -13362,7 +13499,7 @@ impl Js {
                     data: vec![Abs::Str(source.clone()), Abs::Str(flags.clone()), Abs::Num(JsNum::int(0))].into(),
                     ext: None,
                 });
-                self.creation_pc.borrow_mut().insert(r, pc);
+                self.note_site(r, pc);
                 self.push(s, Abs::Ref(r))
             }
             Instr::Await => {
@@ -13787,7 +13924,7 @@ impl Js {
                     }
                 }
                 let addr = s.alloc(HeapObj::object(props));
-                self.creation_pc.borrow_mut().insert(addr, pc);
+                self.note_site(addr, pc);
                 if self.force_escape_all.get() {
                     let r = self.escape(s, addr, &mut std::collections::HashSet::new(), out);
                     return self.push(s, Abs::Dyn(r));
@@ -13799,7 +13936,7 @@ impl Js {
                 let vals: Vec<Abs> = s.top_mut().ostack.split_off(base);
                 let vals = self.emit_maythrow_elems(s, pc, vals, out);
                 let addr = s.alloc(HeapObj::Array(ArrayObj::from(vals)));
-                self.creation_pc.borrow_mut().insert(addr, pc);
+                self.note_site(addr, pc);
                 if self.force_escape_all.get() {
                     let r = self.escape(s, addr, &mut std::collections::HashSet::new(), out);
                     return self.push(s, Abs::Dyn(r));
@@ -14411,7 +14548,7 @@ impl Js {
                             *once = true;
                         }
                         let fresh = s.alloc(obj);
-                        self.creation_pc.borrow_mut().insert(fresh, self.code.len() + 2 * fid);
+                        self.note_site(fresh, self.code.len() + 2 * fid);
                         s.fns.insert(*fid, Abs::Ref(fresh));
                         Abs::Ref(fresh)
                     }
@@ -14651,7 +14788,7 @@ impl Js {
                 match it {
                     Some(obj) => {
                         let a = s.alloc(obj);
-                        self.creation_pc.borrow_mut().insert(a, pc);
+                        self.note_site(a, pc);
                         self.push(s, Abs::Ref(a))
                     }
                     None => {
@@ -14783,10 +14920,14 @@ impl Js {
                         // when a loop lifts them, see `heap_field_changes`.)
                         if let (Abs::Ref(made), false) = (&v, env_flag!("PE_NO_BUILTIN_CREATION")) {
                             let made = *made;
-                            self.creation_pc.borrow_mut().entry(made).or_insert(pc);
+                            if !self.site_known_here(s, made) {
+                                self.note_site(made, pc);
+                            }
                             // (A typed array's buffer, made with it.)
                             if let Some((_, buf, _, _)) = ta_view(&s.heap, made) {
-                                self.creation_pc.borrow_mut().entry(buf).or_insert(pc);
+                                if !self.site_known_here(s, buf) {
+                                    self.note_site(buf, pc);
+                                }
                             }
                         }
                         s.top_mut().pc += 1;
@@ -16580,6 +16721,7 @@ impl Js {
         m.dyn_branches = s.dyn_branches;
         m.dispatch_seen = s.dispatch_seen.clone();
         m.head_visits = s.head_visits.clone();
+        m.sites = s.sites.clone();
         // (Every value that differs is unset until its choice is made: the
         // truthy arm's fresh objects are not in the merged heap.)
         for slot in 0..fa.locals.len() {
@@ -18791,7 +18933,7 @@ impl Js {
                     // elements a loop writes grow (it fills the buffer),
                     // they are no fixed set of registers.)
                     let ids = self.var_ids.borrow();
-                    let lifted = |v: &Abs| matches!(v, Abs::Dyn(RExpr::Var(x)) if matches!(ids.keys.get(x), Some(VarKey::HeapField(..))));
+                    let lifted = |v: &Abs| matches!(v, Abs::Dyn(RExpr::Var(x)) if matches!(ids.keys.get(x), Some(VarKey::HeapField(..) | VarKey::HeapFieldRanked(..))));
                     if env_flag!("PE_NO_MAP_FIELDS") || !self.creation_pc.borrow().contains_key(addr) {
                         // (Nor elements that can have no variables, its
                         // making not known: see `heap_field_changes`.)
@@ -18991,8 +19133,17 @@ impl Js {
                 let owner = fresh.get(addr).map(|s| self.field_owner(*s)).unwrap_or_else(|| self.field_owner(*addr));
                 *owners.entry(owner).or_insert(0) += 1;
             }
-            if owners.values().any(|&n| n > 1) {
-                { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 5"); } return None; }
+            // (Told apart by their ranks, see `field_ranks`.)
+            if owners.values().any(|&n| n > 1) && env_flag!("PE_NO_FIELD_RANKS") {
+                if env_flag!("FIELD_DEBUG") {
+                    let shared: Vec<(usize, usize)> = cand
+                        .keys()
+                        .map(|a| (*a, fresh.get(a).map(|s| self.field_owner(*s)).unwrap_or_else(|| self.field_owner(*a))))
+                        .filter(|(_, o)| owners.get(o).is_some_and(|n| *n > 1))
+                        .collect();
+                    eprintln!("[FIELD] none at site 5: (object, owner) {shared:?} fresh {fresh:?} changes {changes:?}");
+                }
+                { return None; }
             }
         }
         Some((changes, grew))
@@ -19470,8 +19621,95 @@ impl Js {
         Op::Eval { dst, expr: RExpr::Call(Box::new(create), vec![proto_r]) }
     }
 
+    /// The object at `addr`, just made, was made at instruction `pc`: what
+    /// tells a loop's fresh object from the one it replaced (`pair_fresh`)
+    /// and names its lifted fields (`heap_field_id`). Kept by the path
+    /// (the state the running step leaves, `State::sites`), and for every
+    /// path at once by address (`creation_pc`: the last object made at an
+    /// address, whichever path made it; what `site_of` falls back on).
+    fn note_site(&self, addr: usize, pc: usize) {
+        self.creation_pc.borrow_mut().insert(addr, pc);
+        if self.step_depth.get() > 0 {
+            self.pending_sites.borrow_mut().push((addr, pc));
+        }
+    }
+
+    /// Does the path of `s` know where the object at `a` was made?
+    fn site_known_here(&self, s: &State, a: usize) -> bool {
+        s.sites.contains_key(&a) || self.pending_sites.borrow().iter().any(|(x, _)| *x == a)
+    }
+
+    /// Where the object at `a` of `s` was made (see `note_site`).
+    fn site_of(&self, s: &State, a: usize) -> Option<usize> {
+        if let Some(pc) = s.sites.get(&a) {
+            return Some(*pc);
+        }
+        if let Some((_, pc)) = self.pending_sites.borrow().iter().rev().find(|(x, _)| *x == a) {
+            return Some(*pc);
+        }
+        self.creation_pc.borrow().get(&a).copied()
+    }
+
     fn heap_field_id(&self, cpc: usize, addr: usize, idx: usize) -> usize {
-        self.var_id(VarKey::HeapField(cpc, self.field_owner(addr), idx))
+        match self.field_rank.borrow().get(&addr).copied() {
+            Some(rank) if rank > 0 => self.var_id(VarKey::HeapFieldRanked(cpc, self.field_owner(addr), idx, rank)),
+            _ => self.var_id(VarKey::HeapField(cpc, self.field_owner(addr), idx)),
+        }
+    }
+
+    /// The rank of each object of `s` that shares the address its fields
+    /// are named after (`field_owner`) with another live object made at the
+    /// same place: its position among them in the order the state reaches
+    /// them (frames outermost first, their values in order, each object's
+    /// values in order). An object alone on its owner has no rank (0).
+    ///
+    /// (Two objects made at one place, one standing where the other stood
+    /// at an earlier loop head (see `pair_fresh`), are both live where a
+    /// loop keeps the last one it made while it makes the next: an
+    /// interpreter's argument list becoming its environment's slots while
+    /// the next list is filled. Their fields are told apart by which of the
+    /// two the state reaches first, the same from one iteration to the
+    /// next. `PE_NO_FIELD_RANKS`: such a pair is not lifted, see
+    /// `heap_field_changes`.)
+    fn field_ranks(&self, s: &State) -> HashMap<usize, usize> {
+        let mut ranks: HashMap<usize, usize> = HashMap::new();
+        if self.field_owner.borrow().is_empty() || env_flag!("PE_NO_FIELD_RANKS") {
+            return ranks;
+        }
+        let mut order: Vec<usize> = Vec::new();
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut stack: Vec<usize> = Vec::new();
+        let roots: Vec<usize> = s
+            .frames
+            .iter()
+            .flat_map(|f| f.values())
+            .chain(s.globals.values().map(|(v, _)| v))
+            .chain(s.fns.values())
+            .filter_map(as_ref_addr)
+            .collect();
+        for r in roots {
+            stack.push(r);
+            while let Some(a) = stack.pop() {
+                if !seen.insert(a) {
+                    continue;
+                }
+                order.push(a);
+                if let Some(o) = s.heap.get(&a) {
+                    let kids: Vec<usize> = o.children().into_iter().filter_map(as_ref_addr).collect();
+                    stack.extend(kids.into_iter().rev());
+                }
+            }
+        }
+        let mut by_owner: HashMap<(usize, usize), usize> = HashMap::new();
+        for a in order {
+            let Some(cpc) = self.site_of(s, a) else { continue };
+            let n = by_owner.entry((cpc, self.field_owner(a))).or_insert(0);
+            if *n > 0 {
+                ranks.insert(a, *n);
+            }
+            *n += 1;
+        }
+        ranks
     }
 
     /// The address `addr`'s generalized fields are named after: its own,
@@ -19500,6 +19738,7 @@ impl Js {
             (HeapObj::Object { .. }, HeapObj::Object { .. }) => obj_cell_labels(s) == obj_cell_labels(f),
             _ => false,
         };
+        let pairs = self.pair_fresh(seen, cand);
         let mut visited: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
         let mut work: Vec<(usize, usize)> = Vec::new();
         for (a, b) in seen.frames.iter().zip(&cand.frames) {
@@ -19518,6 +19757,19 @@ impl Js {
                 continue;
             }
             if x != y {
+                // (One that stands for the other, see `pair_fresh`, is the
+                // loop's own.)
+                if pairs.get(&y) == Some(&x) {
+                    let (sk, fk) = (so.children(), fo.children());
+                    if sk.len() == fk.len() {
+                        for (a, b) in sk.into_iter().zip(fk) {
+                            if let (Abs::Ref(a), Abs::Ref(b)) = (a, b) {
+                                work.push((*a, *b));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if cand.heap.contains_key(&x) && !seen.heap.contains_key(&y) && !cand.escaped.contains(&x) && !cand.escaped.contains(&y) {
                     return true;
                 }
@@ -19554,30 +19806,6 @@ impl Js {
         {
             return pairs;
         }
-        let creation = self.creation_pc.borrow();
-        let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let mut visited: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
-        let mut work: Vec<(usize, usize)> = Vec::new();
-        let root = |a: &Abs, b: &Abs, work: &mut Vec<(usize, usize)>| {
-            if let (Abs::Ref(x), Abs::Ref(y)) = (a, b) {
-                work.push((*x, *y));
-            }
-        };
-        for (a, b) in seen.frames.iter().zip(&from.frames) {
-            for (x, y) in a.values().zip(b.values()) {
-                root(x, y, &mut work);
-            }
-        }
-        for (k, x) in seen.fns.iter() {
-            if let Some(y) = from.fns.get(k) {
-                root(x, y, &mut work);
-            }
-        }
-        for (k, (x, _)) in seen.globals.iter() {
-            if let Some((y, _)) = from.globals.get(k) {
-                root(x, y, &mut work);
-            }
-        }
         // (Positions correspond only between two objects of one shape.)
         let alike = |s: &HeapObj, f: &HeapObj| match (s, f) {
             (HeapObj::Array(a), HeapObj::Array(b)) => a.len() == b.len() && a.props.len() == b.props.len(),
@@ -19587,33 +19815,104 @@ impl Js {
             }
             _ => false,
         };
-        while let Some((x, y)) = work.pop() {
-            if !visited.insert((x, y)) {
-                continue;
+        let rotated = !env_flag!("PE_NO_ROTATED_PAIRS");
+        // (The pairs found to be none: an object that stands for another
+        // must not also be itself somewhere, see below. Found again without
+        // them, until all stand.)
+        let mut banned: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        loop {
+            pairs.clear();
+            let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            // (The objects both hold at one position, as themselves.)
+            let mut kept: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let mut visited: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+            let mut work: Vec<(usize, usize)> = Vec::new();
+            let root = |a: &Abs, b: &Abs, work: &mut Vec<(usize, usize)>| {
+                if let (Abs::Ref(x), Abs::Ref(y)) = (a, b) {
+                    work.push((*x, *y));
+                }
+            };
+            for (a, b) in seen.frames.iter().zip(&from.frames) {
+                for (x, y) in a.values().zip(b.values()) {
+                    root(x, y, &mut work);
+                }
             }
-            let (Some(so), Some(fo)) = (seen.heap.get(&x), from.heap.get(&y)) else { continue };
-            if !alike(so, fo) {
-                continue;
+            for (k, x) in seen.fns.iter() {
+                if let Some(y) = from.fns.get(k) {
+                    root(x, y, &mut work);
+                }
             }
-            if x != y {
-                let fresh = !from.heap.contains_key(&x)
-                    && !seen.heap.contains_key(&y)
-                    && !from.escaped.contains(&x)
-                    && !seen.escaped.contains(&y)
-                    && creation.get(&x).is_some()
-                    && creation.get(&x) == creation.get(&y);
-                if !fresh || pairs.get(&y).is_some_and(|&p| p != x) || (!pairs.contains_key(&y) && taken.contains(&x)) {
+            for (k, (x, _)) in seen.globals.iter() {
+                if let Some((y, _)) = from.globals.get(k) {
+                    root(x, y, &mut work);
+                }
+            }
+            while let Some((x, y)) = work.pop() {
+                if !visited.insert((x, y)) {
                     continue;
                 }
-                pairs.insert(y, x);
-                taken.insert(x);
-            }
-            let (sk, fk) = (so.children(), fo.children());
-            if sk.len() == fk.len() {
-                for (a, b) in sk.into_iter().zip(fk) {
-                    root(a, b, &mut work);
+                let (Some(so), Some(fo)) = (seen.heap.get(&x), from.heap.get(&y)) else { continue };
+                if !alike(so, fo) {
+                    continue;
+                }
+                if x != y {
+                    // (The `seen` one gone from `from` and the `from` one not
+                    // yet in `seen`; or either still there as another's
+                    // partner, checked once all are found: a loop that keeps
+                    // the object it made last while it makes the next holds
+                    // each one where the other was, in turn.)
+                    let gone = rotated || (!from.heap.contains_key(&x) && !seen.heap.contains_key(&y));
+                    let fresh = gone
+                        && !banned.contains(&(x, y))
+                        && !from.escaped.contains(&x)
+                        && !seen.escaped.contains(&y)
+                        && self.site_of(seen, x).is_some()
+                        && self.site_of(seen, x) == self.site_of(from, y);
+                    if !fresh || pairs.get(&y).is_some_and(|&p| p != x) || (!pairs.contains_key(&y) && taken.contains(&x)) {
+                        if env_flag!("PAIR_DEBUG") {
+                            eprintln!(
+                                "[PAIR] @{y} for @{x}: no (old gone {}, new unseen {}, sites {:?} {:?}, paired {:?}, taken {}, banned {})",
+                                !from.heap.contains_key(&x),
+                                !seen.heap.contains_key(&y),
+                                self.site_of(seen, x),
+                                self.site_of(from, y),
+                                pairs.get(&y),
+                                taken.contains(&x),
+                                banned.contains(&(x, y))
+                            );
+                        }
+                        continue;
+                    }
+                    pairs.insert(y, x);
+                    taken.insert(x);
+                } else {
+                    kept.insert(x);
+                }
+                let (sk, fk) = (so.children(), fo.children());
+                if sk.len() == fk.len() {
+                    for (a, b) in sk.into_iter().zip(fk) {
+                        root(a, b, &mut work);
+                    }
                 }
             }
+            // (A pair stands when its `seen` object, if `from` still holds
+            // it, stands for another there, and its `from` object, if `seen`
+            // held it, was stood for by another: neither is anywhere as
+            // itself.)
+            let bad: Vec<(usize, usize)> = pairs
+                .iter()
+                .filter(|(y, x)| {
+                    kept.contains(*x)
+                        || kept.contains(*y)
+                        || (from.heap.contains_key(*x) && !pairs.contains_key(*x))
+                        || (seen.heap.contains_key(*y) && !taken.contains(*y))
+                })
+                .map(|(y, x)| (*x, *y))
+                .collect();
+            if bad.is_empty() {
+                break;
+            }
+            banned.extend(bad);
         }
         pairs
     }
@@ -19660,7 +19959,7 @@ impl Js {
             val: PVal::Data(Abs::Ref(addr)),
             attrs: WRITABLE | CONFIGURABLE,
         }]));
-        self.creation_pc.borrow_mut().insert(proto, self.code.len() + 2 * fid + 1);
+        self.note_site(proto, self.code.len() + 2 * fid + 1);
         // A class's `prototype` is read-only; a function's is writable.
         let attrs = if matches!(kind, FnKind::ClassCtor { .. }) { 0 } else { WRITABLE };
         if let Some(props) = s.heap.get_mut_quiet(&addr).unwrap().props_mut() {
@@ -20395,7 +20694,7 @@ impl Js {
                     data: vec![Abs::Str(ctor.clone()), Abs::Ref(buf), Abs::Num(JsNum::int((off + b) as i64)), Abs::Num(JsNum::int(n as i64))].into(),
                     ext: None,
                 });
-                self.creation_pc.borrow_mut().insert(view, pc);
+                self.note_site(view, pc);
                 Some(Abs::Ref(view))
             }
             "slice" => {
@@ -21160,7 +21459,7 @@ impl Js {
                 }
             };
             if let Abs::Ref(a) = &e {
-                self.creation_pc.borrow_mut().insert(*a, pc);
+                self.note_site(*a, pc);
             }
             return self.do_throw(s, e, out);
         }
@@ -21179,7 +21478,7 @@ impl Js {
                         }
                         Some(Some(trap)) => {
                             let list = s.alloc(HeapObj::Array(ArrayObj::from(args)));
-                            self.creation_pc.borrow_mut().insert(list, pc);
+                            self.note_site(list, pc);
                             s.top_mut().ostack.push(trap);
                             s.top_mut().ostack.extend([target, this, Abs::Ref(list)]);
                             return self.do_call(s, 3, pc, out, handler, ret, Abs::Undef);
@@ -21363,7 +21662,7 @@ impl Js {
             if g == "RegExp" && self.pristine("RegExp") && args.iter().all(|a| matches!(a, Abs::Str(_) | Abs::Undef)) {
                 if let Some(r) = self.try_builtin_new("RegExp", &args, s) {
                     if let Abs::Ref(a) = &r {
-                        self.creation_pc.borrow_mut().insert(*a, pc);
+                        self.note_site(*a, pc);
                     }
                     s.top_mut().pc += 1;
                     self.finish_call(s, r, Abs::Undef, ret, pc, out);
@@ -21673,7 +21972,7 @@ impl Js {
                                 data: vec![this.clone(), Abs::Num(JsNum::int(0)), Abs::Num(JsNum::int(0))].into(),
                                 ext: None,
                             });
-                            self.creation_pc.borrow_mut().insert(it, pc);
+                            self.note_site(it, pc);
                             Some(Abs::Ref(it))
                         }
                         (ITERATOR_SELF_METHOD, Abs::Ref(t)) if matches!(&s.heap[t], HeapObj::Builtin { kind, .. } if is_iterator_kind(kind)) => Some(this.clone()),
@@ -21758,7 +22057,7 @@ impl Js {
                                 let mut data = vec![this.clone(), args.first().cloned().unwrap_or(Abs::Undef), name, length];
                                 data.extend(args.iter().skip(1).cloned());
                                 let b = s.alloc(HeapObj::Builtin { kind: BOUND_FUNCTION.into(), data: data.into(), ext: None });
-                                self.creation_pc.borrow_mut().insert(b, pc);
+                                self.note_site(b, pc);
                                 s.top_mut().pc += 1;
                                 self.finish_call(s, Abs::Ref(b), Abs::Undef, ret, pc, out);
                                 return Step::Continue;
@@ -22192,7 +22491,7 @@ impl Js {
             if g == "__pe_forInKeys" {
                 if let Some(keys) = self.for_in_keys(s, args.first().unwrap_or(&Abs::Undef)) {
                     let a = s.alloc(HeapObj::Array(ArrayObj::from(keys.into_iter().map(Abs::Str).collect::<Vec<_>>())));
-                    self.creation_pc.borrow_mut().insert(a, pc);
+                    self.note_site(a, pc);
                     s.top_mut().pc += 1;
                     self.finish_call(s, Abs::Ref(a), Abs::Undef, ret, pc, out);
                     return Step::Continue;
@@ -22601,7 +22900,17 @@ impl Js {
         let outer = self.probe_outer.borrow().clone();
         let chain: Vec<&Frame> = outer.iter().chain(s.frames.iter()).collect();
         let recursive = self.is_recursive[fid] || chain.iter().any(|f| f.func == fid);
-        let context: Vec<Abs> = args.iter().chain(captured.iter()).cloned().collect();
+        // (And its receiver, when that is a modeled object: a method walking
+        // a static structure (a visitor's `node.accept(v)`, `map` over a
+        // program's list) is at another place with another receiver.
+        // `PE_NO_THIS_CONTEXT`: the arguments and captures alone.)
+        let mut context: Vec<Abs> = args.iter().chain(captured.iter()).cloned().collect();
+        if !env_flag!("PE_NO_THIS_CONTEXT") {
+            context.push(match &this {
+                Abs::Ref(a) if !s.escaped.contains(a) && matches!(s.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))) => this.clone(),
+                _ => Abs::Dyn(RExpr::This),
+            });
+        }
         let now = skeleton_of(&s.heap, &context);
         // (Every argument dynamic, but a closure whose captures are another
         // static structure than every active activation's: the same code
@@ -22625,7 +22934,27 @@ impl Js {
         if all_dynamic_stuck && self.recursion_probed.borrow().contains(&fid) {
             self.recursion_stuck.set(true);
         }
+        // (A call at a leaf of the syntax tree its function walks, a name
+        // or a constant in a node pointer's parameter (see
+        // `dispatch_nodes`): the walk ends there, it is no place a
+        // recursion passes again. Unfolded. With `PE_INDEX_NODES`.)
+        let leaf_call = env_flag!("PE_INDEX_NODES")
+            && self.dispatch_nodes.get(fid).is_some_and(|nodes| {
+                let ncap = self.ncaptured[fid];
+                args.iter().enumerate().any(|(j, a)| nodes.get(ncap + j).copied().unwrap_or(false) && matches!(a, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null))
+            });
+        // (Nor is a self-hosted array method over a short static list of
+        // the program's parts (see `static_program_list`: an interpreter's
+        // `bindings.map(b => evaluate(b[1], env))`) a place a recursion
+        // stalls at: it runs once per part, and the interpreter's own call
+        // inside it is where the interpreted program's recursion is met
+        // again. `PE_NO_PROGRAM_LISTS`: weighed as any call.)
+        let program_list_call = !env_flag!("PE_NO_PROGRAM_LISTS")
+            && matches!(&this, Abs::Ref(a) if self.static_program_list(s, *a))
+            && self.array_prelude.values().any(|f| *f == fid);
         let dynamic_recursion = recursive
+            && !leaf_call
+            && !program_list_call
             && (all_dynamic_stuck
                 || (s.top().dyn_ctl
                     && !context.is_empty()
@@ -22848,7 +23177,7 @@ impl Js {
             if self.args_var(fid, rfid).is_some() {
                 // The call's arguments object, explicitly.
                 let a = self.new_arguments(s, fid, &args, &callee);
-                self.creation_pc.borrow_mut().insert(a, pc);
+                self.note_site(a, pc);
                 call_args.push(self.operand_rexpr(s, &Abs::Ref(a), &mut escaped, out));
             }
             call_args.extend(arg_rs);
@@ -22907,7 +23236,7 @@ impl Js {
         // are moved into the param slots.
         if let Some(aslot) = self.arguments_slot[fid] {
             let addr = self.new_arguments(s, fid, &args, &callee);
-            self.creation_pc.borrow_mut().insert(addr, pc);
+            self.note_site(addr, pc);
             if aslot < locals.len() {
                 locals[aslot] = Abs::Ref(addr);
             }
@@ -22948,7 +23277,7 @@ impl Js {
                 static_iters: Vec::new(),
             };
             let g = s.alloc(HeapObj::Generator { frame: Some(Box::new(frame)), state: GEN_START, func: fid });
-            self.creation_pc.borrow_mut().insert(g, pc);
+            self.note_site(g, pc);
             self.finish_call(s, Abs::Ref(g), Abs::Undef, ret, pc, out);
             return Step::Continue;
         }
@@ -23140,7 +23469,7 @@ impl Js {
         let arg = |i: usize| args.get(i).cloned().unwrap_or(Abs::Undef);
         let new_array = |s: &mut State, elems: Vec<Abs>| -> Abs {
             let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
-            self.creation_pc.borrow_mut().insert(a, pc);
+            self.note_site(a, pc);
             Abs::Ref(a)
         };
         match (g, method) {
@@ -23221,7 +23550,7 @@ impl Js {
             ("Object", "create") if args.len() == 1 || (args.len() == 2 && arg(1) == Abs::Undef) => {
                 let proto = self.create_proto(s, arg(0))?;
                 let o = s.alloc(HeapObj::Object { props: vec![], proto, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-                self.creation_pc.borrow_mut().insert(o, pc);
+                self.note_site(o, pc);
                 Some(Abs::Ref(o))
             }
             ("Object", "create") if args.len() == 2 => {
@@ -23233,7 +23562,7 @@ impl Js {
                     s.heap = saved;
                     return None;
                 }
-                self.creation_pc.borrow_mut().insert(o, pc);
+                self.note_site(o, pc);
                 Some(Abs::Ref(o))
             }
             ("Object", "setPrototypeOf") if args.len() == 2 => match (arg(0), arg(1)) {
@@ -23302,7 +23631,7 @@ impl Js {
                                 for (suffix, has) in [(ACCESSOR_GET, true), (ACCESSOR_SET, g == "Object" && k == "__proto__")] {
                                     fns.push(if has {
                                         let f = s.alloc(HeapObj::Builtin { kind: format!("{g}.prototype.{k}{suffix}"), data: vec![].into(), ext: None });
-                                        self.creation_pc.borrow_mut().insert(f, pc);
+                                        self.note_site(f, pc);
                                         Abs::Ref(f)
                                     } else {
                                         Abs::Undef
@@ -23316,7 +23645,7 @@ impl Js {
                                     Prop::data("enumerable", Abs::Bool(false)),
                                     Prop::data("configurable", Abs::Bool(true)),
                                 ]));
-                                self.creation_pc.borrow_mut().insert(d, pc);
+                                self.note_site(d, pc);
                                 return Some(Abs::Ref(d));
                             }
                             _ => None,
@@ -23331,7 +23660,7 @@ impl Js {
                         Prop::data("enumerable", Abs::Bool(false)),
                         Prop::data("configurable", Abs::Bool(w)),
                     ]));
-                    self.creation_pc.borrow_mut().insert(d, pc);
+                    self.note_site(d, pc);
                     return Some(Abs::Ref(d));
                 }
                 let Abs::Ref(o) = arg(0) else { return None };
@@ -23370,7 +23699,7 @@ impl Js {
                             },
                         };
                         let d = s.alloc(HeapObj::object(vec![Prop::data("value", v), Prop::data("writable", w), Prop::data("enumerable", e), Prop::data("configurable", c)]));
-                        self.creation_pc.borrow_mut().insert(d, pc);
+                        self.note_site(d, pc);
                         return Some(Abs::Ref(d));
                     }
                     HeapObj::Closure { fid, known: true, ident: None, props, .. } if !props.iter().any(|p| p.key == "name" || p.key == "length") => {
@@ -23381,7 +23710,7 @@ impl Js {
                             Prop::data("enumerable", Abs::Bool(false)),
                             Prop::data("configurable", Abs::Bool(true)),
                         ]));
-                        self.creation_pc.borrow_mut().insert(d, pc);
+                        self.note_site(d, pc);
                         return Some(Abs::Ref(d));
                     }
                     _ => return None,
@@ -23395,7 +23724,7 @@ impl Js {
                     }
                 };
                 let d = s.alloc(HeapObj::object(props));
-                self.creation_pc.borrow_mut().insert(d, pc);
+                self.note_site(d, pc);
                 Some(Abs::Ref(d))
             }
             // `Object.freeze` / `seal` / `preventExtensions` of an ordinary
@@ -23494,11 +23823,11 @@ impl Js {
                         PVal::Accessor { get, set } => vec![Prop::data("get", get.clone()), Prop::data("set", set.clone()), Prop::data("enumerable", flag(ENUMERABLE)), Prop::data("configurable", flag(CONFIGURABLE))],
                     };
                     let d = s.alloc(HeapObj::object(fields));
-                    self.creation_pc.borrow_mut().insert(d, pc);
+                    self.note_site(d, pc);
                     out.push(Prop { key: p.key.clone(), val: PVal::Data(Abs::Ref(d)), attrs: DEFAULT_ATTRS });
                 }
                 let r = s.alloc(HeapObj::object(out));
-                self.creation_pc.borrow_mut().insert(r, pc);
+                self.note_site(r, pc);
                 Some(Abs::Ref(r))
             }
             ("Object", "is") if args.len() == 2 => match (arg(0), arg(1)) {
@@ -23549,7 +23878,7 @@ impl Js {
                         JsonVal::Arr(xs) => {
                             let elems = xs.into_iter().map(|x| build(js, s, x, pc)).collect::<Option<Vec<_>>>()?;
                             let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
-                            js.creation_pc.borrow_mut().insert(a, pc);
+                            js.note_site(a, pc);
                             Abs::Ref(a)
                         }
                         JsonVal::Obj(kv) => {
@@ -23561,7 +23890,7 @@ impl Js {
                                 props.push(Prop::data(k, build(js, s, x, pc)?));
                             }
                             let o = s.alloc(HeapObj::object(props));
-                            js.creation_pc.borrow_mut().insert(o, pc);
+                            js.note_site(o, pc);
                             Abs::Ref(o)
                         }
                     })
@@ -23658,7 +23987,7 @@ impl Js {
                 data: vec![Abs::Ref(recv), Abs::Num(JsNum::int(0)), Abs::Str(m.into())].into(),
                 ext: None,
             });
-            self.creation_pc.borrow_mut().insert(it, pc);
+            self.note_site(it, pc);
             return Some(Abs::Ref(it));
         }
         let xs = xs.elems;
@@ -23674,7 +24003,7 @@ impl Js {
         };
         let new_array = |s: &mut State, elems: Vec<Abs>| -> Abs {
             let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
-            self.creation_pc.borrow_mut().insert(a, pc);
+            self.note_site(a, pc);
             Abs::Ref(a)
         };
         // Static-value equality for searches: `None` if undecidable.
@@ -24017,7 +24346,7 @@ impl Js {
                     data: vec![Abs::Ref(recv), Abs::Num(JsNum::int(0)), Abs::Str(m.into()), Abs::Num(JsNum::int(0))].into(),
                     ext: None,
                 });
-                self.creation_pc.borrow_mut().insert(it, pc);
+                self.note_site(it, pc);
                 Some(Abs::Ref(it))
             }
             _ => None,
@@ -24949,7 +25278,7 @@ impl Js {
                 }
             };
             if let Abs::Ref(a) = &e {
-                self.creation_pc.borrow_mut().insert(*a, pc);
+                self.note_site(*a, pc);
             }
             return self.do_throw(s, e, out);
         }
@@ -25590,7 +25919,7 @@ impl Js {
             }
             // (A match's `groups` object has no prototype.)
             let g = s.alloc(HeapObj::Object { props, proto: Abs::Null, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-            self.creation_pc.borrow_mut().insert(g, pc);
+            self.note_site(g, pc);
             Abs::Ref(g)
         } else {
             Abs::Undef
@@ -25606,7 +25935,7 @@ impl Js {
             proto: INTRINSIC_PROTO,
             frozen: false,
         }));
-        self.creation_pc.borrow_mut().insert(arr, pc);
+        self.note_site(arr, pc);
         Some(Abs::Ref(arr))
     }
 
@@ -25680,7 +26009,7 @@ impl Js {
                     elems.push(Abs::Str(String::from_utf16(&u[m.start..m.end]).ok()?));
                 }
                 let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
-                self.creation_pc.borrow_mut().insert(a, pc);
+                self.note_site(a, pc);
                 Some(Abs::Ref(a))
             }
             // (On a clone: the RegExp's own `lastIndex` is untouched.)
@@ -25693,9 +26022,9 @@ impl Js {
                     results.push(self.match_array(s, &rx, m, &u, text, pc)?);
                 }
                 let a = s.alloc(HeapObj::Array(ArrayObj::from(results)));
-                self.creation_pc.borrow_mut().insert(a, pc);
+                self.note_site(a, pc);
                 let it = s.alloc(HeapObj::Builtin { kind: "ArrayIterator".into(), data: vec![Abs::Ref(a), Abs::Num(JsNum::int(0)), Abs::Str("values".into())].into(), ext: None });
-                self.creation_pc.borrow_mut().insert(it, pc);
+                self.note_site(it, pc);
                 Some(Abs::Ref(it))
             }
             "replace" | "replaceAll" => {
@@ -25743,7 +26072,7 @@ impl Js {
                     });
                 }
                 let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
-                self.creation_pc.borrow_mut().insert(a, pc);
+                self.note_site(a, pc);
                 Some(Abs::Ref(a))
             }
             "search" => {
@@ -26091,7 +26420,7 @@ impl Js {
             *once = true;
         }
         let fresh = s.alloc(obj);
-        self.creation_pc.borrow_mut().insert(fresh, self.code.len() + 2 * fid);
+        self.note_site(fresh, self.code.len() + 2 * fid);
         Abs::Ref(fresh)
     }
 
@@ -26527,7 +26856,7 @@ impl Js {
                         };
                         let proto = self.ctor_prototype(s, proto, pc, 0, out);
                         let obj = s.alloc(HeapObj::Object { props: Vec::new(), proto, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-                        self.creation_pc.borrow_mut().insert(obj, pc);
+                        self.note_site(obj, pc);
                         let nt = s.top().new_target.clone();
                         s.top_mut().ostack.push(parent.clone());
                         s.top_mut().ostack.extend(args);
@@ -26570,7 +26899,7 @@ impl Js {
             return None;
         }
         let Abs::Ref(made) = self.try_builtin_new(name, args, s)? else { unreachable!("a built-in's instance is an object") };
-        self.creation_pc.borrow_mut().insert(made, pc);
+        self.note_site(made, pc);
         self.ensure_prototype(s, ntaddr);
         let proto = match self.lookup_prop(&s.heap, ntaddr, "prototype") {
             Found::Data(p @ (Abs::Ref(_) | Abs::Dyn(_))) => p,
@@ -26808,7 +27137,7 @@ impl Js {
                             Abs::Str(mode) if mode == "keys" => Abs::Num(JsNum::int(i)),
                             Abs::Str(mode) if mode == "entries" => {
                                 let pair = s.alloc(HeapObj::Array(ArrayObj::from(vec![Abs::Num(JsNum::int(i)), xs[i as usize].clone()])));
-                                self.creation_pc.borrow_mut().insert(pair, pc);
+                                self.note_site(pair, pc);
                                 Abs::Ref(pair)
                             }
                             _ => xs[i as usize].clone(),
@@ -26874,7 +27203,7 @@ impl Js {
                         "values" => v,
                         _ => {
                             let pair = s.alloc(HeapObj::Array(ArrayObj::from(vec![k, v])));
-                            self.creation_pc.borrow_mut().insert(pair, pc);
+                            self.note_site(pair, pc);
                             Abs::Ref(pair)
                         }
                     };
@@ -26891,7 +27220,7 @@ impl Js {
             Prop::data("value", value),
             Prop::data("done", Abs::Bool(done)),
         ]));
-        self.creation_pc.borrow_mut().insert(r, pc);
+        self.note_site(r, pc);
         Some(Abs::Ref(r))
     }
 
@@ -27053,7 +27382,7 @@ impl Js {
                         (Some(None), Some(None)) => return self.try_construct_for(s, target, args, new_target, pc, out),
                         (Some(Some(trap)), _) => {
                             let list = s.alloc(HeapObj::Array(ArrayObj::from(args)));
-                            self.creation_pc.borrow_mut().insert(list, pc);
+                            self.note_site(list, pc);
                             s.top_mut().ostack.push(trap);
                             s.top_mut().ostack.extend([target, Abs::Ref(list), new_target]);
                             return Ok(self.do_call(s, 3, pc, out, handler, RetMode::Value, Abs::Undef));
@@ -27108,7 +27437,7 @@ impl Js {
                             };
                             let proto = self.ctor_prototype(s, proto, pc, 2, out);
                             let obj = s.alloc(HeapObj::Object { props: Vec::new(), proto, class: ObjClass::Ordinary, private: Vec::new(), extensible: true });
-                            self.creation_pc.borrow_mut().insert(obj, pc);
+                            self.note_site(obj, pc);
                             s.top_mut().ostack.push(callee);
                             s.top_mut().ostack.extend(args);
                             return Ok(self.do_call(s, nargs, pc, out, Abs::Ref(obj), RetMode::Construct, new_target));
@@ -27151,7 +27480,7 @@ impl Js {
     /// A fresh `{value, done}` iterator result object.
     fn iter_result(&self, s: &mut State, value: Abs, done: bool, pc: usize) -> Abs {
         let r = s.alloc(HeapObj::object(vec![Prop::data("value", value), Prop::data("done", Abs::Bool(done))]));
-        self.creation_pc.borrow_mut().insert(r, pc);
+        self.note_site(r, pc);
         Abs::Ref(r)
     }
 
@@ -30414,7 +30743,8 @@ impl Js {
                     // see `dispatch_slots`.)
                     let node = !env_flag!("PE_NO_NODE_POINTS")
                         && self.dispatch_nodes[func].get(slot).copied().unwrap_or(false)
-                        && matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if !ns.escaped.contains(a) && matches!(ns.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))));
+                        && (matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if !ns.escaped.contains(a) && matches!(ns.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))))
+                            || (matches!(&ns.frames[fi].locals[slot], Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && env_flag!("PE_INDEX_NODES")));
                     !(node
                         || slot < self.drives_dispatch[func].len()
                             && self.drives_dispatch[func][slot]
@@ -30913,7 +31243,7 @@ impl Js {
             }
         };
         if let Abs::Ref(a) = &e {
-            self.creation_pc.borrow_mut().insert(*a, pc);
+            self.note_site(*a, pc);
         }
         Some(self.do_throw(s, e, out))
     }
@@ -31135,6 +31465,14 @@ impl Js {
                 }
             }
         }
+        // (The ranks its fields' names go by, see `field_ranks`: as the
+        // state is now, before any is lifted.)
+        if !fields.is_empty() {
+            let ranks = self.field_ranks(ns);
+            *self.field_rank.borrow_mut() = ranks;
+        } else {
+            self.field_rank.borrow_mut().clear();
+        }
         let fi = ns.frames.len() - 1;
         let (func, at) = (ns.frames[fi].func, ns.frames[fi].pc);
         let mut live_slots: Vec<usize> = Vec::with_capacity(slots.len());
@@ -31153,7 +31491,7 @@ impl Js {
             self.why.made(self.stable_id(func, slot), at, func);
         }
         for &(addr, idx) in fields {
-            if let Some(&cpc) = self.creation_pc.borrow().get(&addr) {
+            if let Some(cpc) = self.site_of(ns, addr) {
                 self.why.made(self.heap_field_id(cpc, addr, idx), at, func);
             }
         }
@@ -31164,9 +31502,8 @@ impl Js {
         // freeze every other live reader of their old values first.
         {
             let mut ids: Vec<usize> = slots.iter().map(|&sl| self.stable_id(func, sl)).collect();
-            let creation = self.creation_pc.borrow().clone();
             for &(addr, idx) in fields {
-                if let Some(&cpc) = creation.get(&addr) {
+                if let Some(cpc) = self.site_of(ns, addr) {
                     ids.push(self.heap_field_id(cpc, addr, idx));
                 }
             }
@@ -31284,7 +31621,7 @@ impl Js {
             ns.frames[fi].locals[slot] = Abs::Dyn(RExpr::Var(id));
         }
         for &(addr, idx) in fields {
-            let Some(&cpc) = self.creation_pc.borrow().get(&addr) else { continue };
+            let Some(cpc) = self.site_of(ns, addr) else { continue };
             let id = self.heap_field_id(cpc, addr, idx);
             let cell: Option<&mut Abs> = match ns.heap.get_mut_quiet(&addr) {
                 Some(o @ (HeapObj::Array(_) | HeapObj::Object { .. } | HeapObj::Builtin { ext: None, .. })) => o.children_mut().into_iter().nth(idx),
@@ -31767,6 +32104,7 @@ impl Js {
             dyn_branches: s.dyn_branches,
             dispatch_seen: s.dispatch_seen.clone(),
             head_visits: s.head_visits.clone(),
+            sites: s.sites.clone(),
             facts: s.facts.clone(),
         }
     }
@@ -33115,6 +33453,7 @@ fn canonicalize_state(s: &State) -> State {
         dyn_branches: 0,
         dispatch_seen: im::HashMap::new(),
         head_visits: im::HashMap::new(),
+        sites: im::HashMap::new(),
         facts: s.facts.clone(),
     }
 }
@@ -33195,6 +33534,9 @@ const REC_LEAF_VAR: usize = usize::MAX - 1;
 /// How many objects, and how many leaves, a record argument may have (see
 /// `Js::record_shape`): a larger one is passed as a runtime value.
 const REC_NODES: usize = 12;
+/// Where the record arguments of residual functions are held (see
+/// `Js::make_arg_variant`): past any address a path allocates.
+const RECORD_ADDRS: usize = 1 << 40;
 const REC_LEAVES: usize = 24;
 
 thread_local! {

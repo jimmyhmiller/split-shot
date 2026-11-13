@@ -5,64 +5,64 @@
 Interpreters given fixed programs (`tools/wild/interp/`, see its README), specialized and checked by `tools/wild.js`. `speedup` is the original time over the residual time per pass over the inputs, each in a Node process of its own (above 1 is faster). `compiled` is whether the residual is free of what the case names as interpretation (its `// residue:`).
 
 ```
-INTERP ok 45 wrong 0 crash 3 other 1 (of 49); speedup geomean 2.19x, >=2x 13, slower 14 (of 45 timed); compiled 13 of 44
+INTERP ok 45 wrong 0 crash 3 other 1 (of 49); speedup geomean 2.40x, >=2x 15, slower 13 (of 45 timed); compiled 14 of 44
 ```
 
 | case | style | verdict | speedup | compiled | original µs | residual µs | residual lines | spec. time |
 |---|---|---|--:|:-:|--:|--:|--:|--:|
-| forth-colon-defs | Forth (dictionary of words, data and return stacks, colon definitions compiled from source text at load, indirect-threaded inner interpreter) | ok | 101.06× | yes | 146.36 | 1.45 | 76 | 0.1 s |
-| ast-switch-imperative | tree-walking AST of objects (switch on node.type, Map environment) | ok | 82.58× | yes | 200.94 | 2.43 | 45 | 0.1 s |
-| closure-compile-gcd | closure compilation (AST compiled once at load into nested JS closures, then run) | ok | 57.35× | yes | 227.88 | 3.97 | 43 | 0.1 s |
-| stack-vm-switch | stack VM (string opcodes, switch dispatch, prog[pc++]) | ok | 51.00× | yes | 30.19 | 0.59 | 19 | 0.0 s |
-| register-vm-lua-style | register VM (Lua 5.1-style 32-bit instruction words with A/B/C/sBx fields, RK constants, switch on the decoded opcode) | ok | 23.33× | yes | 231.08 | 9.90 | 94 | 0.0 s |
-| stack-vm-int32-switch | stack VM (numeric opcodes with operands inline in an Int32Array, switch dispatch, code[pc++]) | ok | 15.15× | yes | 182.16 | 12.02 | 62 | 0.0 s |
-| tagged-array-calc | tagged-array expression tree, if-chain on e[0] (jspe/examples/calc.interp.js) | ok | 12.26× | yes | 23.46 | 1.91 | 17 | 0.0 s |
-| assembler-two-pass | assembler + register VM (assembly text with labels assembled at load by a two-pass assembler into fixed-width Int32Array words, memory in an Int32Array) | ok | 8.66× | yes | 68.89 | 7.95 | 56 | 0.2 s |
-| brainfuck-rle-rot13 | Brainfuck (optimizing: run-length folded ops, [-] as clear, matched jumps, switch dispatch over op objects) | ok | 7.72× | yes | 329.50 | 42.69 | 554 | 0.2 s |
-| recursive-step-vm | accumulator VM whose dispatch loop is a recursive step(pc, ...) function (ported from docs/p3/vm.js) | ok | 4.66× | yes | 53.04 | 11.39 | 36 | 0.0 s |
-| cpu-6502-emulator | CPU emulator (a 6502 subset: class with registers and N/Z/C/V flags, 64K byte memory, step() fetching an opcode byte and switching on hex opcodes) | ok | 4.38× | yes | 57.05 | 13.02 | 367 | 1.0 s |
-| backtrack-pike-regex | backtracking regex matcher (Kernighan/Pike: recursive matchHere/matchStar over pattern suffixes) | ok | 2.64× | no | 42.03 | 15.89 | 264 | 0.1 s |
-| turing-machine-table | Turing machine (transition table parsed from rule text at load, keyed by state and symbol, tape grown on demand) | ok | 2.19× | yes | 267.12 | 122.14 | 546 | 0.0 s |
-| minilang-bst-sort-parse-in-main | source text parsed inside main on every call (tokenizer, recursive-descent parser, AST evaluator with first-class functions and records) | ok | 1.96× | no | 397.13 | 203.12 | 346 | 0.4 s |
-| printf-format | printf-style formatter (format string scanned character by character on every call: flags, width, precision, conversion switch) | ok | 1.35× | yes | 36.23 | 26.91 | 162 | 0.1 s |
-| pratt-expr-parse-in-main | expression evaluator (formula string tokenized and Pratt-parsed inside main on every call, then the AST tree-walked per binding) | ok | 1.32× | no | 90.55 | 68.74 | 229 | 0.1 s |
-| closure-threaded-sort | direct-threaded code (bytecode compiled at load into an array of closures, each returning the next pc) | ok | 1.26× | no | 164.03 | 130.38 | 207 | 0.0 s |
-| template-mustache | template engine (mustache-like: template parsed at load into a token tree, rendered by a recursive walk with a context stack) | ok | 1.23× | no | 44.45 | 36.18 | 252 | 0.2 s |
-| handler-table-vm | handler-table VM (an array of handler functions indexed by numeric opcode, VM state in an object) | ok | 1.22× | no | 166.87 | 136.76 | 120 | 0.0 s |
-| debruijn-lexical-tak | lexical addressing (names resolved to (depth, index) in a pre-pass; frames are arrays) | ok | 1.20× | no | 219.01 | 182.07 | 204 | 1.1 s |
-| schema-validator | JSON-schema-like validator (schema object walked recursively per value, keyword checks, error list with JSON pointers) | ok | 1.18× | no | 18.02 | 15.22 | 826 | 0.2 s |
-| wasm-structured-vm | WebAssembly-like structured stack VM (block/loop/if/br/br_if with a label stack, locals, i32 ops, calls between functions) | ok | 1.14× | no | 54.82 | 48.12 | 433 | 0.1 s |
-| accumulator-list-recursion | accumulator machine, recursion over prog.slice(1), conditional-expression dispatch (docs/p3/int.js) | ok | 1.09× | no | 45.25 | 41.36 | 66 | 0.1 s |
-| minilang-bst-sort | source text parsed at load (tokenizer, recursive-descent parser, AST evaluator with first-class functions and records) | ok | 1.09× | no | 200.72 | 184.01 | 386 | 0.3 s |
-| ski-graph-reduction | SKI combinator graph reduction (lambda terms bracket-abstracted at load, Turner-style in-place updates) | ok | 1.09× | no | 264.89 | 243.50 | 297 | 2.2 s |
-| peg-recognizer-assignments | PEG recognizer (grammar as combinator-built data, recursive parse(node, text, pos) dispatching on node.kind) | ok | 1.08× | no | 154.61 | 143.67 | 99 | 0.0 s |
-| expr-eval-formulas | npm expr-eval (RPN instruction list, switch on instruction type, recursive user functions) | ok | 1.06× | no | 585.99 | 555.22 | 3301 | 2.6 s |
-| thompson-nfa-regex | Thompson NFA simulation (regex -> postfix -> state graph at load, lock-step state lists per character) | ok | 1.03× | no | 127.30 | 123.25 | 212 | 0.0 s |
-| expr-eval-formulas-parse-in-main | npm expr-eval (RPN instruction list, switch on instruction type, recursive user functions) | ok | 1.03× | no | 793.71 | 773.46 | 2606 | 2.3 s |
-| sval-program | npm sval (JavaScript interpreter in JS: acorn ESTree, evaluator table keyed by node.type, scope objects) | ok | 1.01× | no | 1106.77 | 1097.99 | 19338 | 58.7 s |
-| jsep-eval-rows-parse-in-main | npm jsep (ESTree-like AST) + a tree-walking evaluator (switch on node.type, operator switches) | ok | 1.00× | no | 50.19 | 50.05 | 1055 | 0.1 s |
-| json-logic-pricing | npm json-logic-js (JSON rule tree, op-name dispatch through an operations table and an if-chain) | ok | 1.00× | no | 78.70 | 78.94 | 613 | 0.1 s |
-| jexl-orders-parse-in-main | npm jexl (lexer + state-machine parser to an AST, evaluator dispatching handlers[ast.type], PromiseSync for evalSync) | ok | 1.00× | no | 468.55 | 469.97 | 1629 | 0.1 s |
-| nearley-sexpr | npm nearley (Earley parser runtime interpreting a nearleyc-compiled grammar table, scannerless) | ok | 0.98× | no | 246.91 | 251.47 | 1208 | 0.1 s |
-| filtrex-filter | npm filtrex (Jison-parsed expression compiled to JS source, run through new Function) | ok | 0.98× | - | 5.48 | 5.61 | 674 | 0.2 s |
-| jsep-eval-rows | npm jsep (ESTree-like AST) + a tree-walking evaluator (switch on node.type, operator switches) | ok | 0.97× | no | 8.81 | 9.06 | 1055 | 0.1 s |
-| rules-jsonlogic | rule engine (json-logic: rules are JSON objects {op: args}, evaluated by apply() looking the operator up in a table) | ok | 0.97× | no | 183.06 | 188.72 | 463 | 0.1 s |
-| jexl-orders | npm jexl (lexer + state-machine parser to an AST, evaluator dispatching handlers[ast.type], PromiseSync for evalSync) | ok | 0.93× | no | 92.54 | 99.78 | 1629 | 0.1 s |
-| class-visitor-collatz | class-per-node AST with accept(visitor) double dispatch (OO visitor pattern) | ok | 0.90× | no | 250.45 | 279.49 | 578 | 0.1 s |
-| dfa-lexer-table | table-driven DFA lexer (rules compiled at load to a char-class map and a flat transition table, maximal munch) | ok | 0.89× | no | 22.08 | 24.75 | 68 | 0.1 s |
-| sexpr-lisp-frames | S-expression Lisp over nested arrays (eval/apply, closures, linked environment frames) | ok | 0.83× | no | 185.17 | 224.14 | 303 | 0.2 s |
-| jsonpath-query | JSONPath evaluator (path strings parsed at load into segment lists and filter-expression trees, evaluated node-set by node-set) | ok | 0.80× | no | 45.44 | 56.73 | 531 | 1.0 s |
-| xstate-checkout | npm xstate v5 (statechart config interpreted by pure transition(): state-node lookup, guard and assign action tables) | ok | 0.79× | no | 238.02 | 300.69 | 8810 | 1.7 s |
-| ohm-calc | npm ohm-js (PEG grammar interpreted by pexpr.eval with packrat memo, CST walked by semantic actions) | ok | 0.68× | no | 885.50 | 1298.00 | 22926 | 6.9 s |
-| rewrite-symbolic-diff | term rewriting (pattern/template rules with pattern variables, innermost rewriting to a normal form) | ok | 0.64× | no | 774.82 | 1219.43 | 1088 | 1.5 s |
-| cps-trampoline-callcc | continuation-passing evaluator with a trampoline (thunks bounce to a driver loop; call/cc is free) | crash | - | - | - | - | - | 300.0 s |
+| forth-colon-defs | Forth (dictionary of words, data and return stacks, colon definitions compiled from source text at load, indirect-threaded inner interpreter) | ok | 102.47× | yes | 152.69 | 1.49 | 76 | 0.1 s |
+| ast-switch-imperative | tree-walking AST of objects (switch on node.type, Map environment) | ok | 84.47× | yes | 209.68 | 2.48 | 45 | 0.1 s |
+| debruijn-lexical-tak | lexical addressing (names resolved to (depth, index) in a pre-pass; frames are arrays) | ok | 77.76× | yes | 221.26 | 2.85 | 235 | 0.4 s |
+| closure-compile-gcd | closure compilation (AST compiled once at load into nested JS closures, then run) | ok | 57.04× | yes | 233.45 | 4.09 | 43 | 0.1 s |
+| stack-vm-switch | stack VM (string opcodes, switch dispatch, prog[pc++]) | ok | 50.78× | yes | 30.81 | 0.61 | 19 | 0.0 s |
+| register-vm-lua-style | register VM (Lua 5.1-style 32-bit instruction words with A/B/C/sBx fields, RK constants, switch on the decoded opcode) | ok | 24.19× | yes | 282.14 | 11.67 | 94 | 0.2 s |
+| stack-vm-int32-switch | stack VM (numeric opcodes with operands inline in an Int32Array, switch dispatch, code[pc++]) | ok | 15.10× | yes | 186.93 | 12.38 | 62 | 0.1 s |
+| tagged-array-calc | tagged-array expression tree, if-chain on e[0] (jspe/examples/calc.interp.js) | ok | 12.88× | yes | 23.78 | 1.85 | 17 | 0.0 s |
+| assembler-two-pass | assembler + register VM (assembly text with labels assembled at load by a two-pass assembler into fixed-width Int32Array words, memory in an Int32Array) | ok | 8.49× | yes | 70.33 | 8.29 | 56 | 0.2 s |
+| brainfuck-rle-rot13 | Brainfuck (optimizing: run-length folded ops, [-] as clear, matched jumps, switch dispatch over op objects) | ok | 7.72× | yes | 334.96 | 43.38 | 554 | 0.2 s |
+| recursive-step-vm | accumulator VM whose dispatch loop is a recursive step(pc, ...) function (ported from docs/p3/vm.js) | ok | 4.43× | yes | 56.60 | 12.78 | 36 | 0.1 s |
+| cpu-6502-emulator | CPU emulator (a 6502 subset: class with registers and N/Z/C/V flags, 64K byte memory, step() fetching an opcode byte and switching on hex opcodes) | ok | 4.18× | yes | 59.02 | 14.12 | 367 | 1.2 s |
+| backtrack-pike-regex | backtracking regex matcher (Kernighan/Pike: recursive matchHere/matchStar over pattern suffixes) | ok | 2.61× | no | 43.24 | 16.56 | 264 | 0.1 s |
+| turing-machine-table | Turing machine (transition table parsed from rule text at load, keyed by state and symbol, tape grown on demand) | ok | 2.13× | yes | 270.13 | 126.60 | 546 | 0.0 s |
+| minilang-bst-sort-parse-in-main | source text parsed inside main on every call (tokenizer, recursive-descent parser, AST evaluator with first-class functions and records) | ok | 2.02× | no | 409.46 | 203.06 | 346 | 0.5 s |
+| printf-format | printf-style formatter (format string scanned character by character on every call: flags, width, precision, conversion switch) | ok | 1.41× | yes | 39.89 | 28.24 | 162 | 0.1 s |
+| pratt-expr-parse-in-main | expression evaluator (formula string tokenized and Pratt-parsed inside main on every call, then the AST tree-walked per binding) | ok | 1.29× | no | 92.70 | 71.82 | 229 | 0.1 s |
+| closure-threaded-sort | direct-threaded code (bytecode compiled at load into an array of closures, each returning the next pc) | ok | 1.25× | no | 165.94 | 132.58 | 207 | 0.0 s |
+| handler-table-vm | handler-table VM (an array of handler functions indexed by numeric opcode, VM state in an object) | ok | 1.21× | no | 173.14 | 142.90 | 120 | 0.0 s |
+| template-mustache | template engine (mustache-like: template parsed at load into a token tree, rendered by a recursive walk with a context stack) | ok | 1.21× | no | 44.96 | 37.26 | 252 | 0.2 s |
+| wasm-structured-vm | WebAssembly-like structured stack VM (block/loop/if/br/br_if with a label stack, locals, i32 ops, calls between functions) | ok | 1.14× | no | 56.33 | 49.24 | 433 | 0.1 s |
+| schema-validator | JSON-schema-like validator (schema object walked recursively per value, keyword checks, error list with JSON pointers) | ok | 1.13× | no | 18.85 | 16.73 | 826 | 0.5 s |
+| accumulator-list-recursion | accumulator machine, recursion over prog.slice(1), conditional-expression dispatch (docs/p3/int.js) | ok | 1.08× | no | 46.26 | 42.65 | 66 | 0.1 s |
+| expr-eval-formulas | npm expr-eval (RPN instruction list, switch on instruction type, recursive user functions) | ok | 1.08× | no | 597.06 | 552.14 | 3301 | 3.1 s |
+| ski-graph-reduction | SKI combinator graph reduction (lambda terms bracket-abstracted at load, Turner-style in-place updates) | ok | 1.07× | no | 274.12 | 257.02 | 297 | 2.2 s |
+| minilang-bst-sort | source text parsed at load (tokenizer, recursive-descent parser, AST evaluator with first-class functions and records) | ok | 1.05× | no | 210.66 | 199.78 | 386 | 0.4 s |
+| jsep-eval-rows-parse-in-main | npm jsep (ESTree-like AST) + a tree-walking evaluator (switch on node.type, operator switches) | ok | 1.03× | no | 53.56 | 51.84 | 1055 | 0.1 s |
+| expr-eval-formulas-parse-in-main | npm expr-eval (RPN instruction list, switch on instruction type, recursive user functions) | ok | 1.03× | no | 815.02 | 790.03 | 2606 | 2.6 s |
+| jexl-orders-parse-in-main | npm jexl (lexer + state-machine parser to an AST, evaluator dispatching handlers[ast.type], PromiseSync for evalSync) | ok | 1.01× | no | 490.59 | 487.35 | 1627 | 0.1 s |
+| peg-recognizer-assignments | PEG recognizer (grammar as combinator-built data, recursive parse(node, text, pos) dispatching on node.kind) | ok | 1.00× | no | 148.23 | 147.86 | 99 | 0.0 s |
+| json-logic-pricing | npm json-logic-js (JSON rule tree, op-name dispatch through an operations table and an if-chain) | ok | 1.00× | no | 82.63 | 82.43 | 613 | 0.1 s |
+| sval-program | npm sval (JavaScript interpreter in JS: acorn ESTree, evaluator table keyed by node.type, scope objects) | ok | 1.00× | no | 1131.52 | 1131.41 | 19338 | 60.4 s |
+| thompson-nfa-regex | Thompson NFA simulation (regex -> postfix -> state graph at load, lock-step state lists per character) | ok | 1.00× | no | 129.22 | 129.46 | 212 | 0.0 s |
+| jsep-eval-rows | npm jsep (ESTree-like AST) + a tree-walking evaluator (switch on node.type, operator switches) | ok | 0.98× | no | 9.54 | 9.70 | 1055 | 0.1 s |
+| nearley-sexpr | npm nearley (Earley parser runtime interpreting a nearleyc-compiled grammar table, scannerless) | ok | 0.97× | no | 261.90 | 269.26 | 1208 | 0.1 s |
+| jexl-orders | npm jexl (lexer + state-machine parser to an AST, evaluator dispatching handlers[ast.type], PromiseSync for evalSync) | ok | 0.93× | no | 97.91 | 104.74 | 1627 | 0.1 s |
+| dfa-lexer-table | table-driven DFA lexer (rules compiled at load to a char-class map and a flat transition table, maximal munch) | ok | 0.93× | no | 23.58 | 25.26 | 68 | 0.1 s |
+| rules-jsonlogic | rule engine (json-logic: rules are JSON objects {op: args}, evaluated by apply() looking the operator up in a table) | ok | 0.93× | no | 192.58 | 207.69 | 463 | 0.1 s |
+| filtrex-filter | npm filtrex (Jison-parsed expression compiled to JS source, run through new Function) | ok | 0.90× | - | 5.47 | 6.05 | 674 | 0.3 s |
+| class-visitor-collatz | class-per-node AST with accept(visitor) double dispatch (OO visitor pattern) | ok | 0.90× | no | 259.86 | 289.09 | 578 | 0.1 s |
+| jsonpath-query | JSONPath evaluator (path strings parsed at load into segment lists and filter-expression trees, evaluated node-set by node-set) | ok | 0.82× | no | 48.19 | 58.47 | 531 | 1.4 s |
+| sexpr-lisp-frames | S-expression Lisp over nested arrays (eval/apply, closures, linked environment frames) | ok | 0.82× | no | 194.98 | 238.34 | 303 | 0.2 s |
+| xstate-checkout | npm xstate v5 (statechart config interpreted by pure transition(): state-node lookup, guard and assign action tables) | ok | 0.78× | no | 241.98 | 312.15 | 8810 | 1.9 s |
+| rewrite-symbolic-diff | term rewriting (pattern/template rules with pattern variables, innermost rewriting to a normal form) | ok | 0.69× | no | 904.25 | 1311.47 | 1075 | 1.8 s |
+| ohm-calc | npm ohm-js (PEG grammar interpreted by pexpr.eval with packrat memo, CST walked by semantic actions) | ok | 0.69× | no | 918.88 | 1341.38 | 22909 | 8.2 s |
+| cps-trampoline-callcc | continuation-passing evaluator with a trampoline (thunks bounce to a driver loop; call/cc is free) | crash | - | - | - | - | - | 120.0 s |
 | liyad-lisp | npm liyad (Lisp S-expression interpreter: list evaluation, symbol lookup in scope chains, operator tables) | unsupported | - | - | - | - | - | 0.0 s |
-| mathjs-compile | npm mathjs (expression parsed to a node tree at load, compiled to nested closures, typed-function dispatch) | crash | - | - | - | - | - | 104.1 s |
-| sql-volcano-query | SQL query engine (SQL text parsed at load to an expression AST and a plan tree; pull-based volcano iterators, expressions evaluated by a recursive switch) | crash | - | - | - | - | - | 300.2 s |
+| mathjs-compile | npm mathjs (expression parsed to a node tree at load, compiled to nested closures, typed-function dispatch) | crash | - | - | - | - | - | 114.2 s |
+| sql-volcano-query | SQL query engine (SQL text parsed at load to an expression AST and a plan tree; pull-based volcano iterators, expressions evaluated by a recursive switch) | crash | - | - | - | - | - | 120.1 s |
 
 ## Not ok
 
-- **cps-trampoline-callcc** (crash): `timeout after 300 s`
-- **liyad-lisp** (unsupported): `error: /private/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/wild-bzgKLa/liyad-lisp/bundle.mjs: a direct 'eval(...)' in an ES module is not supported (in a linked program it would see the other modules' bindings)`
-- **mathjs-compile** (crash): `thread 'main' (234854402) panicked at src/js.rs:13175:17: specialization budget exceeded (100000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)`
-- **sql-volcano-query** (crash): `timeout after 300 s`
+- **cps-trampoline-callcc** (crash): `timeout after 120 s`
+- **liyad-lisp** (unsupported): `error: /private/var/folders/b3/821wsm8x1vgg7xqhxhqgtftc0000gn/T/wild-WdDOv3/liyad-lisp/bundle.mjs: a direct 'eval(...)' in an ES module is not supported (in a linked program it would see the other modules' bindings)`
+- **mathjs-compile** (crash): `thread 'main' (236114358) panicked at src/js.rs:13312:17: specialization budget exceeded (100000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)`
+- **sql-volcano-query** (crash): `timeout after 120 s`
