@@ -4776,6 +4776,13 @@ pub struct Js {
     /// code a closure specialized to it (`MADE_HELD`). Kept across passes;
     /// a pass that adds one is run again.
     made_refused: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// What each residual function built so far returns, as far as its
+    /// callers may know it (see `ret_step`, `do_call`): `Some(n)`, on
+    /// every path a new array of `n` elements the function made and no
+    /// runtime code holds (a VM's `invoke` returning its results:
+    /// `stack.slice(stack.length - f.results)`); `None`, anything else.
+    /// No entry: no return met.
+    result_arrays: std::cell::RefCell<HashMap<usize, Option<usize>>>,
     /// The parameters (function, index) a call has given the load code's
     /// unchanged data (see `arg_shapes`). Kept across passes.
     node_params: std::cell::RefCell<std::collections::HashSet<(usize, usize)>>,
@@ -6200,6 +6207,7 @@ impl Js {
             closure_data_fn: std::cell::RefCell::new(HashMap::new()),
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
+            result_arrays: std::cell::RefCell::new(HashMap::new()),
             node_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             closure_data_violation: std::cell::Cell::new(false),
             closure_data_off: std::cell::Cell::new(false),
@@ -8374,6 +8382,7 @@ impl Js {
         let saved_body = self.current_body.replace(Some(rfid));
         let saved_mat = self.take_mat_state();
         self.building_fns.borrow_mut().insert(rfid);
+        self.result_arrays.borrow_mut().remove(&rfid);
         // (Its record arguments' objects, watched while it is built: see
         // `RECORD_WATCH`. None for any other body.)
         let records = std::mem::take(&mut *self.record_watch_next.borrow_mut());
@@ -10004,6 +10013,7 @@ impl Js {
     /// (`unpristine`, `no_unbox_fids`, React's) persists.
     fn reset_for_respecialization(&self) {
         self.residual_fns.borrow_mut().clear();
+        self.result_arrays.borrow_mut().clear();
         self.fn_memo.borrow_mut().clear();
         self.fn_variant_memo.borrow_mut().clear();
         self.arg_variant_memo.borrow_mut().clear();
@@ -17346,6 +17356,23 @@ impl Js {
                     v = s.top_mut().ostack.pop().unwrap();
                     s.frames.pop();
                 }
+                // (What a residual function's callers may know of its result:
+                // see `result_arrays`.)
+                if let (true, Some(rfid)) = (self.in_residual_body.get(), self.current_body.get()) {
+                    let plain = matches!(self.fn_kinds[f.func], FnKind::Normal | FnKind::Arrow | FnKind::Method) && !self.is_async[f.func];
+                    let len = match &v {
+                        Abs::Ref(a) if plain && !s.escaped.contains(a) => match s.heap.get(a) {
+                            Some(HeapObj::Array(arr)) if arr.holes.is_empty() && arr.props.is_empty() && arr.proto == INTRINSIC_PROTO && !arr.frozen && arr.len() <= RESULT_ARRAY => Some(arr.len()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let mut known = self.result_arrays.borrow_mut();
+                    let e = known.entry(rfid).or_insert(len);
+                    if *e != len {
+                        *e = None;
+                    }
+                }
                 let r = self.materialize_value(&v, &s.heap, out);
                 out.push(Op::Return(r));
                 Step::Halt
@@ -22209,7 +22236,10 @@ impl Js {
                     // place in the program, its recursion bounded as any
                     // call's, see `arg_shapes`.)
                     let program_list = known_callback && !env_flag!("PE_NO_PROGRAM_LISTS") && self.static_program_list(s, recv);
-                    let may_fold = self.may_fold_builtins(s, m) || (known_callback && matches!(m, "map" | "filter" | "flatMap") && self.recursion_unsteered(s)) || program_list;
+                    // (Or on an interpreter's data at a place of its
+                    // program: see `get_prop_step`.)
+                    let at_place = !env_flag!("PE_NO_PLACE_BUILTINS") && !env_flag!("PE_NO_DISPATCH_DATA") && self.dispatch_point(s, s.top()).is_some();
+                    let may_fold = self.may_fold_builtins(s, m) || (known_callback && matches!(m, "map" | "filter" | "flatMap") && self.recursion_unsteered(s)) || program_list || at_place;
                     if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), may_fold, native_only, species) {
                       if known_callback || self.prelude_unfolds(s, fid, &args, &this, pc) {
                         let f = s.alloc(HeapObj::closure(fid, vec![]));
@@ -23682,7 +23712,38 @@ impl Js {
             let dst = self.opaque_call_var(pc);
             self.emit_temp(s, dst, expr, pc, out);
             s.top_mut().pc += 1;
-            self.finish_call(s, Abs::Dyn(RExpr::Var(dst)), this, ret, pc, out);
+            // (A function built, that returns on every path a new array of
+            // one length (see `result_arrays`): the caller's model of it, an
+            // array of that many runtime values, each read once here. The
+            // runtime array is no one else's: reading it now reads what the
+            // function put there. `PE_NO_RESULT_ARRAYS`: a runtime value.)
+            // (Of a function specialized to a place in a program, see
+            // `arg_shapes`: an interpreted function's results. Of every
+            // residual function, a specializer's own tuples were taken
+            // apart and rebuilt at each call: its residual of itself grew
+            // by a fifth. `PE_RESULT_ARRAYS_ALL`: of every one.)
+            let placed = shapes.is_some() || env_flag!("PE_RESULT_ARRAYS_ALL");
+            let known = if placed && ret == RetMode::Value && !self.building_fns.borrow().contains(&rfid) && !env_flag!("PE_NO_RESULT_ARRAYS") {
+                self.result_arrays.borrow().get(&rfid).copied().flatten()
+            } else {
+                None
+            };
+            let result = match known {
+                Some(n) => {
+                    let mut elems = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let t = self.aux_var(141, pc, i);
+                        let read = RExpr::Index(Box::new(RExpr::Var(dst)), Box::new(RExpr::Num(JsNum::int(i as i64))));
+                        self.emit_temp(s, t, read, pc, out);
+                        elems.push(Abs::Dyn(RExpr::Var(t)));
+                    }
+                    let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
+                    self.note_site(a, pc);
+                    Abs::Ref(a)
+                }
+                None => Abs::Dyn(RExpr::Var(dst)),
+            };
+            self.finish_call(s, result, this, ret, pc, out);
             return Step::Continue;
         }
 
@@ -26133,7 +26194,13 @@ impl Js {
                     let program_list = matches!(k.as_str(), "filter" | "reduce" | "reduceRight" | "forEach" | "map" | "flatMap" | "some" | "every")
                         && !env_flag!("PE_NO_PROGRAM_LISTS")
                         && self.static_program_list(s, addr);
-                    let fold = self.may_fold_builtins(s, k) || (matches!(k.as_str(), "map" | "filter" | "flatMap") && self.recursion_unsteered(s)) || program_list;
+                    // (And on what an interpreter keeps its program's data
+                    // in, at a place of that program (see `dispatch_point`:
+                    // a VM's `stack.splice(...)` for a call's arguments):
+                    // that data stays modeled there, and the places bound
+                    // what is made. `PE_NO_PLACE_BUILTINS`: escapes.)
+                    let at_place = !env_flag!("PE_NO_PLACE_BUILTINS") && !env_flag!("PE_NO_DISPATCH_DATA") && self.dispatch_point(s, s.top()).is_some();
+                    let fold = self.may_fold_builtins(s, k) || (matches!(k.as_str(), "map" | "filter" | "flatMap") && self.recursion_unsteered(s)) || program_list || at_place;
                     if (self.array_prelude.contains_key(k.as_str()) || matches!(k.as_str(), "values" | "keys" | "entries")) && fold && self.pristine("Array") {
                         let baddr = s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{k}"), data: vec![].into(), ext: None });
                         return self.push(s, Abs::Ref(baddr));
@@ -31219,7 +31286,17 @@ impl Js {
         // runs, after a runtime branch since it was last there: a loop of
         // that program its runtime data controls, whatever the
         // interpreter's own loop condition is.)
-        if let Some(k) = self.dispatch_key(s) {
+        // (Not in a self-hosted built-in that is given no function of the
+        // program to call (`__pe_Array_splice`'s loop over its receiver):
+        // its loops are its own, bounded by what it is given, and each
+        // call of it passes them anew; met again at its next call they
+        // are no loop of the interpreted program. One given a callback
+        // (`map` over a program's list) runs the interpreter in its loop.
+        // `PE_PRELUDE_PLACES_REVISIT`: as any function's.)
+        let self_hosted = self.names[s.top().func].starts_with("__pe_")
+            && !env_flag!("PE_PRELUDE_PLACES_REVISIT")
+            && !s.top().locals.iter().any(|v| matches!(v, Abs::Dyn(_)) || matches!(v, Abs::Ref(a) if matches!(s.heap.get(a), Some(HeapObj::Closure { .. }))));
+        if let (false, Some(k)) = (self_hosted, self.dispatch_key(s)) {
             if s.dispatch_seen.get(&k).is_some_and(|n| *n != s.dyn_branches) {
                 return true;
             }
@@ -34259,6 +34336,10 @@ const LOCAL_BASE: &str = "\u{0}local";
 const STATIC_TREE: usize = 4096;
 
 const ARG_VARIANTS: usize = 64;
+
+/// The longest array a residual function's callers know its result as (see
+/// `Js::result_arrays`).
+const RESULT_ARRAY: usize = 8;
 
 /// How many steps specializing a closure to its captures' data may take
 /// (see `Js::closure_data_fns`), all such closures built within it counted.
