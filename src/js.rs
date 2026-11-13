@@ -9275,7 +9275,7 @@ impl Js {
             .filter(|g| !(self.entry.closed.get() && self.is_lexical_global(g)))
             .cloned()
             .collect();
-        let (_, outside_read, outside_every, _) = close(seed, open);
+        let (_, outside_read, outside_every, _) = close(seed.clone(), open);
         let mut progs: Vec<&Program<Op, Cond>> = vec![main];
         progs.extend(code.iter().map(|&r| &fns[r].body));
         let w = crate::pristine::scan_all(&progs);
@@ -9301,9 +9301,27 @@ impl Js {
         // `entry_pts`): runtime state. `None` when the residual has code
         // the account does not see: then everything runtime code reaches,
         // once it writes anything by key.
+        // (The points-to analysis follows calls: what runtime code calls,
+        // and what escapes, it finds runs at runtime. Its seeds are the code
+        // runtime code names, not every function an object it reaches holds.
+        // `PE_PTS_REACH_SEEDS`: those too.)
+        let pts_code: std::collections::HashSet<usize> = if env_flag!("PE_PTS_REACH_SEEDS") {
+            code.clone()
+        } else {
+            let mut named = seed.clone();
+            let mut work: Vec<usize> = named.iter().copied().collect();
+            while let Some(r) = work.pop() {
+                for n in reachable_residual_fns(&fns[r].body, &fns) {
+                    if named.insert(n) {
+                        work.push(n);
+                    }
+                }
+            }
+            named
+        };
         let may = {
             let load = self.entry.load.borrow();
-            self.entry_may_change(&watch, load.as_ref(), main, &fns, live, &code)
+            self.entry_may_change(&watch, load.as_ref(), main, &fns, live, &pts_code)
         };
         let may_change = |a: &usize| match &may {
             Some(m) => m.contains(a),

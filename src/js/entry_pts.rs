@@ -273,6 +273,10 @@ struct Pta<'a> {
     env: Env,
     runtime: bool,
     rfid: Option<usize>,
+    /// The residual functions that run at runtime besides those given as
+    /// such: called from runtime code, or escaped (called by code not seen,
+    /// with anything). Their writes are runtime writes.
+    runtime_fns: std::collections::HashSet<usize>,
 }
 
 impl<'a> Pta<'a> {
@@ -1019,6 +1023,14 @@ impl<'a> Pta<'a> {
     /// object holding them all.
     fn bind(&mut self, rfid: usize, caps: Vec<Pts>, args: Vec<Pts>, direct: bool, this: Option<Pts>) {
         let Some(rf) = self.fns.get(rfid) else { return };
+        // (Called from runtime code: it runs at runtime. Not made as a
+        // value only, which gives no `this`.)
+        if self.runtime && this.is_some() && self.runtime_fns.insert(rfid) {
+            if self.debug {
+                eprintln!("[ENTRY]     runtime: residual function {rfid}, called in program {} at {}", self.prog, self.cur_op.chars().take(160).collect::<String>());
+            }
+            self.changed = true;
+        }
         let (ncap, params, args_var) = (rf.ncaptured, rf.param_vars.clone(), rf.args_var);
         if direct {
             let given: Vec<&Pts> = caps.iter().chain(args.iter()).collect();
@@ -1969,7 +1981,7 @@ impl<'a> Pta<'a> {
             } else {
                 std::collections::HashSet::new()
             };
-            self.runtime = *runtime;
+            self.runtime = *runtime || rfid.is_some_and(|r| self.runtime_fns.contains(&r));
             self.program(p, Env::new());
         }
     }
@@ -2062,6 +2074,12 @@ impl<'a> Pta<'a> {
         let u = self.unknown();
         for r in escaped_fns {
             let Some(rf) = self.fns.get(r) else { continue };
+            if self.runtime_fns.insert(r) {
+                if self.debug {
+                    eprintln!("[ENTRY]     runtime: residual function {r}, escaped");
+                }
+                self.changed = true;
+            }
             let (ncap, params, args_var) = (rf.ncaptured, rf.param_vars.clone(), rf.args_var);
             for &p in params.iter().skip(ncap) {
                 self.add_var(p, &u);
@@ -2181,6 +2199,7 @@ impl Js {
             env: Env::new(),
             runtime: false,
             rfid: None,
+            runtime_fns: std::collections::HashSet::new(),
         };
         // (The variables boundary objects are in: those materialization
         // made for them, and those the load code put them in.)
