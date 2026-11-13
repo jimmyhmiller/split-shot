@@ -8,9 +8,9 @@ Real npm libraries (pinned in `tools/wild/package.json`), used the way applicati
 WILD ok 72 wrong 0 crash 1 unsupported 0 skipped 0 (of 73)
 ```
 
-Specializer: `target/release/js-frontend` (13638288 bytes, built 2026-11-13T12:42:50.572Z).
+Specializer: `target/release/js-frontend` (13694576 bytes, built 2026-11-13T15:27:54.934Z).
 
-Over the 72 ok case(s): 249266 residual units, 59% needed, 3% merged, 38% gap. Outside the load section: 195952 units, 61% needed. 261881 residual lines for 143881 bundle lines.
+Over the 72 ok case(s): 249020 residual units, 59% needed, 3% merged, 38% gap. Outside the load section: 195780 units, 61% needed. 261593 residual lines for 143881 bundle lines.
 
 ## Cases
 
@@ -18,79 +18,79 @@ Over the 72 ok case(s): 249266 residual units, 59% needed, 3% merged, 38% gap. O
 
 | case | verdict | bundled for | bundle lines | residual lines | units | run units | needed | spec. time | peak RSS | run time |
 |---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
-| big-price.top | ok | neutral | 497 | 1431 | 1323 | 1244 | 98% | 0.1 s | 40 MB | 1.08x |
-| change-case-keys.top | ok | neutral | 114 | 382 | 348 | 345 | 93% | 0.3 s | 55 MB | 0.95x |
-| chroma-adjust.top | ok | neutral | 2933 | 6315 | 5674 | 5391 | 90% | 0.6 s | 81 MB | 1.18x |
-| chroma-scale.top | ok | neutral | 2933 | 8965 | 8460 | 7893 | 66% | 5.2 s | 824 MB | 1.46x |
-| classnames-button.top | ok | neutral | 98 | 85 | 75 | 67 | 96% | 0.0 s | 24 MB | 1.25x |
-| clsx-button.top | ok | neutral | 24 | 299 | 240 | 237 | 34% | 0.0 s | 25 MB | 0.86x |
-| color-string-convert.top | ok | neutral | 331 | 816 | 866 | 271 | 100% | 0.1 s | 27 MB | 0.90x |
-| date-fns-duration.top | ok | neutral | 867 | 786 | 709 | 708 | 11% | 1.6 s | 198 MB | 1.10x |
-| date-fns-format.top | ok | neutral | 1796 | 927 | 835 | 823 | 16% | 2.4 s | 179 MB | 0.62x |
-| dayjs-format.top | ok | neutral | 320 | 1003 | 865 | 739 | 100% | 0.1 s | 30 MB | 0.97x |
-| deepmerge-defaults.top | ok | neutral | 143 | 298 | 198 | 165 | 32% | 0.0 s | 23 MB | 1.10x |
-| ejs-render.top | ok | browser | 1226 | 2200 | 1950 | 1718 | 55% | 0.2 s | 44 MB | 0.96x |
-| escape-html.top | ok | neutral | 85 | 89 | 67 | 66 | 100% | 0.0 s | 21 MB | 1.17x |
-| eventemitter-bus.top | ok | neutral | 219 | 418 | 405 | 333 | 91% | 0.0 s | 23 MB | 0.91x |
-| fast-deep-equal.top | ok | neutral | 74 | 168 | 172 | 164 | 78% | 0.0 s | 21 MB | 1.04x |
-| fraction-scale.top | ok | neutral | 775 | 3853 | 3240 | 3156 | 100% | 0.2 s | 48 MB | 0.57x |
-| handlebars-render.inline | ok | browser | 5831 | 7447 | 8626 | 6519 | 63% | 2.5 s | 325 MB | 0.76x |
-| handlebars-render.top | ok | browser | 5832 | 7431 | 8590 | 6536 | 63% | 2.9 s | 321 MB | 1.20x |
-| he-encode.top | ok | neutral | 4069 | 119 | 3866 | 80 | 96% | 0.2 s | 57 MB | 0.85x |
-| immer-produce.top | ok | neutral | 816 | 1817 | 1325 | 1178 | 88% | 0.1 s | 31 MB | 0.99x |
-| immer-reducer.top | ok | neutral | 824 | 1843 | 1362 | 1207 | 92% | 0.4 s | 73 MB | 1.03x |
-| ini-parse.top | ok | neutral | 250 | 519 | 431 | 400 | 66% | 0.1 s | 45 MB | 1.05x |
-| ini-stringify.top | ok | neutral | 251 | 461 | 379 | 373 | 19% | 0.2 s | 47 MB | 0.96x |
-| jmespath-search.inline | ok | neutral | 1547 | 1743 | 1819 | 1770 | 43% | 0.9 s | 210 MB | 0.45x |
-| js-yaml-config.inline | ok | neutral | 2504 | 6 | 8 | 8 | 100% | 0.2 s | 65 MB | 0.00x |
-| js-yaml-config.top | ok | neutral | 2519 | 18 | 22 | 16 | 100% | 0.4 s | 126 MB | 1.03x |
-| js-yaml-dump.top | ok | neutral | 1865 | 4732 | 4594 | 4272 | 35% | 49.8 s | 5482 MB | 2.08x |
-| js-yaml-load.top | crash | neutral | 2504 | - | - | - | - | 192.8 s | 20152 MB | - |
-| lodash-flow.inline | ok | neutral | 2417 | 3812 | 2713 | 2417 | 38% | 1.1 s | 83 MB | 1.10x |
-| lodash-flow.top | ok | neutral | 2478 | 3500 | 2421 | 2040 | 44% | 2.1 s | 113 MB | 1.04x |
-| lodash-get.top | ok | neutral | 1366 | 2752 | 1888 | 1723 | 30% | 13.4 s | 1421 MB | 1.57x |
-| lodash-groupby.top | ok | neutral | 1616 | 3855 | 2983 | 2769 | 26% | 8.7 s | 486 MB | 1.29x |
-| lodash-merge.top | ok | neutral | 1739 | 2442 | 1688 | 1454 | 50% | 11.3 s | 1342 MB | 1.01x |
-| lodash-pipeline.top | ok | neutral | 1735 | 2561 | 1796 | 1619 | 49% | 0.6 s | 93 MB | 0.92x |
-| lodash-string.top | ok | neutral | 759 | 792 | 503 | 477 | 22% | 1.1 s | 141 MB | 1.10x |
-| lodash-template.top | ok | neutral | 835 | 3579 | 2970 | 448 | 20% | 6.3 s | 822 MB | 1.01x |
-| lru-cache-memo.top | ok | neutral | 604 | 6168 | 6561 | 6129 | 28% | 0.4 s | 73 MB | 2.74x |
-| marked-render.top | ok | neutral | 1438 | 4441 | 4909 | 4511 | 99% | 0.7 s | 74 MB | 1.21x |
-| marked-static.inline | ok | neutral | 1437 | 4439 | 4919 | 4522 | 99% | 0.9 s | 80 MB | 1.38x |
-| marked-static.top | ok | neutral | 1438 | 10 | 6 | 6 | 100% | 0.1 s | 56 MB | 1.25x |
-| minimist-args.top | ok | neutral | 261 | 417 | 434 | 426 | 39% | 0.1 s | 33 MB | 0.40x |
-| ms-format.top | ok | neutral | 155 | 159 | 132 | 132 | 100% | 0.0 s | 22 MB | 0.74x |
-| ms-parse.top | ok | neutral | 154 | 160 | 120 | 120 | 100% | 0.0 s | 22 MB | 1.08x |
-| mustache-render.inline | ok | neutral | 461 | 866 | 709 | 624 | 99% | 0.3 s | 69 MB | 0.96x |
-| mustache-render.top | ok | neutral | 463 | 867 | 726 | 624 | 99% | 0.3 s | 81 MB | 0.95x |
-| path-to-regexp-compile.inline | ok | neutral | 178 | 163 | 187 | 187 | 100% | 0.0 s | 24 MB | 0.17x |
-| path-to-regexp-compile.top | ok | neutral | 179 | 163 | 187 | 187 | 100% | 0.0 s | 23 MB | 0.82x |
+| big-price.top | ok | neutral | 497 | 1431 | 1323 | 1244 | 98% | 0.2 s | 40 MB | 1.08x |
+| change-case-keys.top | ok | neutral | 114 | 382 | 348 | 345 | 93% | 0.1 s | 55 MB | 0.98x |
+| chroma-adjust.top | ok | neutral | 2933 | 6315 | 5674 | 5391 | 90% | 0.7 s | 79 MB | 1.28x |
+| chroma-scale.top | ok | neutral | 2933 | 8969 | 8467 | 7899 | 66% | 5.0 s | 759 MB | 1.24x |
+| classnames-button.top | ok | neutral | 98 | 85 | 75 | 67 | 96% | 0.0 s | 24 MB | 1.02x |
+| clsx-button.top | ok | neutral | 24 | 299 | 240 | 237 | 34% | 0.0 s | 25 MB | 0.80x |
+| color-string-convert.top | ok | neutral | 331 | 816 | 866 | 271 | 100% | 0.1 s | 27 MB | 0.91x |
+| date-fns-duration.top | ok | neutral | 867 | 786 | 709 | 708 | 11% | 1.8 s | 198 MB | 1.08x |
+| date-fns-format.top | ok | neutral | 1796 | 694 | 656 | 646 | 20% | 2.6 s | 176 MB | 0.65x |
+| dayjs-format.top | ok | neutral | 320 | 1003 | 865 | 739 | 100% | 0.1 s | 29 MB | 1.02x |
+| deepmerge-defaults.top | ok | neutral | 143 | 298 | 198 | 165 | 32% | 0.0 s | 23 MB | 1.07x |
+| ejs-render.top | ok | browser | 1226 | 2200 | 1950 | 1718 | 55% | 0.2 s | 43 MB | 0.97x |
+| escape-html.top | ok | neutral | 85 | 89 | 67 | 66 | 100% | 0.0 s | 21 MB | 1.07x |
+| eventemitter-bus.top | ok | neutral | 219 | 418 | 405 | 333 | 91% | 0.0 s | 23 MB | 1.03x |
+| fast-deep-equal.top | ok | neutral | 74 | 168 | 172 | 164 | 78% | 0.0 s | 21 MB | 0.89x |
+| fraction-scale.top | ok | neutral | 775 | 3853 | 3240 | 3156 | 100% | 0.3 s | 48 MB | 0.92x |
+| handlebars-render.inline | ok | browser | 5831 | 7447 | 8626 | 6519 | 63% | 5.1 s | 327 MB | 0.79x |
+| handlebars-render.top | ok | browser | 5832 | 7431 | 8590 | 6536 | 63% | 4.5 s | 321 MB | 1.11x |
+| he-encode.top | ok | neutral | 4069 | 119 | 3866 | 80 | 96% | 0.4 s | 62 MB | 0.95x |
+| immer-produce.top | ok | neutral | 816 | 1817 | 1325 | 1178 | 88% | 0.2 s | 31 MB | 0.97x |
+| immer-reducer.top | ok | neutral | 824 | 1843 | 1362 | 1207 | 92% | 0.4 s | 73 MB | 1.04x |
+| ini-parse.top | ok | neutral | 250 | 519 | 435 | 403 | 65% | 0.2 s | 55 MB | 1.03x |
+| ini-stringify.top | ok | neutral | 251 | 461 | 379 | 373 | 19% | 0.2 s | 47 MB | 0.91x |
+| jmespath-search.inline | ok | neutral | 1547 | 1743 | 1819 | 1770 | 43% | 1.0 s | 211 MB | 0.46x |
+| js-yaml-config.inline | ok | neutral | 2504 | 6 | 8 | 8 | 100% | 0.3 s | 65 MB | 0.00x |
+| js-yaml-config.top | ok | neutral | 2519 | 18 | 22 | 16 | 100% | 0.5 s | 126 MB | 0.95x |
+| js-yaml-dump.top | ok | neutral | 1865 | 4733 | 4599 | 4276 | 35% | 52.9 s | 5480 MB | 2.26x |
+| js-yaml-load.top | crash | neutral | 2504 | - | - | - | - | 218.7 s | 20040 MB | - |
+| lodash-flow.inline | ok | neutral | 2417 | 3812 | 2713 | 2417 | 38% | 1.3 s | 82 MB | 1.14x |
+| lodash-flow.top | ok | neutral | 2478 | 3500 | 2421 | 2040 | 44% | 2.3 s | 114 MB | 1.09x |
+| lodash-get.top | ok | neutral | 1366 | 2742 | 1876 | 1723 | 30% | 13.5 s | 1421 MB | 1.88x |
+| lodash-groupby.top | ok | neutral | 1616 | 3802 | 2929 | 2763 | 26% | 9.0 s | 486 MB | 1.29x |
+| lodash-merge.top | ok | neutral | 1739 | 2439 | 1684 | 1454 | 50% | 11.8 s | 1342 MB | 0.96x |
+| lodash-pipeline.top | ok | neutral | 1735 | 2561 | 1796 | 1619 | 49% | 1.1 s | 94 MB | 0.93x |
+| lodash-string.top | ok | neutral | 759 | 791 | 501 | 477 | 22% | 1.1 s | 142 MB | 1.06x |
+| lodash-template.top | ok | neutral | 835 | 3579 | 2970 | 448 | 20% | 6.9 s | 822 MB | 0.98x |
+| lru-cache-memo.top | ok | neutral | 604 | 6168 | 6561 | 6129 | 28% | 0.4 s | 72 MB | 2.86x |
+| marked-render.top | ok | neutral | 1438 | 4441 | 4909 | 4511 | 99% | 0.8 s | 73 MB | 1.17x |
+| marked-static.inline | ok | neutral | 1437 | 4439 | 4919 | 4522 | 99% | 1.0 s | 80 MB | 1.20x |
+| marked-static.top | ok | neutral | 1438 | 10 | 6 | 6 | 100% | 0.1 s | 56 MB | 0.98x |
+| minimist-args.top | ok | neutral | 261 | 417 | 434 | 426 | 39% | 0.1 s | 33 MB | 0.38x |
+| ms-format.top | ok | neutral | 155 | 159 | 132 | 132 | 100% | 0.0 s | 22 MB | 0.82x |
+| ms-parse.top | ok | neutral | 154 | 160 | 120 | 120 | 100% | 0.0 s | 22 MB | 0.98x |
+| mustache-render.inline | ok | neutral | 461 | 866 | 709 | 624 | 99% | 0.4 s | 69 MB | 0.97x |
+| mustache-render.top | ok | neutral | 463 | 867 | 726 | 624 | 99% | 0.4 s | 81 MB | 0.99x |
+| path-to-regexp-compile.inline | ok | neutral | 178 | 163 | 187 | 187 | 100% | 0.0 s | 24 MB | 0.16x |
+| path-to-regexp-compile.top | ok | neutral | 179 | 163 | 187 | 187 | 100% | 0.0 s | 24 MB | 0.76x |
 | path-to-regexp-match.inline | ok | neutral | 257 | 71 | 70 | 70 | 84% | 0.1 s | 32 MB | 0.06x |
-| path-to-regexp-match.top | ok | neutral | 266 | 127 | 117 | 99 | 100% | 0.1 s | 25 MB | 0.90x |
-| picomatch-glob.inline | ok | neutral | 1814 | 92 | 78 | 78 | 94% | 0.0 s | 30 MB | 0.09x |
-| picomatch-glob.top | ok | neutral | 1815 | 165 | 133 | 62 | 63% | 0.0 s | 32 MB | 0.72x |
-| pluralize-count.top | ok | neutral | 396 | 788 | 822 | 697 | 100% | 1.0 s | 134 MB | 1.15x |
-| qs-parse.inline | ok | browser | 2837 | 6345 | 5638 | 5287 | 27% | 1.4 s | 123 MB | 1.19x |
-| qs-parse.top | ok | browser | 2838 | 6346 | 5644 | 5291 | 27% | 1.4 s | 125 MB | 1.23x |
-| qs-stringify.top | ok | browser | 2838 | 6352 | 5648 | 5294 | 27% | 1.4 s | 120 MB | 1.94x |
-| query-string-parse.top | ok | neutral | 640 | 912 | 915 | 904 | 28% | 0.5 s | 124 MB | 0.75x |
-| query-string-stringify.top | ok | neutral | 640 | 302 | 228 | 223 | 98% | 0.0 s | 27 MB | 0.57x |
-| semver-bump.top | ok | neutral | 2253 | 682 | 728 | 600 | 66% | 0.1 s | 89 MB | 0.98x |
-| semver-max.top | ok | neutral | 2252 | 3954 | 3879 | 3034 | 100% | 3.9 s | 617 MB | 1.13x |
-| semver-range.inline | ok | neutral | 2251 | 2312 | 2316 | 1953 | 93% | 3.8 s | 598 MB | 1.00x |
-| semver-range.top | ok | neutral | 2252 | 3870 | 3487 | 2046 | 44% | 14.7 s | 675 MB | 0.99x |
-| slugify-title.top | ok | neutral | 89 | 58 | 40 | 38 | 71% | 0.0 s | 21 MB | 0.97x |
-| sprintf-format.inline | ok | neutral | 241 | 387 | 357 | 321 | 100% | 0.2 s | 60 MB | 1.02x |
-| sprintf-format.top | ok | neutral | 242 | 391 | 362 | 326 | 100% | 0.1 s | 26 MB | 1.10x |
-| superstruct-validate.inline | ok | neutral | 287 | 732 | 505 | 466 | 91% | 0.2 s | 70 MB | 1.08x |
-| superstruct-validate.top | ok | neutral | 401 | 1118 | 780 | 618 | 93% | 0.3 s | 95 MB | 1.01x |
-| tinycolor-readable.top | ok | neutral | 975 | 1493 | 1550 | 1400 | 98% | 0.1 s | 30 MB | 1.02x |
-| validator-email.top | ok | neutral | 6804 | 8442 | 7973 | 6527 | 93% | 1.3 s | 114 MB | 1.00x |
-| validator-form.top | ok | neutral | 6814 | 299 | 302 | 286 | 63% | 1.1 s | 92 MB | 0.68x |
-| validator-url.top | ok | neutral | 478 | 1525 | 1240 | 1220 | 32% | 0.4 s | 117 MB | 0.86x |
-| yaml-parse.top | ok | neutral | 6277 | 15658 | 13943 | 13092 | 100% | 76.7 s | 5845 MB | 1.17x |
-| zod-schema.inline | ok | neutral | 19731 | 52061 | 50083 | 34967 | 53% | 13.4 s | 519 MB | 1.03x |
-| zod-schema.top | ok | neutral | 19737 | 52082 | 50127 | 34959 | 53% | 13.7 s | 523 MB | 1.10x |
+| path-to-regexp-match.top | ok | neutral | 266 | 127 | 117 | 99 | 100% | 0.0 s | 25 MB | 0.95x |
+| picomatch-glob.inline | ok | neutral | 1814 | 89 | 76 | 76 | 93% | 0.0 s | 30 MB | 0.09x |
+| picomatch-glob.top | ok | neutral | 1815 | 165 | 133 | 62 | 63% | 0.1 s | 32 MB | 0.76x |
+| pluralize-count.top | ok | neutral | 396 | 788 | 822 | 697 | 100% | 1.0 s | 134 MB | 1.09x |
+| qs-parse.inline | ok | browser | 2837 | 6345 | 5638 | 5287 | 27% | 1.5 s | 124 MB | 1.20x |
+| qs-parse.top | ok | browser | 2838 | 6346 | 5644 | 5291 | 27% | 1.5 s | 123 MB | 1.24x |
+| qs-stringify.top | ok | browser | 2838 | 6352 | 5648 | 5294 | 27% | 1.5 s | 122 MB | 1.75x |
+| query-string-parse.top | ok | neutral | 640 | 912 | 915 | 904 | 28% | 0.6 s | 124 MB | 0.80x |
+| query-string-stringify.top | ok | neutral | 640 | 302 | 228 | 223 | 98% | 0.0 s | 27 MB | 0.58x |
+| semver-bump.top | ok | neutral | 2253 | 682 | 728 | 600 | 66% | 0.1 s | 88 MB | 1.12x |
+| semver-max.top | ok | neutral | 2252 | 3954 | 3879 | 3034 | 100% | 4.2 s | 611 MB | 1.13x |
+| semver-range.inline | ok | neutral | 2251 | 2312 | 2316 | 1953 | 93% | 4.0 s | 598 MB | 0.98x |
+| semver-range.top | ok | neutral | 2252 | 3870 | 3487 | 2046 | 44% | 15.7 s | 668 MB | 0.99x |
+| slugify-title.top | ok | neutral | 89 | 58 | 40 | 38 | 71% | 0.0 s | 21 MB | 1.00x |
+| sprintf-format.inline | ok | neutral | 241 | 387 | 357 | 321 | 100% | 0.2 s | 60 MB | 0.92x |
+| sprintf-format.top | ok | neutral | 242 | 391 | 362 | 326 | 100% | 0.1 s | 26 MB | 1.12x |
+| superstruct-validate.inline | ok | neutral | 287 | 715 | 496 | 462 | 91% | 0.2 s | 70 MB | 1.07x |
+| superstruct-validate.top | ok | neutral | 401 | 1119 | 778 | 618 | 93% | 0.3 s | 95 MB | 1.03x |
+| tinycolor-readable.top | ok | neutral | 975 | 1493 | 1550 | 1400 | 98% | 0.1 s | 30 MB | 0.98x |
+| validator-email.top | ok | neutral | 6804 | 8442 | 7973 | 6527 | 93% | 1.5 s | 113 MB | 1.07x |
+| validator-form.top | ok | neutral | 6814 | 299 | 302 | 286 | 63% | 1.3 s | 92 MB | 0.65x |
+| validator-url.top | ok | neutral | 478 | 1525 | 1240 | 1220 | 32% | 0.4 s | 117 MB | 0.81x |
+| yaml-parse.top | ok | neutral | 6277 | 15660 | 13945 | 13096 | 100% | 94.0 s | 5747 MB | 1.17x |
+| zod-schema.inline | ok | neutral | 19731 | 52073 | 50083 | 34967 | 53% | 18.0 s | 519 MB | 1.11x |
+| zod-schema.top | ok | neutral | 19737 | 52094 | 50127 | 34959 | 53% | 16.5 s | 521 MB | 1.24x |
 
 ## Causes
 
@@ -100,37 +100,36 @@ Over the ok cases: why known values were left to the runtime, ranked by the unit
 |--:|--:|--:|---|---|---|
 | 5781 | 5787 | 2 | gap | static-work | read .Handlebars |
 | 2498 | 2865 | 1 | merged | merge-join | an object in an anonymous function |
-| 1142 | 27664 | 3 | merged | merge-activation | an object in main |
-| 519 | 13724 | 25 | gap | static-work | call of a known value |
-| 484 | 1268 | 33 | gap | static-work | read .value |
-| 446 | 49795 | 2 | gap | static-work | read .__zod_globalConfig |
-| 418 | 4590 | 11 | gap | static-work | `?:` |
-| 356 | 49661 | 2 | merged | merge-loop | `path` in processError |
-| 344 | 49623 | 2 | gap | builtin-effects-unknown | Object.assign |
+| 1142 | 27663 | 3 | merged | merge-activation | an object in main |
+| 519 | 13627 | 25 | gap | static-work | call of a known value |
+| 495 | 1282 | 34 | gap | static-work | read .value |
+| 446 | 49793 | 2 | gap | static-work | read .__zod_globalConfig |
+| 418 | 4585 | 11 | gap | static-work | `?:` |
+| 356 | 49659 | 2 | merged | merge-loop | `path` in processError |
+| 344 | 49621 | 2 | gap | builtin-effects-unknown | Object.assign |
 | 310 | 11796 | 3 | gap | builtin-effects-unknown | Reflect.getPrototypeOf |
-| 310 | 1420 | 8 | gap | static-work | read [...] |
+| 310 | 1415 | 8 | gap | static-work | read [...] |
 | 303 | 303 | 1 | merged | kept-recursion-stalled | encode |
 | 302 | 303 | 2 | gap | static-work | read .default |
-| 273 | 3747 | 7 | gap | static-work | expression |
+| 271 | 3711 | 7 | gap | static-work | expression |
 | 214 | 214 | 1 | gap | builtin-effects-unknown | Reflect.construct |
 | 159 | 159 | 1 | merged | kept-recursion-dynamic-args | r |
 | 155 | 155 | 6 | gap | unmodeled-builtin | Object.freeze |
-| 123 | 123 | 1 | merged | merge-loop | `re` in decode |
+| 120 | 123 | 1 | merged | merge-loop | `re` in decode |
 | 104 | 11590 | 3 | merged | merge-activation | an object in __require |
 | 94 | 1046 | 4 | gap | static-work | `inc` |
 | 84 | 84 | 1 | merged | merge-loop | `implicitScalarByFirstChar` in Schema2 |
-| 82 | 82 | 2 | gap | static-work | call .test() |
-| 68 | 49355 | 13 | gap | static-work | `!` |
+| 68 | 49353 | 13 | gap | static-work | `!` |
 | 68 | 4667 | 1 | gap | builtin-effects-unknown | Promise.resolve |
-| 65 | 71 | 9 | gap | dead-allocation |  |
+| 67 | 73 | 9 | gap | dead-allocation |  |
 | 59 | 59 | 1 | merged | merge-activation | `canonicalKey` in canonicalKey |
-| 53 | 21703 | 12 | gap | static-work | read .hasOwnProperty |
+| 53 | 21667 | 12 | gap | static-work | read .hasOwnProperty |
 | 45 | 45 | 14 | gap | static-work | branch |
 | 44 | 47 | 7 | gap | static-work | `typeof` |
 | 42 | 46 | 1 | gap | static-work | read .DOUBLE_QUOTED |
 | 42 | 42 | 3 | gap | unmodeled-builtin | Object.getOwnPropertyDescriptor |
 | 40 | 40 | 2 | gap | static-work | call .set() |
-| 38 | 49306 | 6 | gap | static-work | `in` |
+| 38 | 49304 | 6 | gap | static-work | `in` |
 | 32 | 2605 | 1 | gap | static-work | read .PLAIN |
 | 31 | 31 | 1 | merged | merge-join | an object in currentImpl |
 | 31 | 31 | 1 | gap | static-work | call .substring() |
@@ -138,21 +137,22 @@ Over the ok cases: why known values were left to the runtime, ranked by the unit
 | 28 | 36 | 6 | gap | static-work | `==` |
 | 28 | 28 | 1 | gap | unmodeled-builtin | Error |
 | 28 | 28 | 2 | gap | static-work | read .applyPatches_ |
+| 27 | 455 | 1 | gap | unmodeled-builtin | String.prototype.match |
 
 By kind:
 
 | sole | reaches | cases | class | kind | most of it |
 |--:|--:|--:|---|---|---|
-| 9602 | 481934 | 51 | gap | static-work | read .Handlebars (5781), call of a known value (519), read .value (484), read .__zod_globalConfig (446) |
+| 9531 | 481600 | 51 | gap | static-work | read .Handlebars (5781), call of a known value (519), read .value (495), read .__zod_globalConfig (446) |
 | 2529 | 3501 | 5 | merged | merge-join | an object in an anonymous function (2498), an object in currentImpl (31), `typeMatched` in _validateArgs (0), `broken` in an anonymous function (0) |
-| 1350 | 67082 | 15 | merged | merge-activation | an object in main (1142), an object in __require (104), `canonicalKey` in canonicalKey (59), an object in an anonymous function (20) |
-| 998 | 190204 | 13 | gap | builtin-effects-unknown | Object.assign (344), Reflect.getPrototypeOf (310), Reflect.construct (214), Promise.resolve (68) |
-| 593 | 141467 | 14 | merged | merge-loop | `path` in processError (356), `re` in decode (123), `implicitScalarByFirstChar` in Schema2 (84), `fieldErrors` in processError (14) |
-| 325 | 926 | 25 | gap | unmodeled-builtin | Object.freeze (155), Object.getOwnPropertyDescriptor (42), String (31), Error (28) |
+| 1350 | 67080 | 15 | merged | merge-activation | an object in main (1142), an object in __require (104), `canonicalKey` in canonicalKey (59), an object in an anonymous function (20) |
+| 998 | 190198 | 13 | gap | builtin-effects-unknown | Object.assign (344), Reflect.getPrototypeOf (310), Reflect.construct (214), Promise.resolve (68) |
+| 590 | 141463 | 14 | merged | merge-loop | `path` in processError (356), `re` in decode (120), `implicitScalarByFirstChar` in Schema2 (84), `fieldErrors` in processError (14) |
+| 325 | 828 | 25 | gap | unmodeled-builtin | Object.freeze (155), Object.getOwnPropertyDescriptor (42), String (31), Error (28) |
 | 303 | 303 | 1 | merged | kept-recursion-stalled | encode (303) |
-| 159 | 102255 | 5 | merged | kept-recursion-dynamic-args | r (159), visit (0), build (0), mapInner (0) |
-| 65 | 74466 | 14 | merged | kept-shared-context | split (25), parseTimeUnit (22), hue2rgb (16), _iterableToArrayLimit (2) |
-| 65 | 71 | 9 | gap | dead-allocation |  (65) |
+| 159 | 102251 | 5 | merged | kept-recursion-dynamic-args | r (159), visit (0), build (0), mapInner (0) |
+| 67 | 73 | 9 | gap | dead-allocation |  (67) |
+| 65 | 74213 | 14 | merged | kept-shared-context | split (25), parseTimeUnit (22), hue2rgb (16), _iterableToArrayLimit (2) |
 | 0 | 10715 | 7 | gap | limit-loop-growth | `noneToValue` in css2rgb (0), `percentToAbsolute` in css2rgb (0), `roundRGB` in css2rgb (0), `round5` in css2rgb (0) |
 | 0 | 4614 | 3 | merged | merge-branch-write | `slot 13` in #Q (0), `slot 7` in emit (0) |
 | 0 | 1202 | 7 | merged | merge-try | `noneToValue` in css2rgb (0), `percentToAbsolute` in css2rgb (0), `roundRGB` in css2rgb (0), `round5` in css2rgb (0) |
@@ -167,7 +167,7 @@ None.
 
 ## Crash
 
-- **js-yaml-load.top**: `thread 'main' (238865244) panicked at src/js.rs:13348:17: specialization budget exceeded (100000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)`
+- **js-yaml-load.top**: `thread 'main' (240558609) panicked at src/js.rs:13447:17: specialization budget exceeded (100000000 residual-expression nodes): the program drives the partial evaluator into runaway (branch-exploding) residual growth (raise it with --budget N or SPEC_WEIGHT_BUDGET)`
 
 ## Run time
 
@@ -175,80 +175,80 @@ Indicative only. `main` over the inputs of the case it returns for (one it throw
 
 | case | original (us/pass) | residual (us/pass) | residual / original |
 |---|--:|--:|--:|
-| js-yaml-config.inline | 19.2 | 0.04 | 0.00x |
-| path-to-regexp-match.inline | 19.3 | 1.1 | 0.06x |
-| picomatch-glob.inline | 20.5 | 1.8 | 0.09x |
-| path-to-regexp-compile.inline | 2.9 | 0.52 | 0.17x |
-| minimist-args.top | 10.4 | 4.2 | 0.40x |
-| jmespath-search.inline | 7.1 | 3.2 | 0.45x |
-| fraction-scale.top | 13.2 | 7.5 | 0.57x |
-| query-string-stringify.top | 5.8 | 3.3 | 0.57x |
-| date-fns-format.top | 14.9 | 9.3 | 0.62x |
-| validator-form.top | 4.8 | 3.2 | 0.68x |
-| picomatch-glob.top | 0.76 | 0.55 | 0.72x |
-| ms-format.top | 0.30 | 0.23 | 0.74x |
-| query-string-parse.top | 16.6 | 12.5 | 0.75x |
-| handlebars-render.inline | 339 | 256 | 0.76x |
-| path-to-regexp-compile.top | 0.62 | 0.51 | 0.82x |
-| he-encode.top | 8.5 | 7.2 | 0.85x |
-| validator-url.top | 7.3 | 6.3 | 0.86x |
-| clsx-button.top | 0.51 | 0.44 | 0.86x |
-| path-to-regexp-match.top | 1.8 | 1.6 | 0.90x |
-| color-string-convert.top | 3.3 | 3.0 | 0.90x |
-| eventemitter-bus.top | 0.30 | 0.27 | 0.91x |
-| lodash-pipeline.top | 4.4 | 4.1 | 0.92x |
-| mustache-render.top | 2.7 | 2.5 | 0.95x |
-| change-case-keys.top | 22.3 | 21.2 | 0.95x |
-| ini-stringify.top | 8.2 | 7.9 | 0.96x |
-| ejs-render.top | 1.6 | 1.5 | 0.96x |
-| mustache-render.inline | 2.2 | 2.1 | 0.96x |
-| dayjs-format.top | 31.4 | 30.3 | 0.97x |
-| slugify-title.top | 4.5 | 4.3 | 0.97x |
-| semver-bump.top | 9.2 | 9.0 | 0.98x |
-| immer-produce.top | 7.6 | 7.5 | 0.99x |
-| semver-range.top | 18.6 | 18.4 | 0.99x |
-| semver-range.inline | 26.5 | 26.5 | 1.00x |
-| validator-email.top | 7.3 | 7.3 | 1.00x |
-| superstruct-validate.top | 44.1 | 44.4 | 1.01x |
-| lodash-template.top | 1.0 | 1.0 | 1.01x |
-| lodash-merge.top | 18.7 | 19.0 | 1.01x |
-| sprintf-format.inline | 2.3 | 2.3 | 1.02x |
-| tinycolor-readable.top | 31.9 | 32.7 | 1.02x |
-| zod-schema.inline | 115 | 118 | 1.03x |
-| js-yaml-config.top | 0.04 | 0.04 | 1.03x |
-| immer-reducer.top | 7.8 | 8.1 | 1.03x |
-| lodash-flow.top | 1.5 | 1.6 | 1.04x |
-| fast-deep-equal.top | 1.4 | 1.5 | 1.04x |
-| ini-parse.top | 10.8 | 11.3 | 1.05x |
-| big-price.top | 3.4 | 3.6 | 1.08x |
-| ms-parse.top | 0.38 | 0.41 | 1.08x |
-| superstruct-validate.inline | 32.6 | 35.3 | 1.08x |
-| lodash-string.top | 7.5 | 8.2 | 1.10x |
-| sprintf-format.top | 3.6 | 3.9 | 1.10x |
-| date-fns-duration.top | 36.4 | 39.9 | 1.10x |
-| lodash-flow.inline | 6.2 | 6.8 | 1.10x |
-| deepmerge-defaults.top | 7.0 | 7.7 | 1.10x |
-| zod-schema.top | 13.7 | 15.1 | 1.10x |
-| semver-max.top | 26.1 | 29.6 | 1.13x |
-| pluralize-count.top | 6.4 | 7.3 | 1.15x |
-| yaml-parse.top | 41.4 | 48.2 | 1.17x |
-| escape-html.top | 0.33 | 0.39 | 1.17x |
-| chroma-adjust.top | 30.9 | 36.6 | 1.18x |
-| qs-parse.inline | 16.2 | 19.2 | 1.19x |
-| handlebars-render.top | 5.5 | 6.6 | 1.20x |
-| marked-render.top | 42.8 | 51.8 | 1.21x |
-| qs-parse.top | 15.7 | 19.3 | 1.23x |
-| classnames-button.top | 0.56 | 0.70 | 1.25x |
-| marked-static.top | 0.65 | 0.81 | 1.25x |
-| lodash-groupby.top | 3.1 | 4.0 | 1.29x |
-| marked-static.inline | 35.7 | 49.3 | 1.38x |
-| chroma-scale.top | 2.1 | 3.1 | 1.46x |
-| lodash-get.top | 5.5 | 8.6 | 1.57x |
-| qs-stringify.top | 11.9 | 23.2 | 1.94x |
-| js-yaml-dump.top | 25.1 | 52.4 | 2.08x |
-| lru-cache-memo.top | 2.9 | 7.9 | 2.74x |
+| js-yaml-config.inline | 22.1 | 0.05 | 0.00x |
+| path-to-regexp-match.inline | 20.0 | 1.2 | 0.06x |
+| picomatch-glob.inline | 23.0 | 2.0 | 0.09x |
+| path-to-regexp-compile.inline | 3.1 | 0.50 | 0.16x |
+| minimist-args.top | 10.7 | 4.1 | 0.38x |
+| jmespath-search.inline | 7.5 | 3.5 | 0.46x |
+| query-string-stringify.top | 6.1 | 3.5 | 0.58x |
+| validator-form.top | 5.3 | 3.5 | 0.65x |
+| date-fns-format.top | 14.9 | 9.7 | 0.65x |
+| path-to-regexp-compile.top | 0.63 | 0.48 | 0.76x |
+| picomatch-glob.top | 0.80 | 0.61 | 0.76x |
+| handlebars-render.inline | 357 | 282 | 0.79x |
+| query-string-parse.top | 17.8 | 14.2 | 0.80x |
+| clsx-button.top | 0.51 | 0.41 | 0.80x |
+| validator-url.top | 7.8 | 6.3 | 0.81x |
+| ms-format.top | 0.29 | 0.23 | 0.82x |
+| fast-deep-equal.top | 1.5 | 1.4 | 0.89x |
+| ini-stringify.top | 9.3 | 8.4 | 0.91x |
+| color-string-convert.top | 3.4 | 3.1 | 0.91x |
+| fraction-scale.top | 8.0 | 7.3 | 0.92x |
+| sprintf-format.inline | 2.1 | 2.0 | 0.92x |
+| lodash-pipeline.top | 5.1 | 4.8 | 0.93x |
+| js-yaml-config.top | 0.04 | 0.04 | 0.95x |
+| path-to-regexp-match.top | 1.7 | 1.7 | 0.95x |
+| he-encode.top | 7.7 | 7.3 | 0.95x |
+| lodash-merge.top | 21.5 | 20.7 | 0.96x |
+| mustache-render.inline | 2.3 | 2.2 | 0.97x |
+| immer-produce.top | 8.8 | 8.5 | 0.97x |
+| ejs-render.top | 1.6 | 1.6 | 0.97x |
+| marked-static.top | 0.67 | 0.65 | 0.98x |
+| tinycolor-readable.top | 33.5 | 32.7 | 0.98x |
+| lodash-template.top | 1.1 | 1.0 | 0.98x |
+| ms-parse.top | 0.42 | 0.41 | 0.98x |
+| change-case-keys.top | 22.9 | 22.5 | 0.98x |
+| semver-range.inline | 27.5 | 27.1 | 0.98x |
+| mustache-render.top | 2.7 | 2.7 | 0.99x |
+| semver-range.top | 19.1 | 18.9 | 0.99x |
+| slugify-title.top | 4.4 | 4.4 | 1.00x |
+| classnames-button.top | 0.53 | 0.54 | 1.02x |
+| dayjs-format.top | 31.2 | 31.9 | 1.02x |
+| superstruct-validate.top | 48.8 | 50.2 | 1.03x |
+| ini-parse.top | 11.6 | 12.0 | 1.03x |
+| eventemitter-bus.top | 0.29 | 0.29 | 1.03x |
+| immer-reducer.top | 8.1 | 8.4 | 1.04x |
+| lodash-string.top | 8.3 | 8.8 | 1.06x |
+| deepmerge-defaults.top | 7.3 | 7.9 | 1.07x |
+| superstruct-validate.inline | 33.6 | 36.0 | 1.07x |
+| escape-html.top | 0.36 | 0.39 | 1.07x |
+| validator-email.top | 7.3 | 7.8 | 1.07x |
+| big-price.top | 3.5 | 3.7 | 1.08x |
+| date-fns-duration.top | 39.0 | 42.2 | 1.08x |
+| lodash-flow.top | 1.6 | 1.8 | 1.09x |
+| pluralize-count.top | 6.9 | 7.5 | 1.09x |
+| zod-schema.inline | 122 | 136 | 1.11x |
+| handlebars-render.top | 6.0 | 6.7 | 1.11x |
+| sprintf-format.top | 3.2 | 3.6 | 1.12x |
+| semver-bump.top | 8.7 | 9.7 | 1.12x |
+| semver-max.top | 27.3 | 30.9 | 1.13x |
+| lodash-flow.inline | 6.7 | 7.6 | 1.14x |
+| marked-render.top | 55.5 | 64.9 | 1.17x |
+| yaml-parse.top | 47.5 | 55.6 | 1.17x |
+| marked-static.inline | 44.2 | 53.0 | 1.20x |
+| qs-parse.inline | 16.9 | 20.3 | 1.20x |
+| chroma-scale.top | 2.3 | 2.8 | 1.24x |
+| qs-parse.top | 15.8 | 19.5 | 1.24x |
+| zod-schema.top | 14.6 | 18.1 | 1.24x |
+| chroma-adjust.top | 30.0 | 38.3 | 1.28x |
+| lodash-groupby.top | 3.3 | 4.2 | 1.29x |
+| qs-stringify.top | 10.8 | 18.9 | 1.75x |
+| lodash-get.top | 5.7 | 10.7 | 1.88x |
+| js-yaml-dump.top | 27.1 | 61.2 | 2.26x |
+| lru-cache-memo.top | 3.0 | 8.6 | 2.86x |
 
-Geometric mean 0.84x over 72 case(s); 19 faster (below 0.9x), 20 slower (above 1.1x).
+Geometric mean 0.84x over 72 case(s); 17 faster (below 0.9x), 19 slower (above 1.1x).
 
 ## Libraries
 

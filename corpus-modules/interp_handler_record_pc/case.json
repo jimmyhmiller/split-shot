@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{ "n": 0 }, { "n": 1 }, { "n": 5 }, { "n": 100 }],
+  "repeat": true,
+  "forbid": "\\.pc\\b|running|\\bop[A-Z]|\\.stack"
+}
