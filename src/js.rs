@@ -2451,6 +2451,7 @@ impl Heap {
     /// The object at `k`, to change: a write of it (see `EntryWatch`).
     #[track_caller]
     fn get_mut(&mut self, k: &usize) -> Option<&mut HeapObj> {
+        made_held_note(*k, self.m.get(k));
         note_entry_write(*k);
         self.get_mut_quiet(k)
     }
@@ -2465,6 +2466,7 @@ impl Heap {
     }
     #[track_caller]
     fn insert(&mut self, k: usize, v: HeapObj) -> Option<HeapObj> {
+        made_held_note(k, self.m.get(&k));
         note_entry_write(k);
         self.insert_quiet(k, v)
     }
@@ -4768,6 +4770,15 @@ pub struct Js {
     /// was built while the steps were being cut short.
     closure_data_refused: std::cell::RefCell<std::collections::HashSet<usize>>,
     closure_data_violation: std::cell::Cell<bool>,
+    /// The functions no residual function of which knows a capture as a
+    /// tree `main` made (see `ArgShape::Made`): one built so wrote the
+    /// tree or made it a runtime value, or `main` did after giving runtime
+    /// code a closure specialized to it (`MADE_HELD`). Kept across passes;
+    /// a pass that adds one is run again.
+    made_refused: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// The parameters (function, index) a call has given the load code's
+    /// unchanged data (see `arg_shapes`). Kept across passes.
+    node_params: std::cell::RefCell<std::collections::HashSet<(usize, usize)>>,
     closure_data_off: std::cell::Cell<bool>,
     /// While such a function is built: how many are being built, the steps
     /// run for them, and whether that passed the bound (every step under
@@ -6188,6 +6199,8 @@ impl Js {
             arg_variant_memo: std::cell::RefCell::new(HashMap::new()),
             closure_data_fn: std::cell::RefCell::new(HashMap::new()),
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
+            made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
+            node_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             closure_data_violation: std::cell::Cell::new(false),
             closure_data_off: std::cell::Cell::new(false),
             closure_data_depth: std::cell::Cell::new(0),
@@ -6518,6 +6531,13 @@ impl Js {
     }
 
     /// Does function `fid`'s own code read `new.target`?
+    /// Does the code of `fid` read its `this` (an arrow in it that does has
+    /// it captured by the function, which reads it there)?
+    fn reads_this(&self, fid: usize) -> bool {
+        let hi = self.entries.get(fid + 1).copied().unwrap_or(self.code.len());
+        self.code[self.entries[fid]..hi].iter().any(|i| matches!(i, Instr::PushThis | Instr::SuperCall(_) | Instr::SuperCallSpread))
+    }
+
     fn reads_new_target(&self, fid: usize) -> bool {
         let hi = self.entries.get(fid + 1).copied().unwrap_or(self.code.len());
         self.code[self.entries[fid]..hi].iter().any(|i| matches!(i, Instr::PushNewTarget))
@@ -7424,10 +7444,21 @@ impl Js {
         }
         let ncap = self.ncaptured[fid];
         let program = self.dispatch_program.get(fid);
+        // (A parameter that has been given the load code's data, a node of
+        // a program: a static primitive given to it is a node too, a
+        // literal that program holds where a node may be. Finitely many,
+        // as its nodes are. `PE_NO_NODE_LITERALS`: a runtime value.)
+        for j in 0..self.nparams[fid] {
+            if matches!(args.get(j), Some(Abs::Ref(a)) if self.boundary_data(s, *a)) {
+                self.node_params.borrow_mut().insert((fid, j));
+            }
+        }
+        let node_params = self.node_params.borrow();
         let mut shapes: Vec<ArgShape> = (0..self.nparams[fid])
             .map(|j| {
                 let v = args.get(j).cloned().unwrap_or(Abs::Undef);
-                let counter = program.and_then(|p| p.get(ncap + j)).copied().unwrap_or(false);
+                let counter = program.and_then(|p| p.get(ncap + j)).copied().unwrap_or(false)
+                    || (j < args.len() && node_params.contains(&(fid, j)) && !env_flag!("PE_NO_NODE_LITERALS"));
                 match v {
                     Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null if counter => ArgShape::Static(v),
                     Abs::Ref(a) if self.boundary_data(s, a) => ArgShape::Data(a),
@@ -7435,6 +7466,7 @@ impl Js {
                 }
             })
             .collect();
+        drop(node_params);
         // (Only beside an argument that says where in a program the call
         // is: a record alone is no place, and its shapes could go on
         // without end.)
@@ -7570,14 +7602,45 @@ impl Js {
     /// specialized for its arguments knows as data (see `ArgShape::Data`):
     /// the load code's objects no code of `main` has changed (a cell holding
     /// the function itself, its program).
-    fn cap_shapes(&self, s: &State, captured: &[Abs]) -> Vec<ArgShape> {
+    fn cap_shapes(&self, s: &State, fid: usize, captured: &[Abs]) -> Vec<ArgShape> {
         captured
             .iter()
             .map(|c| match c {
                 Abs::Ref(a) if self.boundary_data(s, *a) => ArgShape::Data(*a),
+                Abs::Ref(a) => match self.made_data(s, fid, *a) {
+                    Some(m) => ArgShape::Made(m),
+                    None => ArgShape::Runtime,
+                },
                 _ => ArgShape::Runtime,
             })
             .collect()
+    }
+
+    /// The object at `a` as a tree of static data `main` made (see
+    /// `ArgShape::Made`, `static_tree`), when it is one: the tree, or the
+    /// final cell of a variable holding it. Only where `main`'s objects
+    /// are watched (see `made_held_note`), and for a function not refused
+    /// (`made_refused`). `PE_NO_MADE_DATA`: none.
+    fn made_data(&self, s: &State, fid: usize, a: usize) -> Option<std::rc::Rc<MadeData>> {
+        if env_flag!("PE_NO_MADE_DATA") || env_flag!("PE_NO_MADE_PROGRAM_LISTS") || self.made_refused.borrow().contains(&fid) || !ENTRY_WATCH.with(|w| w.borrow().is_some()) {
+            return None;
+        }
+        let tree = match Js::final_cell_value(&s.heap, &Abs::Ref(a)) {
+            Some(Abs::Ref(t)) if !s.escaped.contains(&a) => t,
+            Some(_) => return None,
+            None => a,
+        };
+        if !self.static_tree(s, tree) {
+            return None;
+        }
+        let mut reach = std::collections::HashSet::new();
+        Js::reachable(&s.heap, tree, &mut reach);
+        reach.insert(tree);
+        reach.insert(a);
+        let mut addrs: Vec<usize> = reach.into_iter().collect();
+        addrs.sort_unstable();
+        let nodes = addrs.into_iter().map(|x| (x, s.heap[&x].clone())).collect();
+        Some(std::rc::Rc::new(MadeData { root: a, nodes }))
     }
 
     /// Is the object at `a` in `s` the load code's, as the boundary has it,
@@ -7612,7 +7675,7 @@ impl Js {
     /// arguments of `shapes` (see `arg_shapes`), made from the caller's
     /// state `s` if not made yet; `None` past `ARG_VARIANTS` of them.
     fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs], args: &[Abs]) -> Option<usize> {
-        let caps = self.cap_shapes(s, captured);
+        let caps = self.cap_shapes(s, fid, captured);
         let mut key_shapes = shapes.to_vec();
         key_shapes.extend(caps.iter().cloned());
         let key = (fid, forms.to_vec(), key_shapes);
@@ -7678,12 +7741,12 @@ impl Js {
         self.push_residual_fn(fid, Some(fid), rfid, forms, ntake, nparams);
         // (The captures known as data are not passed: so its calls made
         // while it is built pass them not either.)
-        if cap_shapes.iter().any(|sh| matches!(sh, ArgShape::Data(_))) {
+        if cap_shapes.iter().any(|sh| matches!(sh, ArgShape::Data(_) | ArgShape::Made(_))) {
             // (Nor what a shape locates under one of them: the body reads
             // it from that object. Passed, a method of the load code's
             // class would be a runtime value to the caller from there on.)
             let tops: Vec<usize> = Js::import_paths(forms).iter().map(|p| p.top).collect();
-            let data = |i: usize| matches!(cap_shapes.get(i), Some(ArgShape::Data(_)));
+            let data = |i: usize| matches!(cap_shapes.get(i), Some(ArgShape::Data(_) | ArgShape::Made(_)));
             let keep: Vec<bool> = (0..ntake).map(|i| if i < ncap { !data(i) } else { !data(tops[i - ncap]) }).collect();
             let mut rfs = self.residual_fns.borrow_mut();
             let rf = &mut rfs[rfid];
@@ -7709,6 +7772,16 @@ impl Js {
                 }
             }
         }
+        // (And the trees `main` made, likewise: the body's own copies,
+        // which stand for the caller's while it neither writes one nor
+        // makes one a runtime value, as a record's do.)
+        let mut made_addrs: Vec<usize> = Vec::new();
+        for sh in shapes.iter().chain(cap_shapes) {
+            if let ArgShape::Made(m) = sh {
+                work.push(m.root);
+                made_addrs.extend(m.nodes.iter().map(|(a, _)| *a));
+            }
+        }
         while let Some(a) = work.pop() {
             if heap.contains_key(&a) {
                 continue;
@@ -7727,6 +7800,10 @@ impl Js {
                 start.frames[0].locals[i] = Abs::Ref(*a);
                 continue;
             }
+            if let Some(ArgShape::Made(m)) = cap_shapes.get(i) {
+                start.frames[0].locals[i] = Abs::Ref(m.root);
+                continue;
+            }
             let v = self.taken_abs(&mut start, c);
             if matches!(forms.get(i), None | Some(CapForm::Value(Shape::Runtime | Shape::InitCell))) && self.fn_cell_captures[fid].get(i).copied().unwrap_or(false) {
                 self.cell_vars.borrow_mut().insert(self.residual_cap_var(rfid, i));
@@ -7742,6 +7819,7 @@ impl Js {
                 ArgShape::Runtime => Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, first_param[j].expect("a runtime argument")))),
                 ArgShape::Static(v) => v.clone(),
                 ArgShape::Data(a) => Abs::Ref(*a),
+                ArgShape::Made(m) => Abs::Ref(m.root),
                 ArgShape::Record(r) => {
                     // (Its objects made here, each named as the caller's is
                     // (made where that one was: an iteration's object stands
@@ -7786,11 +7864,24 @@ impl Js {
             context.push(Abs::Dyn(RExpr::This));
         }
         start.frames[0].entry_skel = skeleton_of(&start.heap, &context).into();
+        let has_made = !made_addrs.is_empty();
         if has_records {
             self.record_building.borrow_mut().push((fid, Js::without_records(shapes)));
+        }
+        if has_records || has_made {
+            record_addrs.extend(made_addrs);
             *self.record_watch_next.borrow_mut() = record_addrs;
         }
         let body = self.specialize_body_watched(rfid, start, self.fn_strict[fid], true);
+        if has_made && self.record_watch_hit.get() {
+            // (Refused: the function's closures are passed such a tree
+            // from the next pass on.)
+            if env_flag!("ARGVAR_DEBUG") {
+                eprintln!("[ARGVAR] {} rf{rfid}: made data refused", self.names[fid]);
+            }
+            self.made_refused.borrow_mut().insert(fid);
+            self.closure_data_violation.set(true);
+        }
         if has_records {
             if self.record_watch_hit.get() {
                 // (Refused, with the record-shaped bodies being built around
@@ -9221,6 +9312,7 @@ impl Js {
         for _ in 0..MAX_PASSES {
             self.reset_for_respecialization();
             self.record_violation.set(false);
+            MADE_HELD.with(|w| *w.borrow_mut() = Default::default());
             if env_flag!("ARGVAR_DEBUG") || env_flag!("PASS_DEBUG") {
                 eprintln!("[PASS] begin (records off: {})", self.records_off.get());
             }
@@ -9238,6 +9330,13 @@ impl Js {
                 added = true;
             }
             if self.closure_data_violation.replace(false) {
+                added = true;
+            }
+            // (A tree a closure given to runtime code was specialized to,
+            // written since: see `MADE_HELD`.)
+            let held_written = MADE_HELD.with(|w| std::mem::take(&mut *w.borrow_mut()).1);
+            if !held_written.is_empty() {
+                self.made_refused.borrow_mut().extend(held_written);
                 added = true;
             }
             let load = self.entry.load.borrow();
@@ -12520,6 +12619,10 @@ fn skel_progress(old: &[Skel], new: &[Skel]) -> bool {
         || old.iter().zip(new).any(|(o, n)| {
             match (o, n) {
                 (Skel::Prim(Abs::Str(a)), Skel::Prim(Abs::Str(b))) => a.len() > b.len() && a.ends_with(b),
+                // (Out of a structure to a static primitive: a walk
+                // reaching a leaf, a literal where a node may be. No way
+                // back: a primitive to a structure is none.)
+                (_, Skel::Prim(_) | Skel::Num) if structured(o) && !env_flag!("PE_NO_LEAF_PROGRESS") => true,
                 _ => structured(o) && structured(n) && !skel_instance(o, n) && !skel_instance(n, o),
             }
         })
@@ -20120,6 +20223,12 @@ impl Js {
             _ => false,
         };
         let rotated = !env_flag!("PE_NO_ROTATED_PAIRS");
+        // (Has the object `other` holds at `a` become a runtime value on
+        // `st`'s path? A path's addresses name what that path made: where
+        // `st` made another object there (at another place in the
+        // program), that one's escape says nothing of this one.
+        // `PE_NO_PAIR_ESCAPED_SITES`: by the address alone.)
+        let escaped_there = |st: &State, other: &State, a: usize| st.escaped.contains(&a) && (env_flag!("PE_NO_PAIR_ESCAPED_SITES") || self.site_of(st, a) == self.site_of(other, a));
         // (The pairs found to be none: an object that stands for another
         // must not also be itself somewhere, see below. Found again without
         // them, until all stand.)
@@ -20168,14 +20277,18 @@ impl Js {
                     let gone = rotated || (!from.heap.contains_key(&x) && !seen.heap.contains_key(&y));
                     let fresh = gone
                         && !banned.contains(&(x, y))
-                        && !from.escaped.contains(&x)
-                        && !seen.escaped.contains(&y)
+                        && !escaped_there(from, seen, x)
+                        && !escaped_there(seen, from, y)
                         && self.site_of(seen, x).is_some()
                         && self.site_of(seen, x) == self.site_of(from, y);
                     if !fresh || pairs.get(&y).is_some_and(|&p| p != x) || (!pairs.contains_key(&y) && taken.contains(&x)) {
                         if env_flag!("PAIR_DEBUG") {
                             eprintln!(
-                                "[PAIR] @{y} for @{x}: no (old gone {}, new unseen {}, sites {:?} {:?}, paired {:?}, taken {}, banned {})",
+                                "[PAIR] @{y} for @{x}: no (old escaped there {} (made at {:?} there), new escaped here {} (made at {:?} here), old gone {}, new unseen {}, sites {:?} {:?}, paired {:?}, taken {}, banned {})",
+                                from.escaped.contains(&x),
+                                self.site_of(from, x),
+                                seen.escaped.contains(&y),
+                                self.site_of(seen, y),
                                 !from.heap.contains_key(&x),
                                 !seen.heap.contains_key(&y),
                                 self.site_of(seen, x),
@@ -23236,7 +23349,15 @@ impl Js {
         // over another node of a static tree of closures, a compiled
         // template's group calling the encoders it closes over. Its depth is
         // the tree's.)
+        // (With no activation of it there is none to differ from: its
+        // unfolding is probed, as any call's with every argument dynamic.
+        // An interpreter given an unknown program, called once per name
+        // of a static list, was unfolded at each, every path out of one
+        // unfolding running all the later ones.
+        // `PE_VACUOUS_CAPTURE_PROGRESS`: progress then too.)
+        let active = chain.iter().any(|f| f.func == fid) || env_flag!("PE_VACUOUS_CAPTURE_PROGRESS");
         let captures_progress = !captured.is_empty()
+            && active
             && chain.iter().filter(|f| f.func == fid).all(|f| skel_progress(&f.entry_skel, &now));
         // (Every argument dynamic: unfolded only where that makes progress.
         // An active activation in this same context it would repeat; else a
@@ -23454,6 +23575,7 @@ impl Js {
                         ArgShape::Runtime => "R".to_string(),
                         ArgShape::Static(v) => format!("{v:?}"),
                         ArgShape::Data(a) => format!("@{a}"),
+                        ArgShape::Made(m) => format!("made[@{}, {} objects]", m.root, m.nodes.len()),
                         ArgShape::Record(r) => format!("record[{} objects, {} leaves]", r.nodes.len(), r.leaves),
                     }).collect::<Vec<_>>()),
                     variant.as_ref().map(|v| v.0)
@@ -23477,8 +23599,17 @@ impl Js {
                 passed.iter().zip(&keep).filter(|(_, k)| **k).map(|(c, _)| self.operand_rexpr(s, c, &mut escaped, out)).collect();
             // (A construction whose code reads `new.target`: see below.)
             let construct = matches!(ret, RetMode::Construct | RetMode::SuperConstruct) && self.reads_new_target(fid);
+            // (A function called as one, whose code never reads its `this`:
+            // given none, and its receiver stays what it is, an
+            // interpreter's own object a helper is a method of.
+            // `PE_NO_UNREAD_THIS`: given it.)
+            let unread_this = ret == RetMode::Value
+                && matches!(self.fn_kinds[fid], FnKind::Normal | FnKind::Method)
+                && !self.is_async[fid]
+                && !self.reads_this(fid)
+                && !env_flag!("PE_NO_UNREAD_THIS");
             let this_r = match &this {
-                _ if self.fn_kinds[fid] == FnKind::Arrow || construct => None,
+                _ if self.fn_kinds[fid] == FnKind::Arrow || construct || unread_this => None,
                 Abs::Undef => None,
                 t => Some(self.operand_rexpr(s, t, &mut escaped, out)),
             };
@@ -24273,7 +24404,25 @@ impl Js {
     /// has it (see `boundary_data`), a program the load code built?
     fn static_program_list(&self, s: &State, a: usize) -> bool {
         matches!(s.heap.get(&a), Some(HeapObj::Array(arr)) if arr.len() <= STATEMENT_LIST && arr.holes.is_empty())
-            && (self.boundary_data(s, a) || (!env_flag!("PE_NO_MADE_PROGRAM_LISTS") && self.static_tree(s, a)))
+            && (self.boundary_data(s, a) || (!env_flag!("PE_NO_MADE_PROGRAM_LISTS") && self.static_tree(s, a)) || self.program_values(s, a))
+    }
+
+    /// Is the array at `a` a list `main` made of the program's own values
+    /// (an operator's operand wrapped as a list of one, `[values]`: static
+    /// primitives and the load code's unchanged data, at least one of
+    /// them, nothing else)? `PE_NO_VALUE_LISTS`: none.
+    fn program_values(&self, s: &State, a: usize) -> bool {
+        if env_flag!("PE_NO_VALUE_LISTS") || s.escaped.contains(&a) {
+            return false;
+        }
+        let Some(HeapObj::Array(arr)) = s.heap.get(&a) else { return false };
+        !arr.is_empty()
+            && arr.props.is_empty()
+            && arr.iter().all(|c| match c {
+                Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Null | Abs::Undef => true,
+                Abs::Ref(r) => self.boundary_data(s, *r),
+                _ => false,
+            })
     }
 
     /// Is the object at `a` a tree of static data `main` made (a program it
@@ -29783,31 +29932,62 @@ impl Js {
     /// stays the model's: runtime code holding the function reaches it
     /// only by calling the function, whose body is watched as `main` is.
     /// `PE_NO_CLOSURE_DATA`: none.
-    fn closure_data_fns(&self, s: &State, todo: &[usize]) {
-        self.closure_data_fn.borrow_mut().clear();
+    fn closure_data_fns(&self, s: &State, todo: &[usize]) -> HashMap<usize, (Vec<CapForm>, usize)> {
+        // (Its own map: building one runs escapes of its own, each with
+        // theirs.)
+        let mut found: HashMap<usize, (Vec<CapForm>, usize)> = HashMap::new();
         if todo.is_empty() || self.react.is_some() || self.closure_data_off.get() || env_flag!("PE_NO_CLOSURE_DATA") || env_flag!("PE_NO_ARG_VARIANTS") {
-            return;
+            return found;
         }
-        let mut reach = std::collections::HashSet::new();
-        for &addr in todo {
-            Js::reachable(&s.heap, addr, &mut reach);
-            reach.insert(addr);
-        }
-        let mut closures: Vec<usize> = reach.into_iter().filter(|a| matches!(s.heap.get(a), Some(HeapObj::Closure { ident: None, .. }))).collect();
-        closures.sort_unstable();
-        for addr in closures {
-            let Some(HeapObj::Closure { fid, captured, once, .. }) = s.heap.get(&addr) else { continue };
+        // (What the escape makes: what `todo` reaches, but through the
+        // captures a closure made so knows as data, which it is not
+        // given. A function reached only through those stays the
+        // model's, and is not specialized here.)
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut work: std::collections::VecDeque<usize> = todo.iter().copied().collect();
+        while let Some(addr) = work.pop_front() {
+            if !seen.insert(addr) {
+                continue;
+            }
+            let Some(o) = s.heap.get(&addr) else { continue };
+            let mut kids: Vec<usize> = Vec::new();
+            o.for_each_child_ref(&mut |c| kids.push(c));
+            kids.sort_unstable();
+            kids.dedup();
+            let HeapObj::Closure { fid, captured, once, ident: None, props, proto, .. } = o else {
+                work.extend(kids);
+                continue;
+            };
+            // (Its children but its captures: for when it is made knowing
+            // some of those.)
+            let mut rest: Vec<usize> = Vec::new();
+            for p in props.iter() {
+                match &p.val {
+                    PVal::Data(Abs::Ref(r)) => rest.push(*r),
+                    PVal::Accessor { get, set } => rest.extend([get, set].into_iter().filter_map(|v| if let Abs::Ref(r) = v { Some(*r) } else { None })),
+                    _ => {}
+                }
+            }
+            if let Abs::Ref(r) = proto {
+                rest.push(*r);
+            }
+            // (Reached, as if not made so, until it is.)
+            work.extend(kids.iter().copied());
             let (fid, captured, once) = (*fid, captured.clone(), *once);
-            if self.fn_kinds[fid] != FnKind::Arrow || self.is_async[fid] || self.arguments_slot[fid].is_some() || self.has_try[fid] {
+            // (An arrow, or a function expression: called as a function,
+            // its `this` a runtime value.)
+            let plain = self.fn_kinds[fid] == FnKind::Arrow || (self.fn_kinds[fid] == FnKind::Normal && !env_flag!("PE_NO_CLOSURE_DATA_FUNCTIONS"));
+            if !plain || self.is_async[fid] || self.arguments_slot[fid].is_some() || (self.has_try[fid] && env_flag!("PE_NO_CLOSURE_DATA_TRY")) {
                 continue;
             }
             if self.closure_data_refused.borrow().contains(&fid) {
                 continue;
             }
             // (A capture that is a variable's cell holds the data.)
-            let caps = self.cap_shapes(s, &captured);
+            let caps = self.cap_shapes(s, fid, &captured);
             let data = captured.iter().zip(&caps).any(|(c, sh)| {
-                matches!(sh, ArgShape::Data(_))
+                matches!(sh, ArgShape::Made(_))
+                    || matches!(sh, ArgShape::Data(_))
                     && match c {
                         Abs::Ref(a) => {
                             let v = Js::final_cell_value(&s.heap, c).unwrap_or(Abs::Ref(*a));
@@ -29816,6 +29996,10 @@ impl Js {
                         _ => false,
                     }
             });
+            if env_flag!("ARGVAR_DEBUG") {
+                let kinds: Vec<&str> = caps.iter().map(|sh| match sh { ArgShape::Data(_) => "data", ArgShape::Made(_) => "made", ArgShape::Runtime => "runtime", _ => "other" }).collect();
+                eprintln!("[ARGVAR] closure @{addr} of function {fid} given to runtime code: captures {kinds:?}, specialized to data: {data}");
+            }
             if !data {
                 continue;
             }
@@ -29846,9 +30030,41 @@ impl Js {
                 eprintln!("[ARGVAR] {}: closure data variant {:?}, {} steps", self.names[fid], made, self.closure_data_steps.get());
             }
             if let Some(rfid) = made {
-                self.closure_data_fn.borrow_mut().insert(addr, (forms, rfid));
+                // (Runtime code holds the closure from here on: the trees
+                // it was specialized to must stay as they are.)
+                MADE_HELD.with(|w| {
+                    let mut w = w.borrow_mut();
+                    for sh in &caps {
+                        if let ArgShape::Made(m) = sh {
+                            for (a, _) in &m.nodes {
+                                if let Some(o) = s.heap.get_shared(a) {
+                                    w.0.entry(*a).or_default().push((o.clone(), fid));
+                                }
+                            }
+                        }
+                    }
+                });
+                found.insert(addr, (forms, rfid));
+                // (Not given the captures it knows as data: what only
+                // they reach is not made. The queue is rebuilt from what
+                // is made for certain.)
+                let kept: Vec<usize> = captured
+                    .iter()
+                    .zip(&caps)
+                    .filter(|(_, sh)| !matches!(sh, ArgShape::Data(_) | ArgShape::Made(_)))
+                    .filter_map(|(c, _)| if let Abs::Ref(r) = c { Some(*r) } else { None })
+                    .chain(rest)
+                    .collect();
+                for k in &kids {
+                    if !kept.contains(k) {
+                        if let Some(i) = work.iter().rposition(|w| w == k) {
+                            work.remove(i);
+                        }
+                    }
+                }
             }
         }
+        found
     }
 
     /// `escape` of each of `addrs`, in order, as one: each made as it would
@@ -29951,7 +30167,18 @@ impl Js {
                     .collect();
                 if env_flag!("ESCAPE_BT") {
                     let bt = format!("{}", std::backtrace::Backtrace::force_capture());
-                    let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("escape_all")).take(7).map(|l| l.trim()).collect();
+                    // (Each function with the line it is at.)
+                    let lines: Vec<&str> = bt.lines().collect();
+                    let frames: Vec<String> = lines
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| l.contains("partial::js::") && !l.contains("escape_all") && !l.contains("step_inner") && !l.contains("Client>::step"))
+                        .take(if env_flag!("ESCAPE_BT_LONG") { 40 } else { 7 })
+                        .map(|(i, l)| {
+                            let at = lines.get(i + 1).map(|n| n.trim()).filter(|n| n.starts_with("at ")).and_then(|n| n.rsplit('/').next()).unwrap_or("");
+                            format!("{} ({at})", l.trim())
+                        })
+                        .collect();
                     eprintln!("[ESC-BT] @{addr}: {}", frames.join(" < "));
                 }
                 eprintln!(
@@ -29969,7 +30196,11 @@ impl Js {
         for &addr in &todo {
             detached.extend(self.detach_private_entries(s, addr));
         }
-        self.closure_data_fns(s, &todo);
+        // (The closures among them that know their captures' data, for
+        // this escape's making of them alone: the addresses are this
+        // state's.)
+        let data_fns = self.closure_data_fns(s, &todo);
+        let outer_data_fns = self.closure_data_fn.replace(data_fns);
         let heap = s.heap.clone();
         let mut made: HashMap<usize, usize> = HashMap::new();
         let mut values = Vec::with_capacity(addrs.len());
@@ -29983,6 +30214,7 @@ impl Js {
             };
             values.push(v);
         }
+        *self.closure_data_fn.borrow_mut() = outer_data_fns;
         for var in made.values() {
             self.why.made(*var, s.top().pc, s.top().func);
         }
@@ -31499,6 +31731,14 @@ impl Js {
                         if matches!(ns.heap.get(&id), Some(HeapObj::Object { class: ObjClass::FinalCell { .. }, .. })) {
                             continue;
                         }
+                        // (The load code's unchanged data, a program and
+                        // its interpreter's tables: it does not grow, and
+                        // a write of it is a change the boundary's watch
+                        // sees, which the next visit meets as any other.
+                        // `PE_NO_LOOP_BOUNDARY_DATA`: made runtime here.)
+                        if !env_flag!("PE_NO_LOOP_BOUNDARY_DATA") && self.boundary_data(&ns, id) {
+                            continue;
+                        }
                     }
                     if !disable_inv && invariant.get(slot).copied().unwrap_or(false) {
                         let id = match ns.frames[fi].locals[slot] {
@@ -31591,9 +31831,14 @@ impl Js {
                 let reassigned = &self.loop_modified[target];
                 let environment = |a: usize| match ns.heap.get(&a) {
                     Some(HeapObj::Builtin { kind, ext: None, .. }) => kind == "Map",
-                    Some(HeapObj::Object { class: ObjClass::Ordinary, props, .. }) => {
-                        props.iter().all(|p| matches!(&p.val, PVal::Data(v) if !matches!(v, Abs::Ref(_))))
-                    }
+                    // (A record of primitive values, and of the load
+                    // code's unchanged data: a variable's cell holding a
+                    // part of the program.)
+                    Some(HeapObj::Object { class: ObjClass::Ordinary, props, .. }) => props.iter().all(|p| match &p.val {
+                        PVal::Data(Abs::Ref(r)) => !env_flag!("PE_NO_LOOP_BOUNDARY_DATA") && self.boundary_data(&ns, *r),
+                        PVal::Data(_) => true,
+                        _ => false,
+                    }),
                     _ => false,
                 };
                 slots.retain(|&sl| match ns.frames[fi].locals[sl] {
@@ -31989,6 +32234,11 @@ impl Js {
         let slots: &[usize] = &live_slots;
         if env_flag!("MAT_DEBUG") {
             eprintln!("[MAT] at pc={at} slots={slots:?} values={:?}", slots.iter().map(|&k| &ns.frames[fi].locals[k]).collect::<Vec<_>>());
+            if env_flag!("ESCAPE_BT") {
+                let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+                let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("step_inner") && !l.contains("Client>::step")).take(8).map(|l| l.trim()).collect();
+                eprintln!("[MAT-BT] {}", frames.join(" < "));
+            }
         }
         for &slot in slots {
             self.why.made(self.stable_id(func, slot), at, func);
@@ -32582,7 +32832,10 @@ impl Js {
         // assigning, kept for when its operations are tracked: the nested
         // program's steps track, and clear, their own. See `track_defs`.)
         let pending = (std::mem::take(&mut *self.pending_info.borrow_mut()), std::mem::take(&mut *self.pending_fixed.borrow_mut()));
+        // (Nor is an escape being run its: see `closure_data_fn`.)
+        let data_fns = std::mem::take(&mut *self.closure_data_fn.borrow_mut());
         let prog = crate::engine::specialize(self, start);
+        *self.closure_data_fn.borrow_mut() = data_fns;
         *self.pending_info.borrow_mut() = pending.0;
         *self.pending_fixed.borrow_mut() = pending.1;
         self.straight_probe.set(saved.0);
@@ -34023,6 +34276,11 @@ enum ArgShape {
     /// no code has changed it, not passed: an interpreter's program, its
     /// syntax tree. (Its runtime identity is the load code's.)
     Data(usize),
+    /// A tree of static data `main` made (a program it parsed from a
+    /// constant text: see `Js::made_data`), as the caller's state has it,
+    /// not passed: known by what it holds (a path's addresses name what
+    /// that path made).
+    Made(std::rc::Rc<MadeData>),
     /// A record the caller made and no runtime code holds (an interpreter's
     /// environment: a frame of slots, a map of variables, linked to the
     /// frames around it), known by its shape: the objects it is made of and
@@ -34041,6 +34299,53 @@ enum ArgShape {
 struct RecordShape {
     nodes: Vec<HeapObj>,
     leaves: usize,
+}
+
+/// A tree of static data `main` made (see `ArgShape::Made`): the object a
+/// value names (`root`: the tree, or the final cell of the variable holding
+/// it), and every object it reaches, by address, as they are.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct MadeData {
+    root: usize,
+    nodes: Vec<(usize, HeapObj)>,
+}
+
+thread_local! {
+    /// The objects of the trees closures given to runtime code were
+    /// specialized to (see `Js::closure_data_fns`, `ArgShape::Made`), by
+    /// address, each as it was with the function specialized: runtime code
+    /// may call such a closure at any later time, so the tree must stay as
+    /// it was. And the functions of those a later write reached
+    /// (`made_held_note`).
+    static MADE_HELD: std::cell::RefCell<(HashMap<usize, Vec<(std::rc::Rc<HeapObj>, usize)>>, Vec<usize>)> = std::cell::RefCell::new((HashMap::new(), Vec::new()));
+}
+
+/// The object `now` at `a` is about to be written, replaced, or made a
+/// runtime value, by code watched as `main` is (a body with a heap of its
+/// own names other objects by its addresses): when it is an object a
+/// closure was specialized to (see `MADE_HELD`: that object, or one equal
+/// to it, where the model made it anew; another path's object at the
+/// address is neither), that closure no longer stands for the closure as
+/// written.
+fn made_held_note(a: usize, now: Option<&std::rc::Rc<HeapObj>>) {
+    let Some(now) = now else { return };
+    if !ENTRY_WATCH.with(|w| w.borrow().is_some()) {
+        return;
+    }
+    MADE_HELD.with(|w| {
+        let mut w = w.borrow_mut();
+        let Some(held) = w.0.get(&a) else { return };
+        let fids: Vec<usize> = held.iter().filter(|(o, _)| std::rc::Rc::ptr_eq(o, now) || **o == **now).map(|(_, f)| *f).collect();
+        if fids.is_empty() {
+            return;
+        }
+        if env_flag!("ARGVAR_DEBUG") {
+            let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+            let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("_note")).take(8).map(|l| l.trim()).collect();
+            eprintln!("[ARGVAR] made data @{a} written or made runtime (the closures of functions {fids:?} held it): {}", frames.join(" < "));
+        }
+        w.1.extend(fids);
+    });
 }
 
 /// The variable that marks a leaf in a `RecordShape`.

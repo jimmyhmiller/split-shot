@@ -1221,6 +1221,20 @@ impl<'a> Pta<'a> {
                 let this = argp.first().cloned().unwrap_or_default();
                 (f.clone(), Some(this), argp.get(1..).unwrap_or(&[]).to_vec())
             }
+            // `f.apply(t, list)` of one function the analysis knows (one
+            // function's code, whichever object of it): `f`
+            // called with `this` `t`, each parameter (and its arguments
+            // object) given what the list holds. (One of several, a table's
+            // entry picked at runtime: not followed, as before. Followed,
+            // the table's functions stay known while the program they run
+            // is not, and the next pass was seen not to end in minutes:
+            // see the split-shot-bugs pad. `PE_PTS_APPLY_ANY`: any number.)
+            (Some(m), Some(f)) if m == "apply" && !new && (f.len() == 1 || self.resolve(f).is_some_and(|ts| ts.len() <= 1) || (!f.is_empty() && std::env::var("PE_PTS_APPLY_ANY").is_ok())) && self.followed(f) && f.iter().all(|&l| self.is_function(l)) && std::env::var("PE_NO_PTS_APPLY").is_err() => {
+                let this = argp.first().cloned().unwrap_or_default();
+                let held = argp.get(1).map(|a| self.read(a)).unwrap_or_default();
+                let n = self.resolve(f).map_or(0, |ts| ts.iter().map(|&r| self.arity(r)).max().unwrap_or(0)).max(1);
+                (f.clone(), Some(this), vec![held; n])
+            }
             _ => (callee, recv, argp),
         };
         // (What is no function is not called: the call throws.)
@@ -1273,8 +1287,12 @@ impl<'a> Pta<'a> {
                 let recv = argp.first().cloned().unwrap_or_default();
                 let spread = argp.get(1).map(|a| self.read(a)).unwrap_or_default();
                 let name = target.rsplit('.').next().unwrap_or(target).to_string();
+                // (A function of `Math` reads its arguments' numbers, and
+                // no `this`: `Math.min.apply(this, arguments)`.)
                 let r = if target.contains(".prototype.") && self.followed(&recv) {
                     self.method_call(&name, &recv, &[spread])
+                } else if target.starts_with("Math.") {
+                    self.static_call(target, &[spread])
                 } else {
                     self.unknown_call(Some(&recv), &[spread])
                 };
@@ -1290,6 +1308,8 @@ impl<'a> Pta<'a> {
                     let name = target.rsplit('.').next().unwrap_or(target).to_string();
                     if target.contains(".prototype.") && self.followed(&recv) {
                         self.method_call(&name, &recv, &rest)
+                    } else if target.starts_with("Math.") {
+                        self.static_call(target, &rest)
                     } else {
                         self.unknown_call(Some(&recv), &rest)
                     }

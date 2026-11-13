@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{}, { "lines": [] }, { "lines": [{ "qty": 3, "price": 2 }, { "qty": 1, "price": 500 }] }, { "lines": [{ "qty": 5, "price": 1 }, { "qty": 9, "price": 3 }] }, { "lines": 7 }],
+  "repeat": true,
+  "forbid": "is_logic|Unrecognized|\"(map|filter|some|var)\"|\\bscopedLogic\\b"
+}
