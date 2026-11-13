@@ -18197,7 +18197,12 @@ impl Js {
     fn define_own_static(&self, s: &mut State, o: usize, k: &PKey, d: usize) -> Option<()> {
         let implicit = match &s.heap[&o] {
             HeapObj::Object { .. } => false,
-            HeapObj::Closure { known: true, .. } if k != "prototype" => {
+            // (Its `prototype` once the model holds it as an own data
+            // property: redefined as any (a compiled class's
+            // `Object.defineProperty(C, "prototype", { writable: false })`).)
+            HeapObj::Closure { known: true, .. }
+                if k != "prototype" || (!env_flag!("PE_NO_DEFINE_PROTOTYPE") && matches!(s.heap[&o].own("prototype"), Some(Prop { val: PVal::Data(_), .. }))) =>
+            {
                 matches!(k.as_str(), Some("name" | "length")) && s.heap[&o].own_key(&k).is_none()
             }
             // (A property of an array that is neither an element
@@ -24267,7 +24272,55 @@ impl Js {
     /// `STATEMENT_LIST`, no holes): the load code's data, as the boundary
     /// has it (see `boundary_data`), a program the load code built?
     fn static_program_list(&self, s: &State, a: usize) -> bool {
-        matches!(s.heap.get(&a), Some(HeapObj::Array(arr)) if arr.len() <= STATEMENT_LIST && arr.holes.is_empty()) && self.boundary_data(s, a)
+        matches!(s.heap.get(&a), Some(HeapObj::Array(arr)) if arr.len() <= STATEMENT_LIST && arr.holes.is_empty())
+            && (self.boundary_data(s, a) || (!env_flag!("PE_NO_MADE_PROGRAM_LISTS") && self.static_tree(s, a)))
+    }
+
+    /// Is the object at `a` a tree of static data `main` made (a program it
+    /// parsed from a constant text, before any input): ordinary objects
+    /// and arrays that hold objects, none a runtime value, nothing in them
+    /// one, at most `STATIC_TREE` of them?
+    fn static_tree(&self, s: &State, a: usize) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut work = vec![a];
+        let mut objects = false;
+        while let Some(x) = work.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            if seen.len() > STATIC_TREE || s.escaped.contains(&x) {
+                return false;
+            }
+            match s.heap.get(&x) {
+                Some(o @ HeapObj::Object { class: ObjClass::Ordinary, private, props, .. }) => {
+                    if !private.is_empty() || props.iter().any(|p| !matches!(p.val, PVal::Data(_))) {
+                        return false;
+                    }
+                    objects |= x != a;
+                    for c in o.children() {
+                        match c {
+                            Abs::Dyn(_) => return false,
+                            Abs::Ref(r) => work.push(*r),
+                            _ => {}
+                        }
+                    }
+                }
+                Some(HeapObj::Array(arr)) => {
+                    if !arr.holes.is_empty() || !arr.props.is_empty() {
+                        return false;
+                    }
+                    for c in arr.iter() {
+                        match c {
+                            Abs::Dyn(_) => return false,
+                            Abs::Ref(r) => work.push(*r),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => return false,
+            }
+        }
+        objects
     }
 
     fn may_fold_builtins(&self, s: &State, m: &str) -> bool {
@@ -26179,6 +26232,13 @@ impl Js {
                                 Some("Error.prototype.toString".to_string())
                             } else if is_fn && MODELED_FUNCTION_PROTO_METHODS.contains(&k.as_str()) && self.pristine("Function") {
                                 Some(format!("Function.prototype.{k}"))
+                            } else if is_fn && k == "toString" && self.pristine("Function") && !env_flag!("PE_NO_FN_TOSTRING_VALUE") {
+                                // (A function's `toString`, read: the
+                                // intrinsic, a value that is not
+                                // `undefined`, `f[k] === void 0` over a
+                                // class's static names. Called, it runs at
+                                // runtime on the function.)
+                                Some("Function.prototype.toString".to_string())
                             } else if MODELED_OBJECT_PROTO_METHODS.contains(&k.as_str())
                                 && !(is_fn && k == "toString")
                                 && self.pristine("Object")
@@ -33940,6 +34000,10 @@ const TRICK_SPLITS: usize = 64;
 /// The base of a dispatch property that indexes an array a local holds
 /// (see `Js::dispatch_fields`): no property's name.
 const LOCAL_BASE: &str = "\u{0}local";
+
+/// The most objects a tree of static data `main` made may hold to count
+/// as a program (see `Js::static_tree`).
+const STATIC_TREE: usize = 4096;
 
 const ARG_VARIANTS: usize = 64;
 

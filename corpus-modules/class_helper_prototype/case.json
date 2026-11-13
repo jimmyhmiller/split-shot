@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{ "n": 0 }, { "n": 4, "keep": true }, { "n": -2.5 }],
+  "repeat": true,
+  "forbid": "_createClass|_defineProperties"
+}
