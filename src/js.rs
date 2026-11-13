@@ -6644,6 +6644,9 @@ impl Js {
         self.settle_branches(body);
         crate::inline::strip_bound_methods(body);
         crate::inline::drop_number_coercions(body, keep);
+        if !env_flag!("PE_NO_DEAD_OBJECTS") {
+            crate::inline::drop_dead_objects(body, keep, self.pristine("Object"));
+        }
         crate::inline::drop_dead_defs(body, keep, &|e, num, defs| self.pure_builtin_call(e, num, defs));
         crate::inline::hoist_common_prefix(body);
         crate::inline::inline_temps(body, keep);
@@ -9248,13 +9251,13 @@ impl Js {
             // leaves: runtime state from the boundary on.
             if load.is_some() && self.entry_conflicts(&prog, &live) {
                 added = true;
-                // (From here on closures are not specialized to their
-                // captures' data, see `closure_data_fns`: with part of the
-                // load code's state now runtime values, a body kept
-                // specialized to the rest (a rewriter's rule set, its terms
-                // now unknown) was seen to take minutes and gain nothing.
-                // A blunt bound: see the split-shot-reduction pad.)
-                self.closure_data_off.set(true);
+                // (When it found load state `main` changes, closures are
+                // from here on not specialized to their captures' data,
+                // see `closure_data_fns`: with part of the load code's
+                // state now runtime values, a body kept specialized to the
+                // rest (a rewriter's rule set, its terms now unknown) was
+                // seen to take minutes and gain nothing. A blunt bound: see
+                // the split-shot-reduction pad.)
             }
             // Built-ins assumed standard that the residual may write: treat
             // them as unknown and specialize again (see `crate::pristine`).
@@ -9831,6 +9834,10 @@ impl Js {
             self.entry.all_globals_dynamic.set(true);
         }
         let added = dynamic.len() > before || hoist_grew || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
+        // (Load state `main` changes, found now: see `closure_data_fns`.)
+        if dynamic.len() > before {
+            self.closure_data_off.set(true);
+        }
         if env_flag!("ENTRY_DEBUG") {
             eprintln!("[ENTRY] conflicts: dynamic {:?} globals {:?} all {} (runtime writes {runtime_writes}) -> again {added}", dynamic, globals, self.entry.all_globals_dynamic.get());
             // (`ENTRY_DUMP`: the pass's `main`, block by block.)
@@ -15649,8 +15656,12 @@ impl Js {
                         // the `if` has one join: its value is lifted there, see
                         // `join_cells`.)
                         let cells: Vec<(usize, usize)> = if self.if_forward_joins[pc].is_empty() && self.if_join[pc].is_some() && !self.facts_off && !env_flag!("PE_NO_JOIN_CELLS") {
+                            // (But a cell that is an interpreter's program
+                            // counter, see `dispatch_fields`: its arms' places
+                            // stay two paths, below.)
+                            let places: Vec<usize> = if env_flag!("PE_NO_DISPATCH_DATA") { Vec::new() } else { s.frames.iter().flat_map(|f| self.dispatch_fields(s, f)).map(|(a, _, _)| a).collect() };
                             hm.iter().filter_map(|&sl| match s.top().locals.get(sl) {
-                                Some(Abs::Ref(a)) if self.join_cell(s, *a) => Some((sl, *a)),
+                                Some(Abs::Ref(a)) if self.join_cell(s, *a) && !places.contains(a) => Some((sl, *a)),
                                 _ => None,
                             }).collect()
                         } else {
@@ -15678,7 +15689,20 @@ impl Js {
                             }
                             records
                         };
-                        let hm: Vec<usize> = hm.into_iter().filter(|sl| !matches!(s.top().locals.get(*sl), Some(Abs::Ref(a)) if records.contains(a))).collect();
+                        // (Nor, in an activation that keeps such a record (its
+                        // program counter a captured variable's cell), the
+                        // other objects it keeps the program's data in, its
+                        // operand and label stacks under names of their own:
+                        // as at its loop head, see `jump_to`.
+                        // `PE_NO_DISPATCH_FRAME_DATA`: made runtime here.)
+                        let frame_data = !env_flag!("PE_NO_DISPATCH_DATA") && !env_flag!("PE_NO_DISPATCH_FRAME_DATA") && !self.dispatch_fields(s, s.top()).is_empty();
+                        let hm: Vec<usize> = hm
+                            .into_iter()
+                            .filter(|sl| match s.top().locals.get(*sl) {
+                                Some(Abs::Ref(a)) => !(records.contains(a) || frame_data),
+                                _ => true,
+                            })
+                            .collect();
                         let cells: Vec<usize> = cells.into_iter().map(|(_, a)| a).collect();
                         let c = if hm.is_empty() {
                             c
@@ -23186,7 +23210,22 @@ impl Js {
                 _ => Abs::Dyn(RExpr::This),
             });
         }
-        let now = skeleton_of(&s.heap, &context);
+        let mut now = skeleton_of(&s.heap, &context);
+        // (A number given for a parameter that indexes a static array
+        // (see `dispatch_slots`: which function of a module a VM's
+        // `invoke(funcs, index, args)` runs) is a place in the program,
+        // not a count: a call at another one makes progress, the same one
+        // again is the recursion. `PE_NO_INDEX_SKELETONS`: any number.)
+        if !env_flag!("PE_NO_INDEX_SKELETONS") && !env_flag!("PE_NO_DISPATCH_POINTS") {
+            let ncap = self.ncaptured[fid];
+            for (j, a) in args.iter().enumerate() {
+                let place = self.dispatch_jumps.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false)
+                    || self.drives_dispatch.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false);
+                if place && matches!(a, Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0) && matches!(now.get(j), Some(Skel::Num)) {
+                    now[j] = Skel::Prim(a.clone());
+                }
+            }
+        }
         // (Every argument dynamic, but a closure whose captures are another
         // static structure than every active activation's: the same code
         // over another node of a static tree of closures, a compiled
@@ -31514,6 +31553,11 @@ impl Js {
                         .filter(|&s| matches!(ns.frames[fi2].locals[s], Abs::Ref(_)))
                         .collect::<Vec<_>>(),
                 );
+                for sl in 0..ns.frames[fi2].locals.len() {
+                    if let Abs::Ref(a) = &ns.frames[fi2].locals[sl] {
+                        eprintln!("[MAT]   slot {sl} @{a} (data {}): {}", self.boundary_data(&ns, *a), format!("{:?}", ns.heap.get(a)).chars().take(160).collect::<String>());
+                    }
+                }
             }
             let _why = self.why.merging(why::Merge::LoopControl);
             self.materialize(&mut ns, &slots, out);

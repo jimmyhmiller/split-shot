@@ -958,6 +958,108 @@ pub fn drop_dead_defs(
     }
 }
 
+/// Remove the objects nothing reads: a variable defined once, as a fresh
+/// object literal, array literal or function, whose every use is a write
+/// into it (`o.k = v` of an object, `a.push(v)` of an array) or its being
+/// stored into, or captured by, another such object. Their definitions and
+/// those writes are deleted. (The load code's functions `main` no longer
+/// calls, tied to each other through the cells of their own names:
+/// `a = {}; b = {}; c = f(a, b); b.value = g(a); a.value = c`.)
+///
+/// `plain_sets`: a write of a new key to a fresh object literal runs no
+/// code (no setter is inherited). Only values that evaluate without effect
+/// are written by the writes removed. Not done in a program with a residual
+/// `try`. Whether anything was removed.
+pub fn drop_dead_objects(prog: &mut Program<Op, Cond>, keep: &HashSet<usize>, plain_sets: bool) -> bool {
+    fn simple(e: &RExpr) -> bool {
+        match e {
+            RExpr::Var(_) | RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Undef | RExpr::Null => true,
+            RExpr::FnRef { caps, .. } | RExpr::ArrayLit(caps) => caps.iter().all(simple),
+            RExpr::ObjectLit(fs) => fs.iter().all(|(_, x)| simple(x)),
+            _ => false,
+        }
+    }
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        Object,
+        Array,
+        Function,
+    }
+    if prog.blocks.iter().any(|b| b.ops.iter().any(|op| matches!(op, Op::Try { .. }))) {
+        return false;
+    }
+    let (mut defs, mut uses) = (HashMap::new(), HashMap::new());
+    count_program(prog, &mut defs, &mut uses);
+    let mut dead: HashMap<usize, Kind> = HashMap::new();
+    for b in &prog.blocks {
+        for op in &b.ops {
+            let (v, kind) = match op {
+                Op::NewObject { dst, fields } if fields.iter().all(|(_, e)| simple(e)) => (*dst, Kind::Object),
+                Op::NewArray { dst, elems } if elems.iter().all(simple) => (*dst, Kind::Array),
+                Op::Assign { var, expr: e @ RExpr::FnRef { .. } } | Op::Eval { dst: var, expr: e @ RExpr::FnRef { .. } } if simple(e) => (*var, Kind::Function),
+                _ => continue,
+            };
+            if defs.get(&v) == Some(&1) && !keep.contains(&v) {
+                dead.insert(v, kind);
+            }
+        }
+    }
+    if dead.is_empty() {
+        return false;
+    }
+    // (The object an op only writes into or defines, when what it writes
+    // has no effect.)
+    let target = |op: &Op, dead: &HashMap<usize, Kind>| -> Option<usize> {
+        match op {
+            Op::NewObject { dst, .. } | Op::NewArray { dst, .. } => dead.contains_key(dst).then_some(*dst),
+            Op::Assign { var, expr: RExpr::FnRef { .. } } | Op::Eval { dst: var, expr: RExpr::FnRef { .. } } => dead.contains_key(var).then_some(*var),
+            Op::SetProp { obj: RExpr::Var(t), val, .. } if plain_sets && dead.get(t) == Some(&Kind::Object) && simple(val) => Some(*t),
+            Op::PushOp { arr: RExpr::Var(t), val } if dead.get(t) == Some(&Kind::Array) && simple(val) => Some(*t),
+            _ => None,
+        }
+    };
+    loop {
+        let mut alive: Vec<usize> = Vec::new();
+        let mut note = |e: &RExpr, alive: &mut Vec<usize>| {
+            visit(e, &mut |x| {
+                if let RExpr::Var(v) = x {
+                    if dead.contains_key(v) {
+                        alive.push(*v);
+                    }
+                }
+            });
+        };
+        for b in &prog.blocks {
+            for op in &b.ops {
+                // (What a write into a dead object reads dies with it; the
+                // object written is no use of itself.)
+                if target(op, &dead).is_some() {
+                    continue;
+                }
+                for e in op_exprs(op) {
+                    note(e, &mut alive);
+                }
+            }
+            if let Terminator::Cond { cond: Cond::Falsy(e), .. } = &b.term {
+                note(e, &mut alive);
+            }
+        }
+        if alive.is_empty() {
+            break;
+        }
+        for v in alive {
+            dead.remove(&v);
+        }
+        if dead.is_empty() {
+            return false;
+        }
+    }
+    for b in prog.blocks.iter_mut() {
+        b.ops.retain(|op| target(op, &dead).is_none());
+    }
+    true
+}
+
 /// May evaluating `e` have an effect (including throwing)? A call does unless
 /// `pure_call` says otherwise and its parts have none.
 fn has_effect(e: &RExpr, pure_call: &dyn Fn(&RExpr) -> bool) -> bool {

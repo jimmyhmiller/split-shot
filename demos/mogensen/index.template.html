@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Five rules. Three projections. — Mogensen’s tiny specializer</title>
+<style>
+:root{--paper:#f5f4ee;--card:#fffefa;--ink:#24382f;--muted:#6e776e;--line:#dcded3;--green:#1c5945;--light:#e6eee4;--amber:#946226;--code:#f0f1e9;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,select,input,textarea{font:inherit}button,select,input{min-height:42px}button{cursor:pointer}button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid #7d9fbd;outline-offset:3px}button:disabled{cursor:wait;opacity:.65}main{max-width:1200px;padding:38px 40px 64px;margin:auto}.eyebrow,.label,.kicker{font:11px/1.5 var(--mono);letter-spacing:.1em;text-transform:uppercase}.topline{display:flex;justify-content:space-between;gap:12px;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:17px}.dot{display:inline-block;width:7px;height:7px;background:var(--green);border-radius:50%;margin-right:8px}header{padding:35px 0 30px}h1{font:normal clamp(38px,5.5vw,64px)/1.08 Georgia,serif;letter-spacing:-.045em;margin:12px 0 17px}h1 em{color:var(--green);font-style:normal}header p{max-width:750px;margin:0;font-size:16px;color:var(--muted)}.projection-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 26px}.projection-tab{border:1px solid var(--line);background:transparent;color:var(--muted);padding:15px 18px;text-align:left;border-radius:8px;position:relative}.projection-tab[aria-selected=true]{border-color:var(--green);background:var(--green);color:white}.projection-tab .num{font:12px var(--mono);display:block;margin-bottom:6px;opacity:.8}.projection-tab strong{font-size:15px;font-weight:550}.workspace{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:22px;align-items:start}.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:23px}.panel h2,.results h2{font-size:17px;font-weight:600;margin:0}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}.badge{display:inline-block;border-radius:4px;background:var(--light);color:var(--green);font:10px/1.5 var(--mono);padding:4px 7px;white-space:nowrap}.field-label{display:block;font-size:13px;font-weight:550;margin:19px 0 8px}.field-label:first-child{margin-top:0}select{width:100%;padding:8px 10px;color:var(--ink);border:1px solid var(--line);border-radius:5px;background:var(--card)}.hint{font-size:12px;color:var(--muted);margin:7px 0 0;line-height:1.6}.presets{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0}.preset{padding:4px 9px;border:1px solid var(--line);background:transparent;border-radius:4px;font-size:12px;min-height:32px;color:var(--muted)}.preset[aria-pressed=true]{background:var(--light);border-color:#adbdab;color:var(--green)}textarea{display:block;width:100%;height:117px;resize:vertical;min-height:80px;max-height:400px;border:1px solid var(--line);border-radius:5px;background:var(--code);color:var(--ink);padding:13px;font:13px/1.8 var(--mono)}.runtime-input{display:flex;align-items:center;gap:12px}.runtime-input input{width:75px;background:var(--card);border:1px solid var(--line);border-radius:5px;padding:6px 10px;color:var(--ink)}.run{width:100%;margin-top:23px;border:0;border-radius:5px;background:var(--green);color:white;font-weight:600;padding:12px 16px}.run span{float:right;opacity:.8}.results{min-width:0}.explanation{min-height:70px;margin-bottom:14px}.explanation p{font-size:13px;color:var(--muted);margin:7px 0 0}.equation{font:14px/1.7 var(--mono);padding:16px 20px;border:1px solid var(--line);background:var(--card);border-radius:7px;margin:0 0 17px;overflow-x:auto;white-space:nowrap}.eq-green{color:var(--green);font-weight:650}.pipeline{display:flex;flex-direction:column;gap:12px}.stage{border:1px solid var(--line);border-radius:8px;background:var(--card);overflow:hidden}.stage-heading{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--line);font-size:12px}.stage-heading .step{width:21px;height:21px;display:grid;place-items:center;background:var(--light);color:var(--green);border-radius:50%;font:11px var(--mono)}.stage-heading strong{font-weight:550}.stage-heading .count{margin-left:auto;font:11px var(--mono);color:var(--muted)}pre{font:12px/1.85 var(--mono);margin:0;white-space:pre-wrap;overflow-wrap:anywhere}.stage pre{padding:15px 17px;max-height:185px;overflow:auto;color:#375244}.stage details{padding:0}.stage summary{font:11px var(--mono);color:var(--green);padding:10px 17px;cursor:pointer}.stage details pre{border-top:1px solid var(--line);max-height:280px}.outcome{margin-top:16px;padding:18px 20px;background:var(--light);border:1px solid #cbd8c7;border-radius:8px}.outcome-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.answer{font:normal 36px/1 Georgia,serif;letter-spacing:-.03em}.arrow{color:#7c9579;padding:0 12px}.checks{font-size:12px;color:var(--green);margin:10px 0 0}.status{font:11px/1.8 var(--mono);margin:9px 0;color:var(--muted);min-height:20px}.error{background:#f8e8df;color:#8b3c20;border:1px solid #dfbaa7;border-radius:6px;padding:16px;font-size:13px;white-space:pre-wrap}.empty{padding:40px 25px;border:1px dashed var(--line);border-radius:8px;color:var(--muted);font-size:13px;text-align:center}.below{margin-top:35px;padding-top:28px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:35px}.below h2{font:normal 25px/1.3 Georgia,serif;margin:0 0 12px}.below p{font-size:13px;color:var(--muted);margin:10px 0}.rules{font:11px/1.9 var(--mono);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:15px;overflow-x:auto;white-space:pre}.rules .s{color:var(--green)}.rules .d{color:var(--amber)}.implementation{margin-top:22px;border:1px solid var(--line);border-radius:7px;background:var(--card)}.implementation summary{padding:13px 17px;font-size:13px;cursor:pointer}.implementation pre{padding:16px;border-top:1px solid var(--line);max-height:300px;overflow:auto}.implementation .hint{padding:0 17px 14px}a{color:var(--green)}footer{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:35px;color:var(--muted);font:10px/1.6 var(--mono)}[hidden]{display:none!important}@media(max-width:820px){main{padding:24px 20px 45px}.workspace{grid-template-columns:1fr}.panel{padding:20px}.explanation{min-height:0}.below{grid-template-columns:1fr;gap:24px}.projection-tab{padding:12px}.projection-tab strong{font-size:13px}.topline .right{display:none}h1{font-size:46px}.panel textarea{height:90px}}@media(prefers-reduced-motion:no-preference){button{transition:background .15s,border-color .15s}.stage{animation:appear .18s ease-out}@keyframes appear{from{opacity:.3;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}}
+</style>
+</head>
+<body>
+<main>
+<div class="topline eyebrow"><span><span class="dot"></span>A tiny executable experiment</span><span class="right">Mogensen’s offline specializer / pure λ-calculus</span></div>
+<header><div class="kicker">Partial evaluation, down to the essentials</div><h1>Five rules.<br><em>Three projections.</em></h1><p>Start with an interpreter. Specialize it into a program, specialize the specializer into a compiler, then let it generate a compiler generator. Every step below runs for real, in your browser.</p></header>
+<div class="projection-tabs" role="tablist" aria-label="Futamura projection">
+<button class="projection-tab" role="tab" id="tab1" aria-controls="projection-content" aria-selected="true" data-projection="1"><span class="num">01 / COMPILE</span><strong>Interpreter → program</strong></button>
+<button class="projection-tab" role="tab" id="tab2" aria-controls="projection-content" aria-selected="false" tabindex="-1" data-projection="2"><span class="num">02 / SELF-APPLY</span><strong>Specializer → compiler</strong></button>
+<button class="projection-tab" role="tab" id="tab3" aria-controls="projection-content" aria-selected="false" tabindex="-1" data-projection="3"><span class="num">03 / SELF-APPLY AGAIN</span><strong>Specializer → generator</strong></button>
+</div>
+<div class="workspace">
+<form class="panel" id="controls">
+<div class="section-heading"><h2>The inputs</h2><span class="badge">EDIT & RUN</span></div>
+<label class="field-label" for="interpreter">Interpreter</label>
+<select id="interpreter"><option value="lambda">E · evaluate a lambda program</option><option value="twice">E₂ · apply the program twice</option></select>
+<p class="hint" id="interpreter-hint">The self-interpreter from the paper: variables, application, and abstraction.</p>
+<label class="field-label" for="program">Source program</label>
+<div class="presets" aria-label="Example programs">
+<button class="preset" type="button" data-preset="add" aria-pressed="true">Add 2</button><button class="preset" type="button" data-preset="double" aria-pressed="false">Double</button><button class="preset" type="button" data-preset="square" aria-pressed="false">Square</button><button class="preset" type="button" data-preset="identity" aria-pressed="false">Identity</button>
+</div>
+<textarea id="program" aria-describedby="syntax-hint" spellcheck="false" maxlength="5000">λn. λf. λx. f (f (n f x))</textarea>
+<p class="hint" id="syntax-hint">Pure lambda syntax. Use λ or \, a dot for a function body, and spaces for application. Programs must be closed.</p>
+<label class="field-label" for="input">Runtime input</label>
+<div class="runtime-input"><input id="input" type="number" value="3" min="0" max="6" step="1" required><span class="hint">a Church numeral, from 0 to 6</span></div>
+<button class="run" id="run" type="submit">Run first projection <span aria-hidden="true">↗</span></button>
+<p class="hint">No network or dependencies. Editing the program changes the actual compiler input.</p>
+</form>
+<section class="results" id="projection-content" role="tabpanel" aria-labelledby="tab1">
+<div class="explanation"><h2 id="projection-title">Compile by specialization</h2><p id="projection-description">Fix the interpreter and source program. The result is a lambda program with the interpreter’s syntax traversal removed.</p></div>
+<div class="equation" id="equation"><span class="eq-green">P</span> ⟦Eᵃ⟧ ⌜program⌝ → ⌜target⌝</div>
+<div id="pipeline" class="pipeline"><div class="empty">Running the first projection…</div></div>
+<div id="outcome" class="outcome" hidden><div class="outcome-top"><div><div class="label">Run the generated target</div><div class="answer"><span id="input-value">3</span><span class="arrow">→</span><span id="result-value">5</span></div></div><span class="badge">VERIFIED</span></div><p class="checks" id="checks"></p></div>
+<div id="status" class="status" role="status" aria-live="polite"></div>
+<div id="error" class="error" role="alert" hidden></div>
+</section>
+</div>
+<div class="below">
+<section><h2>The whole specialization idea.</h2><pre class="rules">P(Var x)       = x
+P(<span class="s">SApp</span> f x)    = P(f)(P(x))
+P(<span class="s">SLam</span> body)   = x ⇒ P(body(x))
+P(<span class="d">DApp</span> f x)    = App(P(f), P(x))
+P(<span class="d">DLam</span> body)   = Lam(x ⇒ P(body(Var(x))))</pre><p><strong>S</strong> executes now. <strong>D</strong> builds code for later. Syntax is encoded as functions; represented binders use actual binders. That is what makes this kernel so small.</p></section>
+<section><h2>Self-application you can inspect.</h2><p>The first projection runs these rules on an annotated interpreter. The second runs them on the specializer’s own annotated lambda term, Pᵃ. The third supplies Pᵃ as both the program and its static input.</p><p>The resulting compiler and generator are ordinary lambda terms. A generic lambda evaluator executes them; they never call back into the host specializer.</p><p>This is the annotated kernel, with the paper’s manual annotations. The parser, runtime, readback, and interface are additional machinery. This demo uses the call-by-value fixed point Z in place of Y to run in JavaScript.</p></section>
+</div>
+<details class="implementation"><summary>Inspect the annotated terms and the runnable kernel</summary><p class="hint">λˢ and ordinary application run at specialization time. λᴰ and ·ᴰ emit code. The same Pᵃ is used in projections two and three.</p><pre id="implementation-code"></pre></details>
+<footer><span>Based on Mogensen (1992), as presented by Wand (1993), §§4 & 7.</span><a href="https://www.cambridge.org/core/services/aop-cambridge-core/content/view/0B598D301F7742EE5F3159340ADD58EE/S0956796800000782a.pdf/specifying_the_correctness_of_bindingtime_analysis.pdf" target="_blank" rel="noreferrer">Read the paper ↗</a></footer>
+</main>
+<script id="worker-source" type="text/plain">
+/*ENGINE*/
+self.onmessage = function(event) {
+ const M=self.Mogensen;
+ try {
+  const {projection,source,input,interpreter}=event.data;
+  if(!Number.isInteger(input)||input<0||input>6) throw new Error('Choose an integer runtime input from 0 to 6.');
+  const program=M.parse(source);
+  const result=M.project(projection,program,interpreter);
+  const value=M.churchResult(M.runtime().run(result.target),input);
+  const original=M.runtime().run(M.interpreters[interpreter])(M.quote(program));
+  const reference=M.churchResult(original,input);
+  if(value!==reference) throw new Error('Generated target and original interpreter disagree.');
+  self.postMessage({ok:true,value,reference,input,ms:result.ms,stats:result.mixStats,
+   stages:result.stages.map(s=>({label:s.label,source:M.print(s.term),nodes:M.size(s.term)})),
+   implementation:'Pᵃ — annotated specializer (Z expanded)\n\n'+M.print(M.PA,true)+'\n\nEᵃ — annotated self-interpreter\n\n'+M.print(M.EA,true)+'\n\nRunnable five-case kernel\n\n'+`function P(t) {
+  return t(x => x)
+    (f => x => P(f)(P(x)))
+    (body => x => P(body(x)))
+    (f => x => App(P(f))(P(x)))
+    (body => Abs(x => P(body(Var(x)))));
+}`});
+ } catch(error) {
+  self.postMessage({ok:false,message:error instanceof RangeError?'This term exceeded the browser’s recursion limit. Try a smaller, terminating Church-numeral program.':error.message});
+ }
+};
+</script>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const presets={add:'λn. λf. λx. f (f (n f x))',double:'λn. λf. λx. n f (n f x)',square:'λn. λf. n (n f)',identity:'λn. n'};
+const projections={
+ 1:{title:'Compile by specialization',description:'Fix the interpreter and source program. The result is a lambda program with the interpreter’s syntax traversal removed.',equation:'P ⟦Eᵃ⟧ ⌜program⌝ → ⌜target⌝',button:'Run first projection'},
+ 2:{title:'Generate a compiler',description:'Specialize P to the annotated interpreter. Then run the generated compiler on your source program.',equation:'P ⟦Pᵃ⟧ ⟦Eᵃ⟧ → ⌜compiler⌝',button:'Run second projection'},
+ 3:{title:'Generate a compiler generator',description:'Specialize P to its own annotated term. Run the resulting generator on the interpreter, then run that compiler on your program.',equation:'P ⟦Pᵃ⟧ ⟦Pᵃ⟧ → ⌜generator⌝',button:'Run third projection'}
+};
+let projection=1,worker=null,timeout=null;
+const workerURL=URL.createObjectURL(new Blob([$('worker-source').textContent],{type:'text/javascript'}));
+function stageCard(stage,index,total){
+ const card=document.createElement('article');card.className='stage';
+ const heading=document.createElement('div');heading.className='stage-heading';
+ const step=document.createElement('span');step.className='step';step.textContent=index+1;
+ const title=document.createElement('strong');title.textContent=stage.label;
+ const count=document.createElement('span');count.className='count';count.textContent=stage.nodes+' nodes';
+ heading.append(step,title,count);card.append(heading);
+ if(index===total-1){const pre=document.createElement('pre');pre.textContent=stage.source;card.append(pre);}
+ else {const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Inspect generated lambda term';const pre=document.createElement('pre');pre.textContent=stage.source;details.append(summary,pre);card.append(details);}
+ return card;
+}
+function stop(){if(worker){worker.terminate();worker=null;}clearTimeout(timeout);$('run').disabled=false;}
+function fail(message){stop();$('error').textContent=message;$('error').hidden=false;$('status').textContent='No result produced.';}
+function markStale(){stop();$('pipeline').replaceChildren();const blank=document.createElement('div');blank.className='empty';blank.textContent='Inputs changed. Run the projection to generate a fresh result.';$('pipeline').append(blank);$('outcome').hidden=true;$('status').textContent='';$('error').hidden=true;}
+function run(){
+ stop();$('error').hidden=true;$('outcome').hidden=true;$('run').disabled=true;$('status').textContent='Computing projection '+projection+'…';$('pipeline').replaceChildren();
+ worker=new Worker(workerURL);
+ worker.onmessage=event=>{
+  const data=event.data;if(!data.ok){fail(data.message);return;}
+  stop();data.stages.forEach((stage,i)=>$('pipeline').append(stageCard(stage,i,data.stages.length)));
+  $('input-value').textContent=data.input;$('result-value').textContent=data.value;$('outcome').hidden=false;
+  $('checks').textContent=projection===1?'✓ Target matches direct specialization. Output matches the original interpreter.':projection===2?'✓ Generated compiler reproduces direct specialization. Output matches the original interpreter.':'✓ Generated compiler matches projection 2; target matches projection 1. Output matches the original interpreter.';
+  $('status').textContent=data.ms.toFixed(1)+' ms for generation + structural checks · '+data.stats.visits+' host P visits';
+  $('implementation-code').textContent=data.implementation;
+ };
+ worker.onerror=event=>{event.preventDefault();fail('The computation could not finish. Try a smaller, terminating program.');};
+ worker.postMessage({projection,source:$('program').value,input:Number($('input').value),interpreter:$('interpreter').value});
+ timeout=setTimeout(()=>fail('Stopped after 4 seconds. This term may diverge. Try a terminating Church-numeral program.'),4000);
+}
+function selectProjection(n){
+ projection=n;
+ document.querySelectorAll('[data-projection]').forEach(b=>{const active=Number(b.dataset.projection)===n;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;});
+ $('projection-content').setAttribute('aria-labelledby','tab'+n);
+ const p=projections[n];$('projection-title').textContent=p.title;$('projection-description').textContent=p.description;$('equation').textContent=p.equation;$('run').replaceChildren(document.createTextNode(p.button));run();
+}
+$('controls').addEventListener('submit',event=>{event.preventDefault();run();});
+document.querySelectorAll('[data-projection]').forEach(b=>{
+ b.addEventListener('click',()=>selectProjection(Number(b.dataset.projection)));
+ b.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const n=event.key==='Home'?1:event.key==='End'?3:((projection-1+(event.key==='ArrowRight'?1:2))%3)+1;selectProjection(n);$('tab'+n).focus();});
+});
+document.querySelectorAll('[data-preset]').forEach(b=>b.addEventListener('click',()=>{$('program').value=presets[b.dataset.preset];document.querySelectorAll('[data-preset]').forEach(p=>p.setAttribute('aria-pressed',String(p===b)));run();}));
+$('program').addEventListener('input',()=>{document.querySelectorAll('[data-preset]').forEach(p=>p.setAttribute('aria-pressed','false'));markStale();});
+$('input').addEventListener('input',markStale);
+$('interpreter').addEventListener('change',()=>{$('interpreter-hint').textContent=$('interpreter').value==='twice'?'A second interpreter: evaluate the same source, then apply its function twice. Add 2 now adds 4.':'The self-interpreter from the paper: variables, application, and abstraction.';run();});
+window.addEventListener('pagehide',()=>{stop();URL.revokeObjectURL(workerURL);});
+run();
+</script>
+</body>
+</html>
