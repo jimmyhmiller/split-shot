@@ -4756,6 +4756,25 @@ pub struct Js {
     /// The residual functions specialized for the static parts of a call's
     /// arguments (see `arg_shapes`), by function, capture forms and those.
     arg_variant_memo: std::cell::RefCell<HashMap<(usize, Vec<CapForm>, Vec<ArgShape>), usize>>,
+    /// The residual function of a closure about to be made a runtime value
+    /// that knows captures of it as the load code's data (see
+    /// `closure_data_fns`), with the forms it was made for: by the
+    /// closure's address, for the escape being run.
+    closure_data_fn: std::cell::RefCell<HashMap<usize, (Vec<CapForm>, usize)>>,
+    /// The functions whose closures are not specialized to their captures'
+    /// data (see `closure_data_fns`): building one took more than
+    /// `CLOSURE_DATA_STEPS` steps. Kept across passes; a pass that adds one
+    /// is run again (`closure_data_violation`), its residual holding what
+    /// was built while the steps were being cut short.
+    closure_data_refused: std::cell::RefCell<std::collections::HashSet<usize>>,
+    closure_data_violation: std::cell::Cell<bool>,
+    closure_data_off: std::cell::Cell<bool>,
+    /// While such a function is built: how many are being built, the steps
+    /// run for them, and whether that passed the bound (every step under
+    /// one then halts).
+    closure_data_depth: std::cell::Cell<usize>,
+    closure_data_steps: std::cell::Cell<usize>,
+    closure_data_over: std::cell::Cell<bool>,
     /// Functions whose closures pass final cells as cells after all: a pass
     /// made one of them a residual function taking a cell's value and also
     /// another form (two copies of its code). Persists across passes.
@@ -5786,16 +5805,28 @@ impl Js {
             // (Each entry: the properties its value is computed from, or
             // `None` for one not so computed.)
             let mut stack: Vec<Option<Vec<String>>> = Vec::new();
+            // (The properties a local was computed from, anywhere in its
+            // function: `at = vm.pc * 2; program[at]`, `pc` through `at`.
+            // And the locals that are plain values (a parameter, a
+            // variable not so computed): an array one of them holds is
+            // indexed under the base `LOCAL_BASE`, `program` of
+            // `run(program, input)`.)
+            let mut slot_props: HashMap<usize, Vec<String>> = HashMap::new();
+            let entry_pcs: std::collections::HashSet<usize> = entries.iter().copied().collect();
             for pc in 0..code.len() {
                 if leaders[pc] {
                     stack.clear();
+                }
+                if entry_pcs.contains(&pc) {
+                    slot_props.clear();
                 }
                 match &code[pc] {
                     Instr::GetProp(k) => {
                         stack.pop();
                         stack.push(Some(vec![k.clone()]));
                     }
-                    Instr::Load(_) | Instr::PushNum(_) | Instr::PushThis => stack.push(Some(Vec::new())),
+                    Instr::Load(sl) => stack.push(Some(slot_props.get(sl).cloned().unwrap_or_default())),
+                    Instr::PushNum(_) | Instr::PushThis => stack.push(Some(Vec::new())),
                     Instr::Dup => {
                         let top = stack.last().cloned().flatten();
                         stack.push(top);
@@ -5821,8 +5852,17 @@ impl Js {
                         stack.push(from);
                     }
                     Instr::Snapshot => {}
-                    Instr::Store(_) => {
-                        stack.pop();
+                    Instr::Store(sl) => {
+                        if let Some(Some(ps)) = stack.pop() {
+                            if !ps.is_empty() {
+                                let e = slot_props.entry(*sl).or_default();
+                                for p in ps {
+                                    if !e.contains(&p) {
+                                        e.push(p);
+                                    }
+                                }
+                            }
+                        }
                     }
                     Instr::SetPropOp(_) => {
                         stack.pop();
@@ -5833,7 +5873,12 @@ impl Js {
                         let base = stack.pop().flatten();
                         if let (Some(ps), Some(bs)) = (index, base) {
                             for p in ps {
-                                props.entry(p).or_default().extend(bs.iter().cloned());
+                                let e = props.entry(p).or_default();
+                                if bs.is_empty() {
+                                    e.insert(LOCAL_BASE.to_string());
+                                } else {
+                                    e.extend(bs.iter().cloned());
+                                }
                             }
                         }
                         stack.push(None);
@@ -6141,6 +6186,13 @@ impl Js {
             fn_memo: std::cell::RefCell::new(HashMap::new()),
             fn_variant_memo: std::cell::RefCell::new(HashMap::new()),
             arg_variant_memo: std::cell::RefCell::new(HashMap::new()),
+            closure_data_fn: std::cell::RefCell::new(HashMap::new()),
+            closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
+            closure_data_violation: std::cell::Cell::new(false),
+            closure_data_off: std::cell::Cell::new(false),
+            closure_data_depth: std::cell::Cell::new(0),
+            closure_data_steps: std::cell::Cell::new(0),
+            closure_data_over: std::cell::Cell::new(false),
             no_unbox_fids: std::cell::RefCell::new(std::collections::HashSet::new()),
             record_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             record_violation: std::cell::Cell::new(false),
@@ -9182,6 +9234,9 @@ impl Js {
             if record_violated {
                 added = true;
             }
+            if self.closure_data_violation.replace(false) {
+                added = true;
+            }
             let load = self.entry.load.borrow();
             // (The residual functions the residual has: those it reaches.
             // Others were made on a path given up, or to be measured.)
@@ -9193,6 +9248,13 @@ impl Js {
             // leaves: runtime state from the boundary on.
             if load.is_some() && self.entry_conflicts(&prog, &live) {
                 added = true;
+                // (From here on closures are not specialized to their
+                // captures' data, see `closure_data_fns`: with part of the
+                // load code's state now runtime values, a body kept
+                // specialized to the rest (a rewriter's rule set, its terms
+                // now unknown) was seen to take minutes and gain nothing.
+                // A blunt bound: see the split-shot-reduction pad.)
+                self.closure_data_off.set(true);
             }
             // Built-ins assumed standard that the residual may write: treat
             // them as unknown and specialize again (see `crate::pristine`).
@@ -12763,6 +12825,18 @@ impl Client for Js {
         if self.straight_probe.get() && self.straight_failed.get() {
             return Step::Halt;
         }
+        // (A closure being specialized to its captures' data, past its
+        // bound: see `closure_data_fns`.)
+        if self.closure_data_depth.get() > 0 {
+            let n = self.closure_data_steps.get() + 1;
+            self.closure_data_steps.set(n);
+            if n > CLOSURE_DATA_STEPS {
+                self.closure_data_over.set(true);
+            }
+            if self.closure_data_over.get() {
+                return Step::Halt;
+            }
+        }
         self.guard_choices(s, out);
         // (The objects the step's operands are: in use while it runs, though
         // it pops them; see `escape`'s pruning.)
@@ -13010,6 +13084,20 @@ impl Js {
                     _ => None,
                 })
                 .collect();
+            // (Or of an array a local of the activation holds, the load
+            // code's unchanged: `vm.pc` within `program`.)
+            let local_len = f
+                .locals
+                .iter()
+                .filter_map(|v| match v {
+                    Abs::Ref(b) if !s.escaped.contains(b) && matches!(s.heap.get(b), Some(HeapObj::Array(_))) && self.boundary_data(s, *b) => match s.heap.get(b) {
+                        Some(HeapObj::Array(arr)) => Some(arr.len()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
             // (A property in range of an array the record holds under a
             // property it indexes: `ip` within `thread`.)
             let len_at = |k: &str| -> Option<usize> {
@@ -13023,7 +13111,11 @@ impl Js {
                     let k = p.key.as_str()?;
                     let bases = self.dispatch_props.get(k)?;
                     match &p.val {
-                        PVal::Data(Abs::Num(n)) if n.0 >= 0.0 && n.0.fract() == 0.0 && bases.iter().any(|b| len_at(b).is_some_and(|len| (n.0 as usize) < len)) => {
+                        PVal::Data(Abs::Num(n))
+                            if n.0 >= 0.0
+                                && n.0.fract() == 0.0
+                                && bases.iter().any(|b| if b == LOCAL_BASE { (n.0 as usize) < local_len } else { len_at(b).is_some_and(|len| (n.0 as usize) < len) }) =>
+                        {
                             Some((k.to_string(), n.0 as usize))
                         }
                         _ => None,
@@ -13606,6 +13698,40 @@ impl Js {
                 self.push(s, v)
             }
             Instr::Store(slot) => {
+                // (A choice of two static values stored where an interpreter
+                // keeps its place in the program it runs (see
+                // `dispatch_slots`: `pc = threaded[pc](frame)`, a branch
+                // closure returning `cond ? next : target`): two paths,
+                // each at its place, as a branch that set it would leave.
+                // `PE_NO_DISPATCH_CHOICE`: one path, the place a runtime
+                // value.)
+                if !env_flag!("PE_NO_DISPATCH_CHOICE") && !env_flag!("PE_NO_DISPATCH_POINTS") && !self.probing.get() {
+                    let func = s.top().func;
+                    let is_place = self.dispatch_jumps.get(func).and_then(|d| d.get(*slot)).copied().unwrap_or(false)
+                        || self.dispatch_program.get(func).and_then(|d| d.get(*slot)).copied().unwrap_or(false);
+                    if is_place {
+                        if let Some(Abs::Dyn(RExpr::Opaque(o, xs))) = s.top().ostack.last() {
+                            if o == "?:" && xs.len() == 3 {
+                                if let (Some(a), Some(b)) = (Abs::from_const_rexpr(&xs[1]), Abs::from_const_rexpr(&xs[2])) {
+                                    if a != b && matches!(a, Abs::Num(_)) && matches!(b, Abs::Num(_)) {
+                                        let cond = xs[0].clone();
+                                        let (mut t, mut f) = (s.clone(), s.clone());
+                                        *t.top_mut().ostack.last_mut().unwrap() = b;
+                                        *f.top_mut().ostack.last_mut().unwrap() = a;
+                                        for st in [&mut t, &mut f] {
+                                            let top = st.top_mut();
+                                            top.dyn_ctl = true;
+                                            top.branched = true;
+                                            st.branched_since_head = true;
+                                            st.dyn_branches += 1;
+                                        }
+                                        return Step::Branch { cond: Cond::Falsy(cond), t, f };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 let v = s.top_mut().ostack.pop().unwrap();
                 // Two reasons to commit a top-frame store as a residual assignment
                 // in program order (then read the slot back as that var):
@@ -15542,7 +15668,10 @@ impl Js {
                         let records: Vec<usize> = if env_flag!("PE_NO_DISPATCH_DATA") {
                             Vec::new()
                         } else {
-                            let mut records: Vec<usize> = self.dispatch_fields(s, s.top()).into_iter().map(|(a, _, _)| a).collect();
+                            // (Of any activation: the branch may be in a
+                            // handler the interpreter's loop called with
+                            // the record, `opJumpIfFalse(vm, arg)`.)
+                            let mut records: Vec<usize> = s.frames.iter().flat_map(|f| self.dispatch_fields(s, f)).map(|(a, _, _)| a).collect();
                             if !env_flag!("PE_NO_DISPATCH_RECORD_DATA") {
                                 let held: Vec<usize> = records.iter().filter_map(|a| s.heap.get(a)).flat_map(|o| o.children().into_iter().filter_map(as_ref_addr).collect::<Vec<_>>()).collect();
                                 records.extend(held);
@@ -28114,9 +28243,17 @@ impl Js {
                             // (A callback's item version is given what it was made
                             // knowing: see `react_map_call`.)
                             let once = once || self.react_item_closure_fn(addr).is_some();
-                            let forms = self.cap_forms(fid, addr, &captured, once, heap);
-                            let rfid = self.react_item_closure_fn(addr).or_else(|| self.react_root_fn(fid, &forms, &captured, heap)).unwrap_or_else(|| self.residual_fn_for_closure(fid, &forms));
-                            (forms, rfid, None)
+                            // (One that knows its captures' data: see
+                            // `closure_data_fns`.)
+                            let data_fn = self.closure_data_fn.borrow().get(&addr).cloned();
+                            match data_fn {
+                                Some((forms, rfid)) => (forms, rfid, None),
+                                None => {
+                                    let forms = self.cap_forms(fid, addr, &captured, once, heap);
+                                    let rfid = self.react_item_closure_fn(addr).or_else(|| self.react_root_fn(fid, &forms, &captured, heap)).unwrap_or_else(|| self.residual_fn_for_closure(fid, &forms));
+                                    (forms, rfid, None)
+                                }
+                            }
                         }
                     },
                 };
@@ -29012,9 +29149,17 @@ impl Js {
                             // (A callback's item version is given what it was made
                             // knowing: see `react_map_call`.)
                             let once = once || self.react_item_closure_fn(addr).is_some();
-                            let forms = self.cap_forms(fid, addr, &captured, once, heap);
-                            let rfid = self.react_item_closure_fn(addr).or_else(|| self.react_root_fn(fid, &forms, &captured, heap)).unwrap_or_else(|| self.residual_fn_for_closure(fid, &forms));
-                            (forms, rfid, None)
+                            // (One that knows its captures' data: see
+                            // `closure_data_fns`.)
+                            let data_fn = self.closure_data_fn.borrow().get(&addr).cloned();
+                            match data_fn {
+                                Some((forms, rfid)) => (forms, rfid, None),
+                                None => {
+                                    let forms = self.cap_forms(fid, addr, &captured, once, heap);
+                                    let rfid = self.react_item_closure_fn(addr).or_else(|| self.react_root_fn(fid, &forms, &captured, heap)).unwrap_or_else(|| self.residual_fn_for_closure(fid, &forms));
+                                    (forms, rfid, None)
+                                }
+                            }
                         }
                     },
                 };
@@ -29528,6 +29673,85 @@ impl Js {
         self.escape_all(s, &[addr], escaped, out).pop().expect("one root, one value")
     }
 
+    /// For each arrow function the escape of `todo` makes a runtime value
+    /// (a callback given to runtime code: `xs.map((x) => interp(PROGRAM,
+    /// x))`) that captures the load code's unchanged data (see
+    /// `boundary_data`): a residual function of it that knows that data
+    /// and is not passed it (see `make_arg_variant`, `ArgShape::Data`), its
+    /// parameters all runtime values. Its body is then specialized to the
+    /// program it closes over, where the function as written would be
+    /// given the program as a runtime value and run interpreted. The data
+    /// stays the model's: runtime code holding the function reaches it
+    /// only by calling the function, whose body is watched as `main` is.
+    /// `PE_NO_CLOSURE_DATA`: none.
+    fn closure_data_fns(&self, s: &State, todo: &[usize]) {
+        self.closure_data_fn.borrow_mut().clear();
+        if todo.is_empty() || self.react.is_some() || self.closure_data_off.get() || env_flag!("PE_NO_CLOSURE_DATA") || env_flag!("PE_NO_ARG_VARIANTS") {
+            return;
+        }
+        let mut reach = std::collections::HashSet::new();
+        for &addr in todo {
+            Js::reachable(&s.heap, addr, &mut reach);
+            reach.insert(addr);
+        }
+        let mut closures: Vec<usize> = reach.into_iter().filter(|a| matches!(s.heap.get(a), Some(HeapObj::Closure { ident: None, .. }))).collect();
+        closures.sort_unstable();
+        for addr in closures {
+            let Some(HeapObj::Closure { fid, captured, once, .. }) = s.heap.get(&addr) else { continue };
+            let (fid, captured, once) = (*fid, captured.clone(), *once);
+            if self.fn_kinds[fid] != FnKind::Arrow || self.is_async[fid] || self.arguments_slot[fid].is_some() || self.has_try[fid] {
+                continue;
+            }
+            if self.closure_data_refused.borrow().contains(&fid) {
+                continue;
+            }
+            // (A capture that is a variable's cell holds the data.)
+            let caps = self.cap_shapes(s, &captured);
+            let data = captured.iter().zip(&caps).any(|(c, sh)| {
+                matches!(sh, ArgShape::Data(_))
+                    && match c {
+                        Abs::Ref(a) => {
+                            let v = Js::final_cell_value(&s.heap, c).unwrap_or(Abs::Ref(*a));
+                            matches!(v, Abs::Ref(b) if matches!(s.heap.get(&b), Some(HeapObj::Array(_) | HeapObj::Object { class: ObjClass::Ordinary, .. } | HeapObj::Builtin { .. })))
+                        }
+                        _ => false,
+                    }
+            });
+            if !data {
+                continue;
+            }
+            let forms = self.cap_forms(fid, addr, &captured, once, &s.heap);
+            let shapes = vec![ArgShape::Runtime; self.nparams[fid]];
+            // (Bounded: a body that specializes without end to data it
+            // only looks things up in (a rewriter's rule set matched
+            // against a runtime term) is given up, see
+            // `closure_data_refused`.)
+            let outer = self.closure_data_depth.get();
+            if outer == 0 {
+                self.closure_data_steps.set(0);
+            }
+            self.closure_data_depth.set(outer + 1);
+            let made = self.residual_fn_for_args(s, fid, &forms, &shapes, &captured, &[]);
+            self.closure_data_depth.set(outer);
+            if self.closure_data_over.get() {
+                self.closure_data_refused.borrow_mut().insert(fid);
+                self.closure_data_violation.set(true);
+                if outer == 0 {
+                    self.closure_data_over.set(false);
+                }
+                if env_flag!("ARGVAR_DEBUG") {
+                    eprintln!("[ARGVAR] {}: closure not specialized to its captures' data (over {CLOSURE_DATA_STEPS} steps)", self.names[fid]);
+                }
+            }
+            if env_flag!("ARGVAR_DEBUG") && outer == 0 {
+                eprintln!("[ARGVAR] {}: closure data variant {:?}, {} steps", self.names[fid], made, self.closure_data_steps.get());
+            }
+            if let Some(rfid) = made {
+                self.closure_data_fn.borrow_mut().insert(addr, (forms, rfid));
+            }
+        }
+    }
+
     /// `escape` of each of `addrs`, in order, as one: each made as it would
     /// be after those before it (what they made is referred to by its
     /// variable), and the state redirected to what was made once, at the
@@ -29626,6 +29850,11 @@ impl Js {
                         _ => None,
                     })
                     .collect();
+                if env_flag!("ESCAPE_BT") {
+                    let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+                    let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("escape_all")).take(7).map(|l| l.trim()).collect();
+                    eprintln!("[ESC-BT] @{addr}: {}", frames.join(" < "));
+                }
                 eprintln!(
                     "[ESC] pc={pc} instr={:?} addr={addr} kind={kind} reach={} in {} (callee: {}) ctx [{}]",
                     self.code.get(pc),
@@ -29641,6 +29870,7 @@ impl Js {
         for &addr in &todo {
             detached.extend(self.detach_private_entries(s, addr));
         }
+        self.closure_data_fns(s, &todo);
         let heap = s.heap.clone();
         let mut made: HashMap<usize, usize> = HashMap::new();
         let mut values = Vec::with_capacity(addrs.len());
@@ -33663,7 +33893,15 @@ const TRICK_SPLITS: usize = 64;
 /// How many residual functions one function is specialized to for the
 /// static parts of its arguments (see `Js::arg_shapes`) before its further
 /// calls take the generic one.
+/// The base of a dispatch property that indexes an array a local holds
+/// (see `Js::dispatch_fields`): no property's name.
+const LOCAL_BASE: &str = "\u{0}local";
+
 const ARG_VARIANTS: usize = 64;
+
+/// How many steps specializing a closure to its captures' data may take
+/// (see `Js::closure_data_fns`), all such closures built within it counted.
+const CLOSURE_DATA_STEPS: usize = 400_000;
 
 /// What a residual function specialized for a call's arguments knows of
 /// one (see `Js::arg_shapes`).
