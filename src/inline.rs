@@ -233,6 +233,68 @@ enum Walk {
     Absent,
 }
 
+/// `c ? e : undefined` (`truthy`) or `c ? undefined : e`, `c` a variable:
+/// `(c, e, truthy)`.
+fn guarded_value(v: &RExpr) -> Option<(usize, RExpr, bool)> {
+    match v {
+        RExpr::Opaque(op, xs) if op == "?:" => match xs.as_slice() {
+            [RExpr::Var(c), e, RExpr::Undef] => Some((*c, e.clone(), true)),
+            [RExpr::Var(c), RExpr::Undef, e] => Some((*c, e.clone(), false)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `walk`, for the read of `t`, a temporary that only where variable `c` is
+/// `truthy` holds a value: found only in the side of a choice on `c` that
+/// it takes then (`c ? x : y`, `c && x`, `c || x`), first there, the choice
+/// reached with nothing observable evaluated before it.
+fn guarded_walk(e: &RExpr, t: usize, c: usize, truthy: bool, done: &mut bool) -> Walk {
+    if let RExpr::Opaque(op, xs) = e {
+        if matches!(xs.first(), Some(RExpr::Var(x)) if *x == c) {
+            let side = match (op.as_str(), xs.len(), truthy) {
+                ("?:", 3, true) | ("&&", 2, true) | ("||", 2, false) => Some(1),
+                ("?:", 3, false) => Some(2),
+                _ => None,
+            };
+            if let Some(k) = side {
+                if xs.iter().enumerate().any(|(i, x)| i != k && mentions(x, t)) {
+                    return Walk::Blocked;
+                }
+                if !mentions(&xs[k], t) {
+                    *done = true;
+                    return Walk::Absent;
+                }
+                return walk(&xs[k], t, done);
+            }
+        }
+    }
+    match e {
+        RExpr::Var(v) if *v == t => Walk::Blocked,
+        RExpr::Opaque(op, _) if matches!(op.as_str(), "&&" | "||" | "??" | "?:") => {
+            if mentions(e, t) {
+                Walk::Blocked
+            } else {
+                *done = true;
+                Walk::Absent
+            }
+        }
+        _ => {
+            if !mentions(e, t) {
+                return walk(e, t, done);
+            }
+            for x in children(e) {
+                match guarded_walk(x, t, c, truthy, done) {
+                    Walk::Absent => {}
+                    w => return w,
+                }
+            }
+            Walk::Absent
+        }
+    }
+}
+
 /// Walk `e` in evaluation order looking for the read of `t`; `done` records
 /// whether an operation has completed so far.
 fn walk(e: &RExpr, t: usize, done: &mut bool) -> Walk {
@@ -489,6 +551,49 @@ fn inline_program(
                 } else {
                     matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(e), .. } if cond_use_is_first(e, t) || (free && mentions(e, t)))
                 };
+            // A value only one side of a choice on `c` gives, `t = c ? e :
+            // undefined` (what a guarded arm of an `if` made, see
+            // `Js::guard_op`), read first in the arm of a choice on `c`
+            // that side takes, which the next statement does first (`c ? t
+            // : y`): `e` there, where it is evaluated exactly when it was.
+            if single && !foldable {
+                if let Some((c, e, truthy)) = op_value(&b.ops[i]).and_then(|v| guarded_value(&v)) {
+                    let lands = if i + 1 < b.ops.len() {
+                        let es = op_exprs(&b.ops[i + 1]);
+                        let mut done = false;
+                        let mut found = false;
+                        let mut ok = true;
+                        for x in es {
+                            match guarded_walk(x, t, c, truthy, &mut done) {
+                                Walk::Found => found = true,
+                                Walk::Blocked => ok = false,
+                                Walk::Absent => {}
+                            }
+                            if found || !ok {
+                                break;
+                            }
+                        }
+                        ok && found
+                    } else {
+                        matches!(&b.term, Terminator::Cond { cond: Cond::Falsy(x), .. } if matches!(guarded_walk(x, t, c, truthy, &mut false), Walk::Found))
+                    };
+                    if lands {
+                        let mut value = Some(e);
+                        if i + 1 < b.ops.len() {
+                            for x in op_exprs_mut(&mut b.ops[i + 1]) {
+                                substitute(x, t, &mut value);
+                            }
+                        } else if let Terminator::Cond { cond: Cond::Falsy(x), .. } = &mut b.term {
+                            substitute(x, t, &mut value);
+                        }
+                        assert!(value.is_none(), "internal: the read of a folded temporary was not found");
+                        b.ops.remove(i);
+                        uses.remove(&t);
+                        i = i.saturating_sub(1);
+                        continue;
+                    }
+                }
+            }
             if !foldable {
                 // A single-use temporary whose use comes after definitions
                 // that read no state and make only fresh values (`m = o.f;

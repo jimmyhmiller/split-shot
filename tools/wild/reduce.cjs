@@ -63,13 +63,23 @@ const asScript = (text) =>
     .replace(/^export\s+default\s+/gm, '')
     .replace(/^export\s+(function|const|let|var|class)\b/gm, '$1');
 
+// (What was thrown, as text: reading a candidate's error may itself throw,
+// a `message` getter of the program's that a cut left broken.)
+function describe(e) {
+  try {
+    return String(e && e.name) + ': ' + String(e && e.message);
+  } catch (inner) {
+    return 'unprintable error';
+  }
+}
+
 function observe(code) {
   const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} }, TextEncoder, TextDecoder, URL, setTimeout, clearTimeout, queueMicrotask, structuredClone });
   try {
     vm.runInContext(OBSERVE_SRC, ctx);
     vm.runInContext(code + '\n;globalThis.__wildMain = main;', ctx, { timeout: 5000 });
   } catch (e) {
-    return 'loaderr ' + String(e && e.name) + ': ' + String(e && e.message);
+    return 'loaderr ' + describe(e);
   }
   const outs = [];
   for (const json of inputs) {
@@ -77,7 +87,7 @@ function observe(code) {
     try {
       outs.push(vm.runInContext('__wildCall(__wildMain, __wildJson)', ctx, { timeout: 5000 }));
     } catch (e) {
-      outs.push('host ' + String(e && e.message));
+      outs.push('host ' + describe(e));
     }
   }
   return outs.join(' ; ');

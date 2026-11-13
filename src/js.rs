@@ -3351,6 +3351,9 @@ fn rexpr_subterm(small: &RExpr, big: &RExpr) -> bool {
 #[derive(Default)]
 struct CompileAux {
     ifs: Vec<(usize, usize)>,
+    /// The branch pcs of the `if`s that a short-circuiting operator (`&&`,
+    /// `||`, `??`, `?:`) compiles to (see `compile_short_circuit`).
+    short_circuits: Vec<usize>,
     heap_mods: Vec<(usize, Vec<usize>)>,
     /// pcs that are the join after a `switch`; marked leaders so the arms of a
     /// dynamic-discriminant switch merge there instead of path-splitting.
@@ -3382,10 +3385,6 @@ struct CompileAux {
     max_slot: usize,
     /// The `try` statements being compiled (innermost last): see `TryExits`.
     try_exits: Vec<TryExits>,
-    /// The code (`[start, end)`) of each operand of a `&&`, `||`, `??` or
-    /// `?:` that the program runs only on one side but that is compiled to
-    /// run always (its compact form: see `Expr::Opaque`).
-    eager_arms: Vec<(usize, usize)>,
 }
 
 /// A `try` statement being compiled. A jump out of it (a `return`, or a
@@ -3966,26 +3965,25 @@ fn compile_expr(e: &Expr, code: &mut Vec<Instr>, aux: &mut CompileAux) {
         }
         Expr::Opaque(op, args) => {
             // `&&`, `||`, `??`, and `?:` short-circuit: an operand that is only
-            // *conditionally* evaluated must not have its side effects applied on
-            // the path where it is skipped. When that operand is pure, the compact
-            // pass-through `Opaque` is correct (and is what real inputs rely on for
-            // a small residual); when it has side effects, compile real
-            // short-circuit control flow so only the operand actually taken runs.
+            // *conditionally* evaluated runs only on the path that takes it,
+            // as real control flow (whose `if` is converted back to a select
+            // where its arm does nothing at runtime: see `try_if_convert`).
+            // Only an operand that can neither throw nor run code, nor make
+            // anything (a constant, a local, `this`), is evaluated always,
+            // for the compact pass-through `Opaque`: evaluating anything more
+            // eagerly would make what the skipped side does (a read of
+            // `undefined`'s property, a getter, a conversion, and what
+            // specializing it commits to the residual) happen regardless.
             let needs_branch = match op.as_str() {
-                "&&" | "||" | "??" => args.len() == 2 && !is_pure(&args[1]),
-                "?:" => args.len() == 3 && (!is_pure(&args[1]) || !is_pure(&args[2])),
+                "&&" | "||" | "??" => args.len() == 2 && !is_inert(&args[1]),
+                "?:" => args.len() == 3 && (!is_inert(&args[1]) || !is_inert(&args[2])),
                 _ => false,
             };
             if needs_branch {
                 compile_short_circuit(op, args, code, aux);
             } else {
-                let conditional = matches!(op.as_str(), "&&" | "||" | "??" | "?:");
-                for (i, a) in args.iter().enumerate() {
-                    let start = code.len();
+                for a in args {
                     compile_expr(a, code, aux);
-                    if conditional && i > 0 {
-                        aux.eager_arms.push((start, code.len()));
-                    }
                 }
                 code.push(Instr::OpaqueOp { op: op.clone(), arity: args.len() });
             }
@@ -4069,10 +4067,9 @@ fn compile_expr(e: &Expr, code: &mut Vec<Instr>, aux: &mut CompileAux) {
 }
 
 /// Compile a short-circuiting `&&`/`||`/`??`/`?:` whose conditionally-evaluated
-/// operand has side effects, as real control flow so the skipped operand never
+/// operand is more than inert, as real control flow so the skipped operand never
 /// runs (and never applies its effects). Leaves the operator's value on the
-/// stack. Used only when the compact pass-through `Opaque` form would be unsound;
-/// see `compile_expr`.
+/// stack. See `compile_expr`.
 fn compile_short_circuit(op: &str, args: &[Expr], code: &mut Vec<Instr>, aux: &mut CompileAux) {
     // The value goes through a scratch slot, and the branch registers its
     // join like an `if` statement's: both paths then reach the end with the
@@ -4095,6 +4092,7 @@ fn compile_short_circuit(op: &str, args: &[Expr], code: &mut Vec<Instr>, aux: &m
             patch(&mut code[jz], end);
             code.push(Instr::Load(t));
             aux.ifs.push((jz, end));
+            aux.short_circuits.push(jz);
         }
         // a || b  ≡  let t = a; if (!t) t = b; t
         "||" => {
@@ -4113,6 +4111,7 @@ fn compile_short_circuit(op: &str, args: &[Expr], code: &mut Vec<Instr>, aux: &m
             patch(&mut code[jend], end);
             code.push(Instr::Load(t));
             aux.ifs.push((jz, end));
+            aux.short_circuits.push(jz);
         }
         // a ?? b  ≡  let t = a; if (t == null) t = b; t  (`== null` is true
         // iff `t` is null or undefined: exactly the nullish test).
@@ -4130,6 +4129,7 @@ fn compile_short_circuit(op: &str, args: &[Expr], code: &mut Vec<Instr>, aux: &m
             patch(&mut code[jz], end);
             code.push(Instr::Load(t));
             aux.ifs.push((jz, end));
+            aux.short_circuits.push(jz);
         }
         // a ? b : c
         "?:" => {
@@ -4148,6 +4148,7 @@ fn compile_short_circuit(op: &str, args: &[Expr], code: &mut Vec<Instr>, aux: &m
             patch(&mut code[jend], end);
             code.push(Instr::Load(t));
             aux.ifs.push((jz, end));
+            aux.short_circuits.push(jz);
         }
         _ => unreachable!("compile_short_circuit on {op}"),
     }
@@ -4155,6 +4156,13 @@ fn compile_short_circuit(op: &str, args: &[Expr], code: &mut Vec<Instr>, aux: &m
 
 /// Is `e` safe to evaluate more than once (no observable side effect, same value
 /// each time)? Used to guard the re-evaluation in `compile_update`.
+/// An expression whose evaluation neither throws, nor runs code, nor makes
+/// anything: a constant, a local (a binding not yet initialized is read
+/// through its own check, not as `Expr::Var`), `this`.
+fn is_inert(e: &Expr) -> bool {
+    matches!(e, Expr::Num(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Undefined | Expr::Null | Expr::This | Expr::Var(_))
+}
+
 fn is_pure(e: &Expr) -> bool {
     match e {
         Expr::Num(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Undefined | Expr::Null
@@ -4380,10 +4388,10 @@ pub struct Js {
     /// Per `if` branch pc: an arm calls a function (which, run at runtime,
     /// may change what a pending read reads: see `Instr::JmpIfFalsy`).
     if_arm_calls: Vec<bool>,
-    /// Per pc: in an operand the program may not run that is compiled to
-    /// run always (see `CompileAux::eager_arms`): what it does here is only
-    /// a value the operation may not use, no effect of the program's.
-    eager_arm: Vec<bool>,
+    /// Per pc: the branch of a short-circuiting operator's `if` (see
+    /// `CompileAux::short_circuits`), whose arm evaluates one operand: its
+    /// runtime ops may run guarded by the condition (see `try_if_convert`).
+    short_circuit: Vec<bool>,
     /// per `if` branch pc, the slots whose heap object is mutated in an arm;
     /// these escape to residual variables before a dynamic branch so the arms
     /// merge instead of path-splitting.
@@ -4400,6 +4408,9 @@ pub struct Js {
     /// counter only counts), and it indexes an array its function does not
     /// change (a program, not a list it builds) or is a lookup key.
     dispatch_jumps: Vec<Vec<bool>>,
+    /// Per (func, slot): it indexes an array its function does not change,
+    /// or is a lookup key (a program counter's second condition, alone).
+    dispatch_program: Vec<Vec<bool>>,
     /// Per loop-head pc: slots in the loop's header condition (induction-variable
     /// candidates). The growth whistle keeps a differing static guard UNROLLING.
     loop_guards: Vec<Vec<usize>>,
@@ -4699,6 +4710,9 @@ pub struct Js {
     foreign_protos: std::cell::RefCell<Option<Vec<usize>>>,
     /// Per call site, how many cases `trick_lookup` split it into.
     trick_splits: std::cell::RefCell<HashMap<usize, usize>>,
+    /// While a `try`'s probe runs its region alone: the activations outside
+    /// it (see `try_folds`).
+    probe_outer: std::cell::RefCell<Vec<Frame>>,
     /// `fn_assigned_globals`, once computed.
     fn_globals_memo: std::cell::RefCell<Option<std::rc::Rc<std::collections::HashSet<String>>>>,
     /// Set by the probe when the try body would emit a may-throw residual op, so
@@ -5288,9 +5302,17 @@ impl Js {
         let mut if_global_mods: Vec<Vec<String>> = vec![Vec::new(); code.len()];
         let mut if_forward_joins: Vec<Vec<(usize, Vec<usize>, Vec<String>)>> = vec![Vec::new(); code.len()];
         let mut if_arm_calls: Vec<bool> = vec![false; code.len()];
-        let mut eager_arm: Vec<bool> = vec![false; code.len()];
-        for &(start, end) in &aux.eager_arms {
-            eager_arm[start..end].iter_mut().for_each(|b| *b = true);
+        // (`PE_DUMP_CODE=lo:hi`: the compiled code there, to debug.)
+        if let Ok(r) = std::env::var("PE_DUMP_CODE") {
+            if let Some((lo, hi)) = r.split_once(':').and_then(|(a, b)| Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))) {
+                for (i, ins) in code.iter().enumerate().take(hi.min(code.len())).skip(lo) {
+                    eprintln!("[CODE] {i}: {ins:?}");
+                }
+            }
+        }
+        let mut short_circuit: Vec<bool> = vec![false; code.len()];
+        for &jz in &aux.short_circuits {
+            short_circuit[jz] = true;
         }
         for (jz, end) in aux.ifs {
             if_arm_calls[jz] = code[jz + 1..end].iter().any(|ins| matches!(ins, Instr::Call(_) | Instr::CallMethod(_) | Instr::NewOp(_)));
@@ -5359,8 +5381,10 @@ impl Js {
         // simulation that forgets at a leader and at any instruction it does
         // not follow: missing an index only forgoes a fold, so the
         // approximation is safe.)
-        let (drives_dispatch, dispatch_jumps): (Vec<Vec<bool>>, Vec<(Vec<bool>, Vec<bool>)>) = (0..program.len())
-            .map(|fid| {
+        // (Run twice: `strict` as the joins have always judged a dispatch
+        // slot (an index computed from slots by arithmetic alone), and not,
+        // for the places of a program: lookup keys, concatenations.)
+        let analyse = |fid: usize, strict: bool| {
                 // (What a value on the stack is computed from: slots, by
                 // arithmetic or concatenation; or a `get`/`has` method
                 // read off an object, whose call's key drives dispatch as
@@ -5408,17 +5432,24 @@ impl Js {
                     }
                     match &code[pc] {
                         Instr::Load(slot) => stack.push(Prov::Slots(vec![*slot])),
-                        Instr::PushNum(_) | Instr::PushStr(_) => stack.push(Prov::Slots(Vec::new())),
+                        Instr::PushNum(_) => stack.push(Prov::Slots(Vec::new())),
+                        Instr::PushStr(_) if !strict => stack.push(Prov::Slots(Vec::new())),
                         Instr::Dup => {
                             let top = stack.last().cloned().unwrap_or(Prov::Other);
                             stack.push(top);
                         }
                         // (Operands combined: the slots of those that have
-                        // some, `state + " " + tape[head]` of `state`.)
+                        // some, `state + " " + tape[head]` of `state`; when
+                        // `strict`, only of operands all computed so.)
                         Instr::Bin(_) => {
                             let (b, a) = (slots_of(stack.pop()), slots_of(stack.pop()));
                             stack.push(match (a, b) {
+                                (Some(mut x), Some(y)) => {
+                                    x.extend(y);
+                                    Prov::Slots(x)
+                                }
                                 (None, None) => Prov::Other,
+                                _ if strict => Prov::Other,
                                 (x, y) => Prov::Slots(x.unwrap_or_default().into_iter().chain(y.unwrap_or_default()).collect()),
                             });
                         }
@@ -5461,7 +5492,7 @@ impl Js {
                             let n = *n;
                             if stack.len() >= n + 2 {
                                 let at = stack.len() - n - 2;
-                                if n >= 1 && matches!(stack[at + 1], Prov::Lookup) {
+                                if n >= 1 && !strict && matches!(stack[at + 1], Prov::Lookup) {
                                     let key = slots_of(Some(stack[at + 2].clone()));
                                     mark(&mut dd, key);
                                 }
@@ -5544,9 +5575,10 @@ impl Js {
                     }
                 }
                 let pcs: Vec<bool> = (0..jumps.len()).map(|i| jumps[i] && program[i]).collect();
-                (dd, (jumps, pcs))
-            })
-            .unzip();
+                (dd, (jumps, (pcs, program)))
+        };
+        let drives_dispatch: Vec<Vec<bool>> = (0..program.len()).map(|fid| analyse(fid, true).0).collect();
+        let dispatch_jumps: Vec<(Vec<bool>, (Vec<bool>, Vec<bool>))> = (0..program.len()).map(|fid| analyse(fid, false).1).collect();
 
         let dispatch_props: HashMap<String, std::collections::HashSet<String>> = {
             // (Per property used as an index, the properties the arrays it
@@ -5783,11 +5815,12 @@ impl Js {
             if_join,
             if_global_mods,
             if_arm_calls,
-            eager_arm,
+            short_circuit,
             if_forward_joins,
             if_heap_modified,
             drives_dispatch,
-            dispatch_jumps: dispatch_jumps.into_iter().map(|(_, pcs)| pcs).collect(),
+            dispatch_program: dispatch_jumps.iter().map(|(_, pcs)| pcs.1.clone()).collect(),
+            dispatch_jumps: dispatch_jumps.into_iter().map(|(_, pcs)| pcs.0).collect(),
             dispatch_props,
             loop_guards,
             loop_guard_globals,
@@ -5914,6 +5947,7 @@ impl Js {
             probing: std::cell::Cell::new(false),
             foreign_protos: std::cell::RefCell::new(None),
             fn_globals_memo: std::cell::RefCell::new(None),
+            probe_outer: std::cell::RefCell::new(Vec::new()),
             trick_splits: std::cell::RefCell::new(HashMap::new()),
             try_taint: std::cell::Cell::new(false),
             spec_steps: std::cell::Cell::new(0),
@@ -12227,7 +12261,7 @@ impl Js {
         if env_flag!("PE_NO_DISPATCH_POINTS") {
             return Vec::new();
         }
-        let Some(dispatch) = self.drives_dispatch.get(f.func) else { return Vec::new() };
+        let Some(dispatch) = self.dispatch_program.get(f.func) else { return Vec::new() };
         if !dispatch.iter().any(|d| *d) {
             return Vec::new();
         }
@@ -12259,6 +12293,34 @@ impl Js {
         // table is one.)
         for v in f.locals.iter().chain(std::iter::once(&f.this)).chain(s.globals.values().map(|(v, _)| v)) {
             look(v, &mut longest);
+        }
+        // (A counter that only counts is a place too in a short list of
+        // program parts the activation reaches (its compiled statements,
+        // closures or nodes: at most `STATEMENT_LIST` of them): the list
+        // bounds how far it goes.)
+        let mut list = 0usize;
+        {
+            let mut look_list = |v: &Abs| {
+                let Abs::Ref(a) = v else { return };
+                let mut consider = |b: usize| {
+                    if let Some(HeapObj::Array(arr)) = s.heap.get(&b) {
+                        if arr.len() <= STATEMENT_LIST && arr.len() > 0 && arr.iter().all(|e| matches!(e, Abs::Ref(r) if matches!(s.heap.get(r), Some(HeapObj::Closure { .. } | HeapObj::Object { .. })))) {
+                            list = list.max(arr.len());
+                        }
+                    }
+                };
+                consider(*a);
+                if let Some(o @ HeapObj::Object { .. }) = s.heap.get(a) {
+                    for c in o.children() {
+                        if let Abs::Ref(b) = c {
+                            consider(*b);
+                        }
+                    }
+                }
+            };
+            for v in f.locals.iter().chain(std::iter::once(&f.this)) {
+                look_list(v);
+            }
         }
         // (A counter of a loop its runtime data bounds (`for (i = 0; i < n;
         // i++) buf[i] = ...`, its condition at runtime) is no place in a
@@ -12306,9 +12368,13 @@ impl Js {
             .enumerate()
             .filter(|(slot, v)| {
                 dispatch.get(*slot).copied().unwrap_or(false)
-                    && (env_flag!("PE_COUNTERS_DISPATCH") || self.dispatch_jumps.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false))
                     && match v {
-                        Abs::Num(n) => n.0 >= 0.0 && n.0.fract() == 0.0 && (n.0 as usize) < longest,
+                        Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0 => {
+                            let at = n.0 as usize;
+                            let jumps = self.dispatch_jumps.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false);
+                            let in_program = self.dispatch_program.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false);
+                            (jumps && at < longest) || (in_program && !env_flag!("PE_NO_STATEMENT_LISTS") && at < list)
+                        }
                         Abs::Str(st) => starts_key(st),
                         _ => false,
                     }
@@ -12317,6 +12383,11 @@ impl Js {
             .collect();
         slots.retain(|slot| {
             if !guards.contains(slot) {
+                return true;
+            }
+            // (A counter over a short list is bounded by it, however the
+            // loop's condition goes on: `i < stmts.length && !returned`.)
+            if matches!(&f.locals[*slot], Abs::Num(n) if (n.0 as usize) < list) {
                 return true;
             }
             if !is_top || !self.loop_head[f.pc] {
@@ -14008,7 +14079,8 @@ impl Js {
                     if let Some(v) = self.try_builtin_new(name, &args, s) {
                         // (Where it was made: what names its fields' variables
                         // when a loop lifts them, see `heap_field_changes`.)
-                        if let Abs::Ref(made) = v {
+                        if let (Abs::Ref(made), false) = (&v, env_flag!("PE_NO_BUILTIN_CREATION")) {
+                            let made = *made;
                             self.creation_pc.borrow_mut().entry(made).or_insert(pc);
                             // (A typed array's buffer, made with it.)
                             if let Some((_, buf, _, _)) = ta_view(&s.heap, made) {
@@ -15344,8 +15416,12 @@ impl Js {
         };
         // (In a root's model body, an arm may do at runtime what each of its
         // ops guarded by the condition does: see `guard_arm_ops`.)
-        let guarded = self.react.is_some() && self.react_building.get().is_some();
-        let saved_types = guarded.then(|| self.declared_types.borrow().clone());
+        let react_guarded = self.react.is_some() && self.react_building.get().is_some();
+        let saved_types = react_guarded.then(|| self.declared_types.borrow().clone());
+        // (So may the arm of a short-circuiting operator, which evaluates
+        // its operand: `t = c ? e : t` evaluates `e` only where the program
+        // does.)
+        let guarded = react_guarded || self.short_circuit[pc];
         // Run an arm to the join, its runtime ops into `ops`; false if it
         // does anything at runtime (but what `guarded` allows) or leaves the
         // `if` (a `break`, a `continue`, a loop).
@@ -15433,11 +15509,21 @@ impl Js {
         // first, then each arm's ops guarded by it.)
         let mut pre = Vec::new();
         let mut defined = std::collections::HashSet::new();
+        let arms_ran = !ops_t.is_empty() || !ops_f.is_empty();
         let cond = if ops_t.is_empty() && ops_f.is_empty() {
             r.clone()
         } else {
+            for op in ops_t.iter().chain(ops_f.iter()) {
+                let mut d = Vec::new();
+                op_defs_deep(op, &mut d);
+                defined.extend(d);
+            }
+            // (Read once, as it was before either arm ran: in a variable
+            // of its own unless it is a constant or a variable no arm
+            // assigns. A global's value an arm's op may change.)
             let c = match r {
-                RExpr::Var(_) | RExpr::Global(_) => r.clone(),
+                RExpr::Var(v) if !defined.contains(v) => r.clone(),
+                RExpr::Global(_) if react_guarded => r.clone(),
                 e if Info::of_const(e).is_some() => r.clone(),
                 _ => {
                     let t = self.aux_var(61, pc, 0);
@@ -15445,13 +15531,32 @@ impl Js {
                     RExpr::Var(t)
                 }
             };
-            for op in ops_t.iter().chain(ops_f.iter()) {
+            // (A variable the state before the `if` does not name is the
+            // arm's own: on the other path nothing reads it, and it may hold
+            // nothing yet, so it keeps no old value there.)
+            let named: std::collections::HashSet<usize> = {
+                let mut vs = Vec::new();
+                let mut add = |v: &Abs| {
+                    if let Abs::Dyn(e) = v {
+                        crate::coalesce::rexpr_vars(e, &mut vs);
+                    }
+                };
+                s.frames.iter().flat_map(|f| f.values()).for_each(&mut add);
+                s.heap.iter().flat_map(|(_, o)| o.children()).for_each(&mut add);
+                s.globals.values().for_each(|(v, _)| add(v));
+                s.fns.iter().for_each(|(_, v)| add(v));
+                vs.into_iter().collect()
+            };
+            // (Nor one no guarded op before assigns.)
+            let assigned: RefCell<std::collections::HashSet<usize>> = RefCell::new(std::collections::HashSet::new());
+            let old = |v: usize| if named.contains(&v) || assigned.borrow().contains(&v) { RExpr::Var(v) } else { RExpr::Undef };
+            for (op, truthy) in ops_t.into_iter().map(|op| (op, true)).chain(ops_f.into_iter().map(|op| (op, false))) {
+                let g = Js::guard_op(op, &c, truthy, &old);
                 let mut d = Vec::new();
-                op_defs_deep(op, &mut d);
-                defined.extend(d);
+                op_defs_deep(&g, &mut d);
+                assigned.borrow_mut().extend(d);
+                pre.push(g);
             }
-            pre.extend(ops_t.into_iter().map(|op| Js::guard_op(op, &c, true)));
-            pre.extend(ops_f.into_iter().map(|op| Js::guard_op(op, &c, false)));
             c
         };
         // A value an arm computed, held at the join (in a variable, or in an
@@ -15467,6 +15572,26 @@ impl Js {
             st.frames.iter().flat_map(|f| f.values()).any(risky)
                 || st.heap.iter().filter(|(a, o)| **a >= base || s.heap.get(a) != Some(*o)).any(|(_, o)| o.children().into_iter().any(risky))
         };
+        // (A short-circuiting operator's arm that ran something at runtime
+        // and leaves an object it made for the value: that object made at
+        // the join would be made on the other path too, where the program
+        // makes none. Two paths.)
+        let made_live = |st: &State| -> bool {
+            let mut reach = std::collections::HashSet::new();
+            for v in st.frames.iter().flat_map(|f| f.values()) {
+                if let Abs::Ref(a) = v {
+                    Js::reachable(&st.heap, *a, &mut reach);
+                }
+            }
+            reach.iter().any(|a| *a >= base)
+        };
+        if guarded && !react_guarded && arms_ran && (made_live(&st_t) || made_live(&st_f)) {
+            if dbg {
+                eprintln!("[IFCONV] pc={pc}: a short-circuit arm made an object its value holds");
+            }
+            restore_all();
+            return None;
+        }
         if unsafe_at_join(&st_t) || unsafe_at_join(&st_f) {
             if dbg {
                 eprintln!("[IFCONV] pc={pc}: an arm's value may throw or run code before the choice");
@@ -15523,10 +15648,11 @@ impl Js {
     /// `truthy`), run only where that arm is: `v = e` as `v = c ? e : v`,
     /// `e;` as `c && e;` (`c || e;` for the falsy arm). Its effects and
     /// exceptions happen where the arm's did; a variable it does not assign
-    /// keeps its value.
-    fn guard_op(op: Op, c: &RExpr, truthy: bool) -> Op {
+    /// keeps its value (`old(v)`: the variable itself, or `undefined` for
+    /// one nothing on the other path reads).
+    fn guard_op(op: Op, c: &RExpr, truthy: bool, old: &dyn Fn(usize) -> RExpr) -> Op {
         let pick = |v: usize, e: RExpr| {
-            let (a, b) = if truthy { (e, RExpr::Var(v)) } else { (RExpr::Var(v), e) };
+            let (a, b) = if truthy { (e, old(v)) } else { (old(v), e) };
             Op::Assign { var: v, expr: RExpr::Opaque("?:".into(), vec![c.clone(), a, b]) }
         };
         match op {
@@ -16129,6 +16255,16 @@ impl Js {
             return None;
         }
         let (recv, method, key) = (s.top().ostack[len - nargs - 2].clone(), s.top().ostack[len - nargs - 1].clone(), s.top().ostack[len - nargs].clone());
+        if env_flag!("TRICK_DEBUG") {
+            let why = match (&recv, &key) {
+                (Abs::Ref(r), Abs::Dyn(_)) => format!("escaped={} heap={:?} point={:?}", s.escaped.contains(r), s.heap.get(r).map(|o| match o {
+                    HeapObj::Builtin { kind, ext, .. } => format!("{kind} ext={}", ext.is_some()),
+                    _ => "other".into(),
+                }), self.dispatch_point(s, s.top())),
+                _ => format!("recv={recv:?} key={key:?}"),
+            };
+            eprintln!("[TRICK] pc={pc} in {}: {why}", self.names[s.top().func]);
+        }
         let (Abs::Ref(r), Abs::Ref(m), Abs::Dyn(e)) = (&recv, &method, &key) else { return None };
         if s.escaped.contains(r) {
             return None;
@@ -21394,7 +21530,12 @@ impl Js {
         // captured values: a function of no arguments that walks state it
         // closes over (a recursive-descent parser advancing a captured `pos`)
         // recurses with the same context when that state is dynamic.
-        let recursive = self.is_recursive[fid] || s.frames.iter().any(|f| f.func == fid);
+        // (The activations this call is under: in a `try`'s probe, those
+        // outside the region too (see `try_folds`), so the probe decides as
+        // the run will, under all of them.)
+        let outer = self.probe_outer.borrow().clone();
+        let chain: Vec<&Frame> = outer.iter().chain(s.frames.iter()).collect();
+        let recursive = self.is_recursive[fid] || chain.iter().any(|f| f.func == fid);
         let context: Vec<Abs> = args.iter().chain(captured.iter()).cloned().collect();
         let now = skeleton_of(&s.heap, &context);
         // (Every argument dynamic, but a closure whose captures are another
@@ -21403,7 +21544,7 @@ impl Js {
         // template's group calling the encoders it closes over. Its depth is
         // the tree's.)
         let captures_progress = !captured.is_empty()
-            && s.frames.iter().filter(|f| f.func == fid).all(|f| skel_progress(&f.entry_skel, &now));
+            && chain.iter().filter(|f| f.func == fid).all(|f| skel_progress(&f.entry_skel, &now));
         // (Every argument dynamic: unfolded only where that makes progress.
         // An active activation in this same context it would repeat; else a
         // probe of its unfolding tells whether that ends without such a
@@ -21412,7 +21553,7 @@ impl Js {
         let all_dynamic = recursive && !args.is_empty() && args.iter().all(|a| a.is_dynamic()) && !captures_progress;
         let probed_entry = self.recursion_probe_entry.replace(false);
         let all_dynamic_stuck = all_dynamic && !probed_entry && {
-            let repeats = s.frames.iter().any(|f| f.func == fid && *f.entry_skel == *now);
+            let repeats = chain.iter().any(|f| f.func == fid && *f.entry_skel == *now);
             let probing = !self.recursion_probed.borrow().is_empty();
             repeats || probing || env_flag!("PE_NO_RECURSION_PROBE") || !self.recursion_progresses(s, &callee, &args, &this, pc)
         };
@@ -21423,8 +21564,8 @@ impl Js {
             && (all_dynamic_stuck
                 || (s.top().dyn_ctl
                     && !context.is_empty()
-                    && s.frames.iter().enumerate().any(|(i, f)| {
-                        f.func == fid && !skel_progress(&f.entry_skel, &now) && s.frames[i..].iter().any(|g| g.branched)
+                    && chain.iter().enumerate().any(|(i, f)| {
+                        f.func == fid && !skel_progress(&f.entry_skel, &now) && chain[i..].iter().any(|g| g.branched)
                     })));
         //
         // Shared specializations: a call under dynamic control whose context
@@ -21781,11 +21922,15 @@ impl Js {
                 // (A value runtime code made or holds: never an instance of a
                 // class whose `prototype` runtime code has not had, which no
                 // runtime object can inherit. `PE_NO_UNSEEN_PROTO`: unknown.)
+                // (Judged so only where `rethrows_foreign` asks: what a
+                // handler does with an exception runtime code raised. There
+                // the answer decides that no runtime `try` is needed; in the
+                // program's code at large, a test the runtime makes anyway.)
                 if matches!(o, Abs::Dyn(_)) && !s.escaped.contains(&p) && !env_flag!("PE_NO_UNSEEN_PROTO") {
                     if let Some(used) = self.foreign_protos.borrow_mut().as_mut() {
                         used.push(p);
+                        return Some(false);
                     }
-                    return Some(false);
                 }
                 let (protos, _) = chain(s, o)?;
                 Some(protos.contains(&p))
@@ -22322,7 +22467,11 @@ impl Js {
         if !recursive {
             return true;
         }
-        self.recursion_unsteered(s) && !makes_array(m)
+        // (A recursion no runtime value has steered is the program's own:
+        // it ends where the program does, building what it builds, a
+        // compiler's `node.slice(1).map(compile)` over a static tree.
+        // `PE_NO_UNSTEERED_ARRAYS`: no array made in one.)
+        self.recursion_unsteered(s) && (!makes_array(m) || !env_flag!("PE_NO_UNSTEERED_ARRAYS"))
     }
 
     /// Has no runtime value decided the recursion the top activation is
@@ -22847,6 +22996,7 @@ impl Js {
             self.loop_cond_seen.borrow().clone(),
             self.loop_exit_dynamic.borrow().clone(),
         );
+        let counts = (self.structured_inlined.borrow().clone(), self.trick_splits.borrow().clone());
         let loading = self.entry.loading.replace(false);
         let mut at_entry = true;
         let mut end = None;
@@ -22874,6 +23024,8 @@ impl Js {
             }
         }
         self.entry.loading.set(loading);
+        *self.structured_inlined.borrow_mut() = counts.0;
+        *self.trick_splits.borrow_mut() = counts.1;
         *self.materialized_fids.borrow_mut() = saved.0;
         *self.shared_fn_objects.borrow_mut() = saved.1;
         self.try_taint.set(saved.2);
@@ -23641,9 +23793,7 @@ impl Js {
         let o = s.top_mut().ostack.pop().unwrap();
         // A property of `null` or `undefined`, read in a `try`: a TypeError,
         // worded as the engine words it, that the handler catches now.
-        // (Not in an operand compiled to run always that the program may
-        // not run, `t == null ? undefined : t.k` of `t?.k`.)
-        if matches!(o, Abs::Null | Abs::Undef) && !s.handlers.is_empty() && !self.eager_arm[pc] && self.pristine("TypeError") {
+        if matches!(o, Abs::Null | Abs::Undef) && !s.handlers.is_empty() && self.pristine("TypeError") {
             let what = if o == Abs::Null { "null" } else { "undefined" };
             let msg = format!("Cannot read properties of {what} (reading '{k}')");
             let e = match self.try_builtin_new("TypeError", &[Abs::Str(msg.clone())], s) {
@@ -26725,7 +26875,7 @@ impl Js {
         }
         shells.push(Op::Assign { var: dst, expr: RExpr::ClassSrc { fid, parent, caps, unboxed, omit: omit.clone(), keep } });
         let p = objs[1].0;
-        let pvar = self.escape_var(p);
+        let pvar = self.proto_var(p, seen);
         seen.insert(p, pvar);
         if pending == Some(p) {
 
@@ -27127,10 +27277,34 @@ impl Js {
                     // unless its making is still under way (what it reaches,
                     // a function's captures, reached this object): then this
                     // one is made plain and given its prototype first thing
-                    // in the fills (which follow every shell).
+                    // in the fills (which follow every shell). So too when
+                    // making the prototype will reach this object (a
+                    // method's capture holding it): what reaches it there
+                    // must find it made.
+                    let reached = match proto {
+                        Abs::Ref(p) if !seen.contains_key(p) => {
+                            let mut reach = std::collections::HashSet::new();
+                            let mut work = vec![*p];
+                            while let Some(a) = work.pop() {
+                                if let Some(ob) = heap.get(&a) {
+                                    if reach.insert(a) {
+                                        ob.for_each_child_ref(&mut |c| work.push(c));
+                                    }
+                                }
+                            }
+                            reach.contains(&addr)
+                        }
+                        _ => false,
+                    };
+                    if reached {
+                        shells.push(Op::NewObject { dst, fields: vec![] });
+                    }
                     let proto_r = self.mat_value(proto, heap, shells, fills, seen);
                     let pending = matches!(proto, Abs::Ref(p) if self.mat_pending.borrow().contains(p));
-                    if pending {
+                    if reached {
+                        let set = RExpr::Get(Box::new(RExpr::Global("Object".to_string())), "setPrototypeOf".to_string());
+                        fills.insert(0, Op::Eval { dst: self.aux_var(53, addr, 0), expr: RExpr::Call(Box::new(set), vec![RExpr::Var(dst), proto_r]) });
+                    } else if pending {
                         shells.push(Op::NewObject { dst, fields: vec![] });
                         let set = RExpr::Get(Box::new(RExpr::Global("Object".to_string())), "setPrototypeOf".to_string());
                         fills.push(Op::Eval { dst: self.aux_var(53, addr, 0), expr: RExpr::Call(Box::new(set), vec![RExpr::Var(dst), proto_r]) });
@@ -27208,7 +27382,8 @@ impl Js {
                     None
                 };
                 if let Some(p) = reserved {
-                    seen.insert(p, self.escape_var(p));
+                    let pvar = self.proto_var(p, seen);
+                    seen.insert(p, pvar);
                     self.mat_pending.borrow_mut().insert(p);
                 }
                 // (What the captures' objects hold waits until this function
@@ -27262,7 +27437,7 @@ impl Js {
                         if own.is_some() { rfs[rfid].as_class = true } else { rfs[rfid].as_function = true }
                     }
                     if let Some(p) = own {
-                        let pvar = self.escape_var(p);
+                        let pvar = self.proto_var(p, seen);
                         seen.insert(p, pvar);
                         if self.pending_proto.get() == Some(p) {
 
@@ -27287,7 +27462,7 @@ impl Js {
                 // `constructor`); the rest of both is filled in.
                 if let Some(p) = reserved {
                     {
-                        let pvar = self.escape_var(p);
+                        let pvar = self.proto_var(p, seen);
                         if self.pending_proto.get() == Some(p) {
 
                             self.proto_taken.set(true);
@@ -27631,6 +27806,19 @@ impl Js {
 
     fn escape_var(&self, addr: usize) -> usize {
         self.var_id(VarKey::Escape(addr))
+    }
+
+    /// The variable a function's own prototype `p` is made into when the
+    /// function takes it from itself (`F.prototype`): when `p` is the object
+    /// whose making reached the function (`pending_proto`), the variable that
+    /// making was to fill (already `seen`'s), so what names it there and
+    /// what the function's making names it are one; otherwise its escape
+    /// variable.
+    fn proto_var(&self, p: usize, seen: &HashMap<usize, usize>) -> usize {
+        match seen.get(&p) {
+            Some(&var) if self.pending_proto.get() == Some(p) => var,
+            _ => self.escape_var(p),
+        }
     }
 
     /// If `v` is a live heap reference, escape it into the residual and return
@@ -29822,6 +30010,9 @@ impl Js {
                 ns.frames[fi].locals[slot] = Abs::Dyn(RExpr::Var(id));
             }
         }
+        if env_flag!("MAT_DEBUG") && !ref_ops.is_empty() {
+            eprintln!("[MAT]   ref ops {ref_ops:?}");
+        }
         let ref_defs: std::collections::HashSet<usize> = {
             let mut defs = Vec::new();
             for op in &ref_ops {
@@ -29979,6 +30170,7 @@ impl Js {
             self.loop_exit_dynamic.borrow().clone(),
         );
         let saved_foreign = self.foreign_protos.replace(Some(Vec::new()));
+        let counts = (self.structured_inlined.borrow().clone(), self.trick_splits.borrow().clone());
         let mut found = false;
         let mut at_entry = true;
         for _ in 0..10_000 {
@@ -30001,6 +30193,8 @@ impl Js {
             }
         }
         let used = self.foreign_protos.replace(saved_foreign).unwrap_or_default();
+        *self.structured_inlined.borrow_mut() = counts.0;
+        *self.trick_splits.borrow_mut() = counts.1;
         *self.materialized_fids.borrow_mut() = saved.0;
         *self.shared_fn_objects.borrow_mut() = saved.1;
         self.try_taint.set(saved.2);
@@ -30075,9 +30269,12 @@ impl Js {
                 self.try_taint.set(true);
                 return;
             }
+            let frames: Vec<String> = s.frames.iter().map(|f| format!("{}@{}", self.names[f.func], f.pc)).collect();
             panic!(
                 "residual operation inside an active try/catch reached the inline \
-                 path; this should have been residualized (probe bug)"
+                 path; this should have been residualized (probe bug): {_what} at {} in {}",
+                s.top().pc,
+                frames.join(" > ")
             );
         }
     }
@@ -30395,9 +30592,22 @@ impl Js {
         // and clobber its accumulated taint. (Same hazard `residual_fn_for` guards.)
         let saved_probing = self.probing.replace(true);
         let saved_taint = self.try_taint.replace(false);
+        // (What the probe counts toward the bounds the run decides by (see
+        // `structured_inlined`, `trick_splits`), and the contexts it found
+        // branching, are the probe's: the run, deciding from what was
+        // before, does what the probe did.)
+        let counts = (self.structured_inlined.borrow().clone(), self.trick_splits.borrow().clone(), self.branched_contexts.borrow().clone());
+        // (The probe runs the region alone; the activations outside it it
+        // still runs under, for the calls it makes, see `do_call`.)
+        let outer_before = self.probe_outer.borrow().clone();
+        self.probe_outer.borrow_mut().extend(s.frames[..s.frames.len() - 1].iter().cloned());
         self.halt_at.borrow_mut().push(end);
         let _ = self.specialize_nested(probe);
         self.halt_at.borrow_mut().pop();
+        *self.probe_outer.borrow_mut() = outer_before;
+        *self.structured_inlined.borrow_mut() = counts.0;
+        *self.trick_splits.borrow_mut() = counts.1;
+        *self.branched_contexts.borrow_mut() = counts.2;
         let folds = !self.try_taint.get();
         self.probing.set(saved_probing);
         self.try_taint.set(saved_taint);
@@ -31724,6 +31934,10 @@ fn structured_inlinings() -> usize {
     thread_local!(static N: usize = std::env::var("PE_STRUCTURED_INLININGS").ok().and_then(|v| v.parse().ok()).unwrap_or(16));
     N.with(|n| *n)
 }
+
+/// The longest list of program parts (compiled statements, closures, nodes)
+/// a counter over which is a place in a program (see `Js::dispatch_slots`).
+const STATEMENT_LIST: usize = 64;
 
 /// The longest return stack (see `Js::dispatch_fields`) that is part of a
 /// place in an interpreted program.

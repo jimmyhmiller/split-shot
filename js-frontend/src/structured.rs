@@ -379,20 +379,26 @@ fn native_for_in<'a>(stmts: Vec<Stmt<'a>>) -> Vec<Stmt<'a>> {
     stmts
 }
 
-/// `if (o != null && !(key in o)) continue;` (or without the `null` test),
-/// the lowering's skip of a key `o` no longer has, `continue` of `label`.
+/// `if (o != null) { if (!(key in o)) continue; }` (or without the `null`
+/// test, or the two as one `&&`), the lowering's skip of a key `o` no longer
+/// has, `continue` of `label`.
 fn is_key_still_there_test(s: &Stmt, key: usize, o: usize, label: &str) -> bool {
     let Stmt::If { cond, then, els } = s else { return false };
-    if cond.negated || !els.is_empty() || !matches!(then.as_slice(), [Stmt::Continue(l)] if l == label) {
+    if cond.negated || !els.is_empty() {
         return false;
     }
     let var = |e: &RExpr, v: usize| matches!(e, RExpr::Var(x) if *x == v);
     let not_in = |e: &RExpr| matches!(e, RExpr::Opaque(op, xs) if op == "!" && matches!(xs.as_slice(), [RExpr::Opaque(i, ys)] if i == "in" && matches!(ys.as_slice(), [k, ob] if var(k, key) && var(ob, o))));
+    let not_null = |e: &RExpr| matches!(e, RExpr::Opaque(ne, ys) if ne == "!=" && matches!(ys.as_slice(), [ob, RExpr::Null] if var(ob, o)));
+    // (The null test around the key's.)
+    if not_null(&cond.expr) {
+        return matches!(then.as_slice(), [inner] if is_key_still_there_test(inner, key, o, label));
+    }
+    if !matches!(then.as_slice(), [Stmt::Continue(l)] if l == label) {
+        return false;
+    }
     match &cond.expr {
-        RExpr::Opaque(op, xs) if op == "&&" => match xs.as_slice() {
-            [RExpr::Opaque(ne, ys), t] => ne == "!=" && matches!(ys.as_slice(), [ob, RExpr::Null] if var(ob, o)) && not_in(t),
-            _ => false,
-        },
+        RExpr::Opaque(op, xs) if op == "&&" => matches!(xs.as_slice(), [n, t] if not_null(n) && not_in(t)),
         e => not_in(e),
     }
 }

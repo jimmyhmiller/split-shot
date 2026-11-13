@@ -295,6 +295,10 @@
   "merged": 0,
   "gap": 0
  },
+ "dead_var_class_name.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "dead_write_only_variables.js": {
   "merged": 0,
   "gap": 0
@@ -741,7 +745,7 @@
  },
  "object_choices.js": {
   "merged": 0,
-  "gap": 9
+  "gap": 6
  },
  "object_choices_mixed.js": {
   "merged": 0,
@@ -861,7 +865,7 @@
  },
  "recursive_static_builtins.js": {
   "merged": 0,
-  "gap": 4
+  "gap": 0
  },
  "redefine_keeps_attributes.js": {
   "merged": 0,
@@ -939,6 +943,10 @@
   "merged": 0,
   "gap": 0
  },
+ "short_circuit_operand_effects.js": {
+  "merged": 0,
+  "gap": 0
+ },
  "sort_comparator_folds.js": {
   "merged": 0,
   "gap": 0
@@ -981,7 +989,7 @@
  },
  "std_object_group_fallback_selfhosted.js": {
   "merged": 0,
-  "gap": 208
+  "gap": 206
  },
  "std_object_group_selfhosted.js": {
   "merged": 0,

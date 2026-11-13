@@ -2103,14 +2103,12 @@ impl Compiler {
             Stmt::Set(i, Expr::Bin(Bop::Add, Box::new(Expr::Var(i)), Box::new(Expr::Num(JsNum::int(1))))),
             // `o` may be null/undefined (no keys); `in` would throw on it.
             Stmt::If(
-                Expr::Opaque(
-                    "&&".into(),
-                    vec![
-                        Expr::Opaque("!=".into(), vec![Expr::Var(o), Expr::Null]),
-                        Expr::Opaque("!".into(), vec![Expr::Opaque("in".into(), vec![Expr::Var(k), Expr::Var(o)])]),
-                    ],
-                ),
-                vec![Stmt::Continue],
+                Expr::Opaque("!=".into(), vec![Expr::Var(o), Expr::Null]),
+                vec![Stmt::If(
+                    Expr::Opaque("!".into(), vec![Expr::Opaque("in".into(), vec![Expr::Var(k), Expr::Var(o)])]),
+                    vec![Stmt::Continue],
+                    vec![],
+                )],
                 vec![],
             ),
         ];
@@ -3985,13 +3983,15 @@ impl Compiler {
                 continue;
             }
             let name = pat_ident(&d.name)?;
-            // (A variable nothing reads: only what its initializer does.)
+            // (A variable nothing reads: only what its initializer does,
+            // which names an anonymous function or class after it all the
+            // same: its own code may read that, `static { this.name }`.)
             if ctx.dead.contains(name) {
                 if !is_var {
                     ctx.declare(name);
                 }
                 if let Some(e) = &d.init {
-                    let v = self.lower_expr(e, ctx)?;
+                    let v = self.lower_named(e, name, ctx)?;
                     out.push(Stmt::ExprStmt(v));
                 }
                 continue;
