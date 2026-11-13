@@ -2127,6 +2127,17 @@ thread_local! {
 /// `f` run without the `EntryWatch`: a residual function's body is a
 /// program of its own, from a heap of its own (its addresses name other
 /// objects than the boundary's).
+/// `f` run with no residual `try` region watched (a residual function's
+/// body is none of the caller's regions), the boundary still watched.
+fn region_watch_paused<T>(f: impl FnOnce() -> T) -> T {
+    let regions = REGION_WATCH.with(|w| std::mem::take(&mut *w.borrow_mut()));
+    let region_globals = REGION_GLOBALS.with(|w| std::mem::take(&mut *w.borrow_mut()));
+    let r = f();
+    REGION_WATCH.with(|w| *w.borrow_mut() = regions);
+    REGION_GLOBALS.with(|w| *w.borrow_mut() = region_globals);
+    r
+}
+
 fn entry_watch_paused<T>(f: impl FnOnce() -> T) -> T {
     let saved = ENTRY_WATCH.with(|w| w.borrow_mut().take());
     let regions = REGION_WATCH.with(|w| std::mem::take(&mut *w.borrow_mut()));
@@ -2231,6 +2242,16 @@ fn entry_hoisted(a: usize) -> Option<usize> {
         w.escaped.insert(a);
         Some(v)
     })
+}
+
+/// Whether the boundary's object `a`, as the model now has it (`now`), is
+/// what the boundary has: no code of `main` has changed it so far.
+fn entry_unchanged(a: usize, now: Option<&HeapObj>) -> bool {
+    if !entry_boundary_object(a) {
+        return false;
+    }
+    entry_check(a, now);
+    ENTRY_WATCH.with(|w| w.borrow().as_ref().is_some_and(|w| !w.written.contains(&a)))
 }
 
 /// Whether the boundary's object `a` is one the load code made (see
@@ -4662,6 +4683,9 @@ pub struct Js {
     /// The residual functions specialized for a closure's static captures
     /// (see `residual_fn_for_closure`), by function and those values.
     fn_variant_memo: std::cell::RefCell<HashMap<(usize, Vec<CapForm>), usize>>,
+    /// The residual functions specialized for the static parts of a call's
+    /// arguments (see `arg_shapes`), by function, capture forms and those.
+    arg_variant_memo: std::cell::RefCell<HashMap<(usize, Vec<CapForm>, Vec<ArgShape>), usize>>,
     /// Functions whose closures pass final cells as cells after all: a pass
     /// made one of them a residual function taking a cell's value and also
     /// another form (two copies of its code). Persists across passes.
@@ -5934,6 +5958,7 @@ impl Js {
             residual_fns: std::cell::RefCell::new(Vec::new()),
             fn_memo: std::cell::RefCell::new(HashMap::new()),
             fn_variant_memo: std::cell::RefCell::new(HashMap::new()),
+            arg_variant_memo: std::cell::RefCell::new(HashMap::new()),
             no_unbox_fids: std::cell::RefCell::new(std::collections::HashSet::new()),
             cap_ceilings: Default::default(),
             cap_ceilings_version: std::cell::Cell::new(0),
@@ -6320,7 +6345,7 @@ impl Js {
         let keep = self.main_keep();
         self.clean_up(main, &keep);
         for rf in self.residual_fns.borrow_mut().iter_mut() {
-            let keep = Js::residual_fn_keep(rf);
+            let keep = self.residual_fn_keep(rf);
             self.clean_up(&mut rf.body, &keep);
         }
     }
@@ -6342,7 +6367,7 @@ impl Js {
             });
             let mut fns = self.residual_fns.borrow_mut();
             let rf = &mut fns[rfid];
-            let keep = Js::residual_fn_keep(rf);
+            let keep = self.residual_fn_keep(rf);
             let map = crate::coalesce::coalesce_vars_named(&mut rf.body, &keep, names.as_ref());
             self.coalesced.borrow_mut().insert(ResidualPart::Fn(rfid), map);
         }
@@ -6357,11 +6382,15 @@ impl Js {
 
     /// The variables a residual function's cleanup keeps: its parameters
     /// and `arguments`.
-    fn residual_fn_keep(rf: &ResidualFn) -> std::collections::HashSet<usize> {
+    /// The variables a residual function's cleanup keeps: its parameters,
+    /// its `arguments`, and what the load code gives `main` (the load code's
+    /// objects a body specialized for them names: see `make_arg_variant`).
+    fn residual_fn_keep(&self, rf: &ResidualFn) -> std::collections::HashSet<usize> {
         let mut keep: std::collections::HashSet<usize> = std::collections::HashSet::new();
         keep.insert(ARGUMENTS_VAR_ID);
         keep.extend(rf.param_vars.iter().copied());
         keep.extend(rf.args_var);
+        keep.extend(self.entry.exports.borrow().iter().copied());
         keep
     }
 
@@ -7123,6 +7152,170 @@ impl Js {
         self.make_residual_fn(fid, rfid, forms)
     }
 
+    /// What a residual function of `fid` called with `args` (in state `s`)
+    /// may know of each argument: a static primitive in a parameter that is
+    /// a program counter (`dispatch_program`: it indexes a static program,
+    /// or is a key of a static table), the load code's object no code of
+    /// `main` has changed (everything it reaches too), or else a runtime
+    /// value. `None` when nothing is known (the generic residual function),
+    /// or the function is no plain one (its `arguments`, a generator, a
+    /// derived constructor's `this`), or `PE_NO_ARG_VARIANTS`.
+    ///
+    /// (A residual function specialized for them runs the interpreted
+    /// program's place as compiled code: the interpreter's recursion over
+    /// its program points or syntax nodes becomes one residual function per
+    /// point or node, each calling the next. The places are finitely many:
+    /// a program counter's values index a static program; the load code's
+    /// objects are finitely many; and `ARG_VARIANTS` bounds them besides.)
+    fn arg_shapes(&self, s: &State, fid: usize, args: &[Abs]) -> Option<Vec<ArgShape>> {
+        if env_flag!("PE_NO_ARG_VARIANTS")
+            || self.arguments_slot[fid].is_some()
+            || self.is_async[fid]
+            || !matches!(self.fn_kinds[fid], FnKind::Normal | FnKind::Arrow | FnKind::Method)
+        {
+            return None;
+        }
+        let ncap = self.ncaptured[fid];
+        let program = self.dispatch_program.get(fid);
+        let shapes: Vec<ArgShape> = (0..self.nparams[fid])
+            .map(|j| {
+                let v = args.get(j).cloned().unwrap_or(Abs::Undef);
+                let counter = program.and_then(|p| p.get(ncap + j)).copied().unwrap_or(false);
+                match v {
+                    Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null if counter => ArgShape::Static(v),
+                    Abs::Ref(a) if self.boundary_data(s, a) => ArgShape::Data(a),
+                    _ => ArgShape::Runtime,
+                }
+            })
+            .collect();
+        shapes.iter().any(|sh| *sh != ArgShape::Runtime).then_some(shapes)
+    }
+
+    /// The captures of a closure (`captured`) a residual function
+    /// specialized for its arguments knows as data (see `ArgShape::Data`):
+    /// the load code's objects no code of `main` has changed (a cell holding
+    /// the function itself, its program).
+    fn cap_shapes(&self, s: &State, captured: &[Abs]) -> Vec<ArgShape> {
+        captured
+            .iter()
+            .map(|c| match c {
+                Abs::Ref(a) if self.boundary_data(s, *a) => ArgShape::Data(*a),
+                _ => ArgShape::Runtime,
+            })
+            .collect()
+    }
+
+    /// Is the object at `a` in `s` the load code's, as the boundary has it,
+    /// as is everything it reaches, none of it a runtime value yet?
+    fn boundary_data(&self, s: &State, a: usize) -> bool {
+        let mut reach = std::collections::HashSet::new();
+        let mut work = vec![a];
+        while let Some(x) = work.pop() {
+            if !reach.insert(x) {
+                continue;
+            }
+            let Some(o) = s.heap.get(&x) else { return false };
+            if s.escaped.contains(&x) || !entry_unchanged(x, Some(o)) {
+                return false;
+            }
+            o.for_each_child_ref(&mut |c| work.push(c));
+        }
+        true
+    }
+
+    /// The residual function of `fid` (captures as `forms`) specialized for
+    /// arguments of `shapes` (see `arg_shapes`), made from the caller's
+    /// state `s` if not made yet; `None` past `ARG_VARIANTS` of them.
+    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs]) -> Option<usize> {
+        let caps = self.cap_shapes(s, captured);
+        let mut key_shapes = shapes.to_vec();
+        key_shapes.extend(caps.iter().cloned());
+        let key = (fid, forms.to_vec(), key_shapes);
+        if let Some(&r) = self.arg_variant_memo.borrow().get(&key) {
+            return Some(r);
+        }
+        if self.arg_variant_memo.borrow().keys().filter(|(f, _, _)| *f == fid).count() >= ARG_VARIANTS {
+            return None;
+        }
+        let rfid = self.residual_fns.borrow().len();
+        self.arg_variant_memo.borrow_mut().insert(key, rfid);
+        self.make_arg_variant(s, fid, rfid, forms, shapes, &caps);
+        Some(rfid)
+    }
+
+    /// Make residual function `rfid`, `fid` specialized for arguments of
+    /// `shapes`: its parameters the runtime ones, the others what they are,
+    /// the load code's objects among them (and what they reach) as the
+    /// caller's state `s` has them. Specialized watching the boundary's
+    /// objects as `main` is (see `EntryWatch`): what it changes of them, or
+    /// makes runtime values, is `main`'s doing.
+    fn make_arg_variant(&self, s: &State, fid: usize, rfid: usize, forms: &[CapForm], shapes: &[ArgShape], cap_shapes: &[ArgShape]) {
+        let ncap = self.ncaptured[fid];
+        let runtime: Vec<usize> = shapes.iter().enumerate().filter(|(_, sh)| **sh == ArgShape::Runtime).map(|(j, _)| j).collect();
+        let nparams = runtime.len();
+        let ntake = ncap + Js::import_paths(forms).len();
+        self.push_residual_fn(fid, Some(fid), rfid, forms, ntake, nparams);
+        // (The captures known as data are not passed: so its calls made
+        // while it is built pass them not either.)
+        if cap_shapes.iter().any(|sh| matches!(sh, ArgShape::Data(_))) {
+            let keep: Vec<bool> = (0..ntake).map(|i| !matches!(cap_shapes.get(i), Some(ArgShape::Data(_)))).collect();
+            let mut rfs = self.residual_fns.borrow_mut();
+            let rf = &mut rfs[rfid];
+            rf.ncaptured = keep.iter().filter(|k| **k).count();
+            rf.param_vars = (0..ntake)
+                .filter(|i| keep[*i])
+                .map(|i| self.residual_cap_var(rfid, i))
+                .chain((0..nparams).map(|j| self.residual_param_var(rfid, j)))
+                .collect();
+            rf.cap_keep = Some(keep);
+        }
+        let (facts, caps) = self.taken_values(rfid, forms, ncap);
+        // (The load code's objects the static arguments reach, shared with
+        // the caller's heap, at their addresses; new objects after the
+        // caller's.)
+        let mut heap = Heap::new();
+        let mut work: Vec<usize> = shapes.iter().chain(cap_shapes).filter_map(|sh| if let ArgShape::Data(a) = sh { Some(*a) } else { None }).collect();
+        while let Some(a) = work.pop() {
+            if heap.contains_key(&a) {
+                continue;
+            }
+            let Some(o) = s.heap.get_shared(&a).cloned() else { continue };
+            o.for_each_child_ref(&mut |c| work.push(c));
+            heap.insert_shared(a, o);
+        }
+        let mut start = self.body_start_in(fid, rfid, facts, nparams, heap, s.next_addr);
+        for (i, c) in caps.into_iter().enumerate() {
+            // (A capture known as data: that object; the value passed for
+            // it, unread, is then not passed.)
+            if let Some(ArgShape::Data(a)) = cap_shapes.get(i) {
+                start.frames[0].locals[i] = Abs::Ref(*a);
+                continue;
+            }
+            let v = self.taken_abs(&mut start, c);
+            if matches!(forms.get(i), None | Some(CapForm::Value(Shape::Runtime | Shape::InitCell))) && self.fn_cell_captures[fid].get(i).copied().unwrap_or(false) {
+                self.cell_vars.borrow_mut().insert(self.residual_cap_var(rfid, i));
+            }
+            if matches!(forms.get(i), Some(CapForm::Value(Shape::InitCell))) {
+                self.init_cells.borrow_mut().insert(self.residual_cap_var(rfid, i));
+            }
+            start.frames[0].locals[i] = v;
+        }
+        for (j, sh) in shapes.iter().enumerate() {
+            start.frames[0].locals[ncap + j] = match sh {
+                ArgShape::Runtime => Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, runtime.iter().position(|r| *r == j).expect("a runtime argument")))),
+                ArgShape::Static(v) => v.clone(),
+                ArgShape::Data(a) => Abs::Ref(*a),
+            };
+        }
+        // (Its static context, which its own calls of itself are compared
+        // with: see `do_call`.)
+        let context: Vec<Abs> = start.frames[0].locals[ncap..ncap + shapes.len()].iter().chain(start.frames[0].locals[..ncap].iter()).cloned().collect();
+        start.frames[0].entry_skel = skeleton_of(&start.heap, &context).into();
+        let body = self.specialize_body_watched(rfid, start, self.fn_strict[fid], true);
+        self.drop_unread_captures(fid, rfid, ntake, nparams, &body);
+        self.residual_fns.borrow_mut()[rfid].body = body;
+    }
+
     /// What a closure with `captured` passes residual function `rfid` made
     /// with `forms`: each capture (the value of the final cell it is, when
     /// passed so), then the values `import_paths` locates.
@@ -7507,6 +7700,12 @@ impl Js {
     /// The state a residual function's body starts in: an activation of
     /// `fid` (its locals undefined but `arguments`), `facts` known.
     fn body_start(&self, fid: usize, rfid: usize, facts: crate::facts::Facts, nparams: usize) -> State {
+        self.body_start_in(fid, rfid, facts, nparams, Heap::new(), 0)
+    }
+
+    /// `body_start`, its heap holding `heap`'s objects, new ones made from
+    /// `next_addr` on.
+    fn body_start_in(&self, fid: usize, rfid: usize, facts: crate::facts::Facts, nparams: usize, heap: Heap, next_addr: usize) -> State {
         let mut locals = vec![Abs::Undef; self.nslots[fid]];
         // A residualized function runs as a real JS function, so its `arguments`
         // is the native one. (Codegen emits a function reading `arguments` so
@@ -7543,8 +7742,8 @@ impl Js {
                 cleared_at: usize::MAX,
                 static_iters: Vec::new(),
             }],
-            heap: Heap::new(),
-            next_addr: 0,
+            heap,
+            next_addr,
             pending_joins: Vec::new(),
             handlers: Vec::new(),
             fns: im::OrdMap::new(),
@@ -7565,6 +7764,13 @@ impl Js {
     /// Specialize residual function `rfid`'s body from `start`, `strict` its
     /// strictness.
     fn specialize_body(&self, rfid: usize, start: State, strict: bool) -> Program<Op, Cond> {
+        self.specialize_body_watched(rfid, start, strict, false)
+    }
+
+    /// `specialize_body`; `watched`: watching the boundary's objects as
+    /// `main` is (its start state holds some of them: see
+    /// `make_arg_variant`), not a heap of its own.
+    fn specialize_body_watched(&self, rfid: usize, start: State, strict: bool, watched: bool) -> Program<Op, Cond> {
         // The body is an independent program: specialize it in a clean context.
         // `residual_fn_for` can be reached *while* the caller is mid-probe or
         // mid-residual-try (e.g. `f.call(x)` inside a `try`), and the inherited
@@ -7581,7 +7787,7 @@ impl Js {
         let saved_body = self.current_body.replace(Some(rfid));
         let saved_mat = self.take_mat_state();
         self.building_fns.borrow_mut().insert(rfid);
-        let body = entry_watch_paused(|| self.specialize_nested(start));
+        let body = if watched { region_watch_paused(|| self.specialize_nested(start)) } else { entry_watch_paused(|| self.specialize_nested(start)) };
         self.building_fns.borrow_mut().remove(&rfid);
         self.restore_mat_state(saved_mat);
         self.current_body.set(saved_body);
@@ -9131,6 +9337,7 @@ impl Js {
         self.residual_fns.borrow_mut().clear();
         self.fn_memo.borrow_mut().clear();
         self.fn_variant_memo.borrow_mut().clear();
+        self.arg_variant_memo.borrow_mut().clear();
         self.cap_requests.borrow_mut().clear();
         self.react_root_memo.borrow_mut().clear();
         if let Some(r) = &self.react {
@@ -21675,14 +21882,34 @@ impl Js {
                 },
                 _ => None,
             };
-            let (rfid, passed) = match made_once {
-                Some((addr, once)) if self.react.is_none() && !env_flag!("PE_NO_DIRECT_FORMS") => {
-                    let forms = self.cap_forms(fid, addr, &captured, once, &s.heap);
+            let forms_once = match made_once {
+                Some((addr, once)) if self.react.is_none() && !env_flag!("PE_NO_DIRECT_FORMS") => Some(self.cap_forms(fid, addr, &captured, once, &s.heap)),
+                _ => None,
+            };
+            // (A recursion that stalls under runtime control, its arguments
+            // partly static: the residual function specialized for those,
+            // see `arg_shapes`.)
+            let shapes = if dynamic_recursion && !try_stays && !matches!(ret, RetMode::Construct | RetMode::SuperConstruct) && self.react.is_none() {
+                self.arg_shapes(s, fid, &args)
+            } else {
+                None
+            };
+            let variant = shapes.as_ref().and_then(|sh| {
+                let forms = forms_once.clone().unwrap_or_else(|| vec![CapForm::PASSED; self.ncaptured[fid]]);
+                self.residual_fn_for_args(s, fid, &forms, sh, &captured).map(|r| (r, forms))
+            });
+            let shapes = if variant.is_some() { shapes } else { None };
+            let (rfid, passed) = match (variant, forms_once) {
+                (Some((rfid, forms)), _) => {
+                    let passed = self.passed_for(rfid, &captured, None, &forms, &s.heap);
+                    (rfid, passed)
+                }
+                (None, Some(forms)) => {
                     let rfid = self.residual_fn_for_closure(fid, &forms);
                     let passed = self.passed_for(rfid, &captured, None, &forms, &s.heap);
                     (rfid, passed)
                 }
-                _ => (self.residual_fn_for(fid), captured.to_vec()),
+                (None, None) => (self.residual_fn_for(fid), captured.to_vec()),
             };
             let keep = self.caps_kept(rfid, passed.len());
             let caps: Vec<RExpr> =
@@ -21695,8 +21922,20 @@ impl Js {
                 t => Some(self.operand_rexpr(s, t, &mut escaped, out)),
             };
             let this = this_r.clone().map_or(this, Abs::Dyn);
-            let arg_rs: Vec<RExpr> =
-                args.iter().map(|a| self.operand_rexpr(s, a, &mut escaped, out)).collect();
+            // (A residual function specialized for the arguments takes the
+            // runtime ones.)
+            let arg_rs: Vec<RExpr> = match &shapes {
+                Some(sh) => args
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| sh.get(*j) == Some(&ArgShape::Runtime))
+                    .map(|(_, a)| a.clone())
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(|a| self.operand_rexpr(s, a, &mut escaped, out))
+                    .collect(),
+                None => args.iter().map(|a| self.operand_rexpr(s, a, &mut escaped, out)).collect(),
+            };
             // A residual function takes its captures as leading parameters, so
             // a direct call passes them before the arguments (and a receiver
             // through `.call`).
@@ -31950,6 +32189,25 @@ const TRICK_KEYS: usize = 64;
 /// How many case splits one lookup site makes before it stays the
 /// runtime's (see `Js::trick_lookup`).
 const TRICK_SPLITS: usize = 64;
+
+/// How many residual functions one function is specialized to for the
+/// static parts of its arguments (see `Js::arg_shapes`) before its further
+/// calls take the generic one.
+const ARG_VARIANTS: usize = 64;
+
+/// What a residual function specialized for a call's arguments knows of
+/// one (see `Js::arg_shapes`).
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum ArgShape {
+    /// A runtime value, passed in.
+    Runtime,
+    /// A static primitive, not passed: an interpreter's program counter.
+    Static(Abs),
+    /// The load code's object at this address, as the boundary has it and
+    /// no code has changed it, not passed: an interpreter's program, its
+    /// syntax tree. (Its runtime identity is the load code's.)
+    Data(usize),
+}
 
 /// How many times a path may pass one loop head whose objects only gained
 /// keys before the whistle weighs it as any other (see `whistle_with`).

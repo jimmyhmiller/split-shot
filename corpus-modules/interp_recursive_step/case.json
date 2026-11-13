@@ -1,0 +1,1 @@
+{"entry": "main.mjs", "inputs": [0, 1, 2, -3, 50, 400], "repeat": true, "forbid": "\"(jz|add|dec|jmp|halt)\"|PROGRAM|\\[pc\\]"}
