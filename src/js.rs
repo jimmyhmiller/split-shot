@@ -1343,8 +1343,49 @@ impl From<Vec<Abs>> for BData {
 
 impl PartialEq for BData {
     fn eq(&self, o: &BData) -> bool {
-        self.v.ptr_eq(&o.v) || (self.v.len() == o.v.len() && self.tally() == o.tally() && self.v == o.v)
+        self.v.ptr_eq(&o.v) || (self.v.len() == o.v.len() && self.tally() == o.tally() && vector_diff(&self.v, &o.v, 1).is_empty())
     }
+}
+
+/// The indices at which two vectors of one length differ, in order, at most
+/// `limit` of them. The leaves the two share are not looked into: a vector
+/// made from another by a few writes shares all but those it wrote (a 64K
+/// memory compared with itself a step later costs its leaves, not its
+/// elements).
+fn vector_diff(a: &im::Vector<Abs>, b: &im::Vector<Abs>, limit: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let (mut la, mut lb) = (a.leaves(), b.leaves());
+    let (mut ca, mut cb): (&[Abs], &[Abs]) = (&[], &[]);
+    let mut at = 0usize;
+    loop {
+        if ca.is_empty() {
+            match la.next() {
+                Some(c) => ca = c,
+                None => break,
+            }
+        }
+        if cb.is_empty() {
+            match lb.next() {
+                Some(c) => cb = c,
+                None => break,
+            }
+        }
+        let n = ca.len().min(cb.len());
+        if !std::ptr::eq(ca.as_ptr(), cb.as_ptr()) {
+            for k in 0..n {
+                if ca[k] != cb[k] {
+                    out.push(at + k);
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+            }
+        }
+        ca = &ca[n..];
+        cb = &cb[n..];
+        at += n;
+    }
+    out
 }
 
 impl Eq for BData {}
@@ -1443,6 +1484,11 @@ impl PartialEq for BeforeBranch {
 impl Eq for BeforeBranch {}
 impl std::hash::Hash for BeforeBranch {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+}
+
+/// Is `base` another variable than `var`?
+fn b_differs(base: &RExpr, var: usize) -> bool {
+    !matches!(base, RExpr::Var(b) if *b == var)
 }
 
 /// The objects of the class whose constructor is at `c`: the constructor,
@@ -10956,11 +11002,44 @@ fn ta_convert_expr_plain(ctor: &str, e: RExpr) -> Option<RExpr> {
     })
 }
 
+/// What an element of a mirrored typed array's buffer holds in the model
+/// when only the runtime array knows it (see `Js::mirror_typed_array`): no
+/// value (no typed array holds a string), never read as one. Reading the
+/// element reads the runtime array. (No runtime value either: the buffer of
+/// an emulator's memory then names no variable, and is compared and kept
+/// as cheaply as one of numbers.)
+const MIRROR_UNKNOWN: &str = "%mirror-unknown";
+
+fn mirror_unknown() -> Abs {
+    Abs::Str(MIRROR_UNKNOWN.into())
+}
+
+/// A mirrored view's parts `(ctor, buffer, offset, length, variable)`: a
+/// typed array that is modeled and is also the runtime array in `variable`
+/// (see `Js::mirror_typed_array`). `None` for any other.
+fn ta_mirror(heap: &Heap, addr: usize) -> Option<(String, usize, usize, usize, usize)> {
+    let Some(HeapObj::Builtin { kind, data, .. }) = heap.get(&addr) else { return None };
+    if kind != "TypedArray" || data.len() != 5 {
+        return None;
+    }
+    let (Abs::Str(ctor), Abs::Ref(buf), Abs::Num(off), Abs::Num(len), Abs::Dyn(RExpr::Var(var))) = (&data[0], &data[1], &data[2], &data[3], &data[4]) else {
+        return None;
+    };
+    Some((ctor.clone(), *buf, off.as_index()?, len.as_index()?, *var))
+}
+
+/// The length of a typed array view, modeled or mirrored.
+fn ta_len(heap: &Heap, addr: usize) -> Option<usize> {
+    ta_view(heap, addr).map(|(_, _, _, len)| len).or_else(|| ta_mirror(heap, addr).map(|(_, _, _, len, _)| len))
+}
+
 /// A view's parts `(ctor, buffer, offset, length)`, or `None` when its
-/// buffer is a runtime value (escaped).
+/// buffer is a runtime value (escaped), or the view is mirrored (see
+/// `ta_mirror`: only the steps that keep its runtime array in step with the
+/// model serve it; to any other it is as a runtime value, and escapes).
 fn ta_view(heap: &Heap, addr: usize) -> Option<(String, usize, usize, usize)> {
     let HeapObj::Builtin { kind, data, .. } = &heap[&addr] else { return None };
-    if kind != "TypedArray" {
+    if kind != "TypedArray" || data.len() != 4 {
         return None;
     }
     let (Abs::Str(ctor), Abs::Ref(buf), Abs::Num(off), Abs::Num(len)) = (&data[0], &data[1], &data[2], &data[3]) else {
@@ -10971,6 +11050,7 @@ fn ta_view(heap: &Heap, addr: usize) -> Option<(String, usize, usize, usize)> {
 
 /// `new C([elements])` (or `new C(n)` when every element is 0).
 fn typed_array_literal(ctor: &str, elems: &[Abs]) -> RExpr {
+    assert!(!elems.contains(&mirror_unknown()), "internal: a mirrored typed array's unknown element read as a value (typed_array_literal)");
     let is_zero = |e: &Abs| matches!(e, Abs::Num(n) if n.f() == 0.0 && !n.f().is_sign_negative());
     let zero = elems.iter().all(is_zero);
     // (Mostly zeros (an emulator's memory): the zeroed array its length
@@ -12512,7 +12592,7 @@ impl Js {
                     Abs::Ref(b) => match s.heap.get(b) {
                         Some(HeapObj::Array(arr)) => Some((*b, arr.len())),
                         // (A typed array: an emulator's memory.)
-                        Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray" => ta_view(&s.heap, *b).map(|(_, _, _, len)| (*b, len)),
+                        Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray" => ta_len(&s.heap, *b).map(|len| (*b, len)),
                         _ => None,
                     },
                     _ => None,
@@ -12585,7 +12665,7 @@ impl Js {
         let len_of = |a: usize| -> Option<usize> {
             match s.heap.get(&a) {
                 Some(HeapObj::Array(arr)) => Some(arr.len()),
-                Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray" => ta_view(&s.heap, a).map(|(_, _, _, len)| len),
+                Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray" => ta_len(&s.heap, a),
                 _ => None,
             }
         };
@@ -13522,6 +13602,13 @@ impl Js {
                     s.top_mut().ostack.push(v);
                     return self.set_prop_step(s, &k, pc, out);
                 }
+                // (A mirrored typed array, or one a runtime index makes so:
+                // see `mirror_write`.)
+                if let Abs::Ref(addr) = &a {
+                    if self.mirror_write(s, *addr, &i, &v, pc, out) {
+                        return self.advance(s);
+                    }
+                }
                 // A modeled typed array with a static index: the value converts
                 // to the element type (always, as `ToNumber`; it is stored
                 // only at a valid index).
@@ -13835,6 +13922,18 @@ impl Js {
                     // (A choice holding its arrays alone: on each, see
                     // `choice_array_mutate`.)
                     Abs::Ref(addr) if matches!(&s.heap[&addr], HeapObj::Choice { .. }) && self.choice_array_mutate(s, "push", addr, std::slice::from_ref(&v), pc).is_some() => {}
+                    // (A modeled object with a `push` method of the
+                    // program's, its own or its class's (a machine's
+                    // `this.push(byte)`): that method called.)
+                    Abs::Ref(addr)
+                        if matches!(&s.heap[&addr], HeapObj::Object { .. })
+                            && matches!(self.lookup_prop(&s.heap, addr, "push"), Found::Data(Abs::Ref(m)) if matches!(s.heap.get(&m), Some(HeapObj::Closure { .. }))) =>
+                    {
+                        let Found::Data(method) = self.lookup_prop(&s.heap, addr, "push") else { unreachable!("found just above") };
+                        s.top_mut().ostack.push(method);
+                        s.top_mut().ostack.push(v);
+                        return self.do_call(s, 1, pc, out, Abs::Ref(addr), RetMode::Discard, Abs::Undef);
+                    }
                     // A non-array static object reaching `.push` (`{}.push(v)`
                     // throws at runtime): escape and residualize so the runtime
                     // throws identically.
@@ -13969,6 +14068,13 @@ impl Js {
                     }
                 }
                 let i = object_key(&s.heap, &a, i);
+                // (A mirrored typed array, or one a runtime index makes so:
+                // see `mirror_read`.)
+                if let Abs::Ref(addr) = &a {
+                    if let Some(v) = self.mirror_read(s, *addr, &i, out) {
+                        return self.push(s, v);
+                    }
+                }
                 // If the abstract heap can't serve this index statically (a
                 // dynamic index, or a type-mismatched key like `arr["x"]` /
                 // `obj[5]`), the container and the index escape and the read
@@ -14953,6 +15059,10 @@ impl Js {
                         // The condition stays on the operand stack meanwhile, so
                         // if that reassigns a variable it reads, it is frozen to
                         // the old value like any other live reader.
+                        // (The condition as it was computed, before any read
+                        // it holds is made a variable below: what it tells is
+                        // learned on each side, see the end.)
+                        let computed = c.clone();
                         let hm = self.if_heap_modified[pc].clone();
                         // (A variable's cell an arm writes stays modeled when
                         // the `if` has one join: its value is lifted there, see
@@ -15092,6 +15202,18 @@ impl Js {
                         if cond_var.is_some() && original != r {
                             crate::facts::learn(&mut tstate.facts, &original, false, self.typed_intrinsics());
                             crate::facts::learn(&mut fstate.facts, &original, true, self.typed_intrinsics());
+                        }
+                        // (A condition whose pending reads were made a
+                        // variable just above, for an arm's call: the
+                        // variable holds what the condition was here, so
+                        // what the condition tells holds on each side as if
+                        // it were branched on itself. `if (bytes.length >
+                        // 255) throw ...` bounds the length after it.)
+                        if let Abs::Dyn(e) = &computed {
+                            if *e != original && *e != r && !self.facts_off && !env_flag!("PE_NO_LEARN") {
+                                crate::facts::learn(&mut tstate.facts, e, false, self.typed_intrinsics());
+                                crate::facts::learn(&mut fstate.facts, e, true, self.typed_intrinsics());
+                            }
                         }
                         // Block boundary: drop dead locals, then reclaim heap
                         // garbage in each successor.
@@ -15388,6 +15510,22 @@ impl Js {
                         note(&info, &mut mentioned);
                         st.facts.insert(*var, info);
                     }
+                    // (A value's `length` read into a variable: that
+                    // property is this variable's value, until code that may
+                    // write it runs (see `facts::Info::props`), so what a
+                    // guard then tells of the variable it tells of the
+                    // length: `if (bytes.length > 255) throw` bounds what a
+                    // copy of `bytes` writes, see `mirror_set`.
+                    // `PE_NO_LENGTH_FACTS`: not recorded.)
+                    if let RExpr::Get(base, k) = expr {
+                        if let (RExpr::Var(b), true, false) = (&**base, k == "length" && b_differs(base, *var), env_flag!("PE_NO_LENGTH_FACTS")) {
+                            let mut bi = st.facts.get(b).cloned().unwrap_or_else(Info::top);
+                            bi.props.retain(|(n, _)| n != k);
+                            bi.props.push((k.clone(), Info { eq: Some(RExpr::Var(*var)), ..Info::top() }));
+                            note(&bi, &mut mentioned);
+                            st.facts.insert(*b, bi);
+                        }
+                    }
                 }
                 Op::NewObject { dst, .. } | Op::NewArray { dst, .. } if self.pending_info.borrow().contains_key(dst) => {
                     let info = self.pending_info.borrow()[dst].clone();
@@ -15414,6 +15552,19 @@ impl Js {
                 _ => {}
             }
         }
+    }
+
+    /// The most `v.length` can be, by what the facts say of it or of the
+    /// variable it was read into (see `track_defs_inner`).
+    fn length_at_most(&self, s: &State, v: &Abs) -> Option<usize> {
+        let info = self.info_abs(s, v)?;
+        let (_, l) = info.props.iter().find(|(k, _)| k == "length")?;
+        let hi = match (&l.hi, &l.eq) {
+            (Some(b), _) => Some(*b),
+            (None, Some(RExpr::Var(t))) => s.facts.get(t).and_then(|i| i.hi),
+            _ => None,
+        }?;
+        Some(hi.v.f().floor().max(0.0) as usize)
     }
 
     /// The typed intrinsics, when the environment defines them.
@@ -18491,12 +18642,12 @@ impl Js {
                 }
                 &renamed
             };
-            let pairs: Vec<(&Abs, &Abs)> = match (s, c) {
+            let pairs: Vec<(usize, &Abs, &Abs)> = match (s, c) {
                 (HeapObj::Array(a), HeapObj::Array(b)) if a.len() == b.len() && a.props == b.props && a.proto == b.proto => {
-                    a.iter().zip(b.iter()).collect()
+                    a.iter().zip(b.iter()).enumerate().map(|(i, (x, y))| (i, x, y)).collect()
                 }
                 (HeapObj::Object { .. }, HeapObj::Object { .. }) if obj_cell_labels(s) == obj_cell_labels(c) => {
-                    s.children().into_iter().zip(c.children()).collect()
+                    s.children().into_iter().zip(c.children()).enumerate().map(|(i, (x, y))| (i, x, y)).collect()
                 }
                 // (A map with the same keys, live alike: its values, which
                 // a variable environment keeps. `PE_NO_MAP_FIELDS`: none.)
@@ -18505,7 +18656,8 @@ impl Js {
                 (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None })
                     if k1 == "ArrayBuffer" && k2 == "ArrayBuffer" && d1.len() == d2.len() && d1.first() == d2.first() && !env_flag!("PE_NO_MAP_FIELDS") =>
                 {
-                    s.children().into_iter().zip(c.children()).collect()
+                    // (Only where they differ: a memory is long.)
+                    vector_diff(&d1.v, &d2.v, usize::MAX).into_iter().map(|i| (i, &d1.v[i], &d2.v[i])).collect()
                 }
                 (HeapObj::Builtin { kind: k1, data: d1, ext: None }, HeapObj::Builtin { kind: k2, data: d2, ext: None })
                     if k1 == k2 && matches!(k1.as_str(), "Map" | "WeakMap") && d1.len() == d2.len() && !env_flag!("PE_NO_MAP_FIELDS") =>
@@ -18515,13 +18667,13 @@ impl Js {
                     if !same_keys {
                         { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 2"); } return None; }
                     }
-                    s.children().into_iter().zip(c.children()).collect()
+                    s.children().into_iter().zip(c.children()).enumerate().map(|(i, (x, y))| (i, x, y)).collect()
                 }
                 _ => return None,
             };
             // The field's residual name is keyed by the object's creation site.
             if creation.get(addr).is_none() { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none: no creation pc for @{addr}"); } return None; }
-            for (idx, (a, b)) in pairs.into_iter().enumerate() {
+            for (idx, a, b) in pairs {
                 if a == b {
                     continue;
                 }
@@ -18566,6 +18718,46 @@ impl Js {
             }
         }
         Some((changes, grew))
+    }
+
+    /// Make the typed array `new ctor(elems)` in `dst` (`buf` its buffer's
+    /// address, naming its temporaries). A long one that is mostly zeros (an
+    /// emulator's memory with a program loaded) is made zeroed, each run of
+    /// its other elements set by one `set` call (while the constructor is
+    /// the standard one: its `set` is then `%TypedArray%.prototype`'s);
+    /// any other as `typed_array_literal` makes it.
+    fn typed_array_ops(&self, dst: usize, buf: usize, ctor: &str, elems: &[Abs], out: &mut Vec<Op>) {
+        let is_zero = |e: &Abs| matches!(e, Abs::Num(n) if n.f() == 0.0 && !n.f().is_sign_negative());
+        let nonzero = elems.iter().filter(|e| !is_zero(e)).count();
+        let sparse = nonzero > 0 && elems.len() >= 64 && nonzero * 4 < elems.len();
+        if !sparse || !self.pristine(ctor) || env_flag!("PE_NO_TYPED_RUNS") {
+            out.push(Op::Eval { dst, expr: typed_array_literal(ctor, elems) });
+            return;
+        }
+        out.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global(ctor.to_string())), vec![RExpr::Num(JsNum::int(elems.len() as i64))]) });
+        let mut k = 0;
+        let mut run = 0;
+        while k < elems.len() {
+            if is_zero(&elems[k]) {
+                k += 1;
+                continue;
+            }
+            // (A run goes on over up to 3 zeros between its elements.)
+            let start = k;
+            let mut end = k + 1;
+            let mut j = k + 1;
+            while j < elems.len() && j - end < 4 {
+                if !is_zero(&elems[j]) {
+                    end = j + 1;
+                }
+                j += 1;
+            }
+            let lit = RExpr::ArrayLit(elems[start..end].iter().map(|e| e.to_rexpr()).collect());
+            let call = RExpr::Call(Box::new(RExpr::Get(Box::new(RExpr::Var(dst)), "set".into())), vec![lit, RExpr::Num(JsNum::int(start as i64))]);
+            out.push(Op::Eval { dst: self.aux_var(140, buf, run), expr: call });
+            run += 1;
+            k = end;
+        }
     }
 
     /// A residual temp interned by `(tag, a, b)`, so the same purpose at the
@@ -19981,6 +20173,191 @@ impl Js {
         })
     }
 
+    /// Make the modeled typed array at `addr` at runtime while it stays
+    /// modeled: a mirror. Its runtime array (in the variable returned, the
+    /// one it would escape into) holds what the model does, and from here
+    /// every write the model makes is made to the runtime array as well
+    /// (`mirror_write`, `mirror_set`), so a read the model cannot answer (a
+    /// runtime index, an element only the runtime knows, `MIRROR_UNKNOWN`)
+    /// reads the runtime array, and one it can still folds. (An emulator's
+    /// memory given runtime input: the program's code bytes stay known, the
+    /// input is read at runtime.) Only a view of the whole of a buffer
+    /// nothing else holds, made by this specialization: another view could
+    /// write the buffer unseen. `None` when it cannot be (it then escapes
+    /// as before). `PE_NO_MIRROR`: never.
+    fn mirror_typed_array(&self, s: &mut State, addr: usize, out: &mut Vec<Op>) -> Option<usize> {
+        if let Some((_, _, _, _, var)) = ta_mirror(&s.heap, addr) {
+            return Some(var);
+        }
+        if env_flag!("PE_NO_MIRROR") || entry_boundary_object(addr) || s.escaped.contains(&addr) {
+            return None;
+        }
+        if !matches!(s.heap.get(&addr), Some(HeapObj::Builtin { ext: None, .. })) {
+            return None;
+        }
+        let (_, buf, off, len) = ta_view(&s.heap, addr)?;
+        let whole = off == 0 && matches!(s.heap.get(&buf), Some(HeapObj::Builtin { data, ext: None, .. }) if data.len() - 1 == len);
+        if !whole || s.escaped.contains(&buf) || entry_boundary_object(buf) {
+            return None;
+        }
+        let holds = |v: &Abs| matches!(v, Abs::Ref(b) if *b == buf);
+        let held = s.frames.iter().any(|f| f.values().any(holds))
+            || s.globals.values().any(|(v, _)| holds(v))
+            || s.fns.values().any(holds)
+            || s.heap.iter().any(|(a, o)| *a != addr && o.children().into_iter().any(holds));
+        if held {
+            return None;
+        }
+        self.forbid_residual_in_try(s, "a typed array made at runtime");
+        let heap = s.heap.clone();
+        let mut made = HashMap::new();
+        let RExpr::Var(var) = self.materialize_value_seen(&Abs::Ref(addr), &heap, out, &mut made) else {
+            panic!("internal: a typed array materialized as no variable (mirror_typed_array)");
+        };
+        for v in made.values() {
+            self.why.made(*v, s.top().pc, s.top().func);
+        }
+        let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&addr) else { unreachable!("a modeled view") };
+        data.push(Abs::Dyn(RExpr::Var(var)));
+        Some(var)
+    }
+
+    /// `a[i]` of the typed array at `addr`, mirrored or made so here (see
+    /// `mirror_typed_array`): an element the model knows; otherwise the
+    /// runtime array's, a pending read as of any runtime array (a write
+    /// freezes it first, see `mirror_write`). Only for a number index: a
+    /// key of another kind could name the view's buffer. `None` when it
+    /// does not apply.
+    fn mirror_read(&self, s: &mut State, addr: usize, i: &Abs, out: &mut Vec<Op>) -> Option<Abs> {
+        if !matches!(s.heap.get(&addr), Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray") {
+            return None;
+        }
+        match i {
+            Abs::Num(n) => {
+                let (_, buf, off, len, var) = ta_mirror(&s.heap, addr)?;
+                let Some(k) = n.as_index().filter(|k| *k < len && JsNum::int(*k as i64) == *n) else { return Some(Abs::Undef) };
+                let HeapObj::Builtin { data, .. } = &s.heap[&buf] else { return None };
+                let e = data[1 + off + k].clone();
+                Some(if e == mirror_unknown() { Abs::Dyn(RExpr::Index(Box::new(RExpr::Var(var)), Box::new(RExpr::Num(*n)))) } else { e })
+            }
+            Abs::Dyn(e) => {
+                if !self.info_abs(s, i).is_some_and(|x| x.types == crate::facts::T_NUM) {
+                    return None;
+                }
+                let var = self.mirror_typed_array(s, addr, out)?;
+                Some(Abs::Dyn(RExpr::Index(Box::new(RExpr::Var(var)), Box::new(e.clone()))))
+            }
+            _ => None,
+        }
+    }
+
+    /// The elements a runtime number index may name, `[lo, hi)`, by what
+    /// the facts bound it to (`addr & 0xFFFF`, `0x200 + x`): all of them
+    /// when they say nothing.
+    fn index_bounds(&self, s: &State, i: &Abs, len: usize) -> (usize, usize) {
+        let Some(info) = self.info_abs(s, i) else { return (0, len) };
+        let lo = info.lo.map(|b| b.v.f().floor().max(0.0) as usize).unwrap_or(0);
+        let hi = info.hi.map(|b| (b.v.f().floor().max(-1.0) + 1.0) as usize).unwrap_or(len);
+        (lo.min(len), hi.min(len))
+    }
+
+    /// `a[i] = v` of the typed array at `addr`, mirrored or made so here
+    /// (see `mirror_typed_array`): written to the runtime array, and to the
+    /// model where the index is known; a runtime index makes unknown every
+    /// element it may name (see `index_bounds`). Only for a number index
+    /// and a value that converts as a number does. Whether it was done.
+    fn mirror_write(&self, s: &mut State, addr: usize, i: &Abs, v: &Abs, pc: usize, out: &mut Vec<Op>) -> bool {
+        if !matches!(s.heap.get(&addr), Some(HeapObj::Builtin { kind, .. }) if kind == "TypedArray") || matches!(v, Abs::Ref(_)) {
+            return false;
+        }
+        let number_index = match i {
+            Abs::Num(_) => ta_mirror(&s.heap, addr).is_some(),
+            Abs::Dyn(_) => self.info_abs(s, i).is_some_and(|x| x.types == crate::facts::T_NUM),
+            _ => false,
+        };
+        if !number_index {
+            return false;
+        }
+        let Some(var) = self.mirror_typed_array(s, addr, out) else { return false };
+        let Some((ctor, buf, off, len, _)) = ta_mirror(&s.heap, addr) else { return false };
+        let cv = match v {
+            Abs::Dyn(e) => {
+                let Some(ce) = ta_convert_expr(&ctor, e.clone()) else { return false };
+                let t = self.aux_var(44, pc, 0);
+                self.emit_temp(s, t, ce, pc, out);
+                Abs::Dyn(RExpr::Var(t))
+            }
+            other => match prim_to_number(other) {
+                Some(x) => Abs::Num(ta_convert(&ctor, x)),
+                None => return false,
+            },
+        };
+        self.forbid_residual_in_try(s, "an indexed write");
+        let arr = RExpr::Var(var);
+        let index = match i {
+            Abs::Num(n) => {
+                // (Stored only at a valid index.)
+                let Some(k) = n.as_index().filter(|k| *k < len && JsNum::int(*k as i64) == *n) else { return true };
+                // (A runtime value written is the runtime array's to
+                // know: the model keeps the elements it knows as numbers.)
+                let known = if cv.is_dynamic() { mirror_unknown() } else { cv.clone() };
+                if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&buf) {
+                    data.set(1 + off + k, known);
+                }
+                RExpr::Num(*n)
+            }
+            Abs::Dyn(e) => {
+                let (lo, hi) = self.index_bounds(s, i, len);
+                if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&buf) {
+                    for k in lo..hi {
+                        data.set(1 + off + k, mirror_unknown());
+                    }
+                }
+                e.clone()
+            }
+            _ => unreachable!("a number index"),
+        };
+        self.freeze_readers(s, pc, out, &|e| reads_array(e, &arr));
+        out.push(self.in_mode(s, Op::SetIndex { arr: arr.clone(), index, val: cv.to_rexpr() }));
+        true
+    }
+
+    /// `a.set(source, offset)` of the typed array at `recv` given a runtime
+    /// source and a known offset: the call made on its runtime array (the
+    /// view mirrored, see `mirror_typed_array`), the elements it may write
+    /// unknown to the model from then on: from the offset, as many as the
+    /// source's length is known to be at most, or to the end. The call's
+    /// value; `None` when it does not apply.
+    fn mirror_set(&self, s: &mut State, recv: usize, args: &[Abs], pc: usize, out: &mut Vec<Op>) -> Option<Abs> {
+        let Some(Abs::Dyn(src)) = args.first() else { return None };
+        if args.len() > 2 {
+            return None;
+        }
+        let at = match args.get(1) {
+            None | Some(Abs::Undef) => 0,
+            Some(Abs::Num(n)) => n.as_index().filter(|k| JsNum::int(*k as i64) == *n)?,
+            _ => return None,
+        };
+        let var = self.mirror_typed_array(s, recv, out)?;
+        let (_, buf, off, len, _) = ta_mirror(&s.heap, recv)?;
+        let most = self.length_at_most(s, &args[0]);
+        let end = most.map(|n| at.saturating_add(n)).unwrap_or(len).min(len);
+        if env_flag!("MIRROR_DEBUG") {
+            eprintln!("[MIRROR] set src={:?} info={:?} at={at} end={end} facts={:?}", args[0], self.info_abs(s, &args[0]), s.facts);
+        }
+        let mut call_args = vec![src.clone()];
+        if args.len() > 1 {
+            call_args.push(RExpr::Num(JsNum::int(at as i64)));
+        }
+        let r = self.runtime_call(s, RExpr::Get(Box::new(RExpr::Var(var)), "set".into()), call_args, pc, out);
+        if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&buf) {
+            for k in at.min(len)..end {
+                data.set(1 + off + k, mirror_unknown());
+            }
+        }
+        Some(r)
+    }
+
     /// Evaluate a modeled bound method (e.g. `TextDecoder.decode`). Returns
     /// `None` when arguments are not static.
     fn try_builtin_method(&self, kind: &str, _data: &[Abs], args: &[Abs], s: &State) -> Option<Abs> {
@@ -20799,6 +21176,18 @@ impl Js {
                         return self.do_call(s, n, pc, out, this, ret, Abs::Undef);
                       }
                     }
+                }
+            }
+        }
+        // `set` of a modeled typed array given a runtime source: made on
+        // its runtime array, the view mirrored (see `mirror_set`).
+        if let (Abs::Ref(addr), Abs::Ref(recv)) = (&callee, &this) {
+            if matches!(&s.heap[addr], HeapObj::Builtin { kind, .. } if kind == "TypedArray.prototype.set") && self.pristine("Object") {
+                let recv = *recv;
+                if let Some(v) = self.mirror_set(s, recv, &args, pc, out) {
+                    s.top_mut().pc += 1;
+                    self.finish_call(s, v, Abs::Undef, ret, pc, out);
+                    return Step::Continue;
                 }
             }
         }
@@ -21945,8 +22334,19 @@ impl Js {
         let structured = now.iter().any(|k| matches!(k, Skel::Arr(..) | Skel::Obj(..) | Skel::Clo(..) | Skel::Ref(_)));
         let key = (fid, std::rc::Rc::<[Skel]>::from(now.as_slice()));
         let branched_before = s.top().dyn_ctl && !context.is_empty() && self.branched_contexts.borrow().contains(&key);
+        // (Nor a call given an interpreter's record of where its program is
+        // (see `dispatch_fields`: its receiver, a method of the machine, or
+        // an argument): a shared function would be given the record as a
+        // runtime value, and the program would run interpreted from there.
+        // Its places bound the inlining, as the activations at them are
+        // tied. `PE_SHARE_DISPATCH_RECORDS`: shared as any other.)
+        let holds_record = branched_before && !env_flag!("PE_SHARE_DISPATCH_RECORDS") && {
+            let records: Vec<usize> = s.frames.iter().flat_map(|f| self.dispatch_fields(s, f)).map(|(a, _, _)| a).collect();
+            !records.is_empty() && context.iter().chain(std::iter::once(&this)).any(|v| matches!(v, Abs::Ref(a) if records.contains(a)))
+        };
         let shared_context = !env_flag!("PE_NO_SHARED_CONTEXTS")
             && branched_before
+            && !holds_record
             && (!structured || env_flag!("PE_SHARE_STRUCTURED") || {
                 let mut counts = self.structured_inlined.borrow_mut();
                 let n = counts.entry(key.clone()).or_insert(0);
@@ -24538,8 +24938,11 @@ impl Js {
                 // (Its accessors and methods are RegExp.prototype's.)
                 HeapObj::Builtin { kind, .. } if kind == "RegExp" && k != "lastIndex" && !self.pristine("RegExp") => true,
                 // A typed array: its geometry, its buffer, and its methods.
-                HeapObj::Builtin { kind, .. } if kind == "TypedArray" => match ta_view(&s.heap, addr) {
+                // (A mirrored one, see `ta_mirror`: its geometry and `set`;
+                // its buffer and its other methods are the runtime array's.)
+                HeapObj::Builtin { kind, .. } if kind == "TypedArray" => match ta_view(&s.heap, addr).or_else(|| ta_mirror(&s.heap, addr).map(|(c, b, o, l, _)| (c, b, o, l))) {
                     Some((ctor, buf, off, len)) => {
+                        let mirrored = ta_mirror(&s.heap, addr).is_some();
                         let bpe = ta_bpe(&ctor);
                         let num = |n: usize| Abs::Num(JsNum::int(n as i64));
                         let v = match k.as_str() {
@@ -24547,13 +24950,13 @@ impl Js {
                             "byteLength" => Some(num(len * bpe)),
                             "byteOffset" => Some(num(off * bpe)),
                             "BYTES_PER_ELEMENT" => Some(num(bpe)),
-                            "buffer" => Some(Abs::Ref(buf)),
+                            "buffer" if !mirrored => Some(Abs::Ref(buf)),
                             _ => None,
                         };
                         if let Some(v) = v {
                             return self.push(s, v);
                         }
-                        if TYPED_ARRAY_METHODS.contains(&k.as_str()) && self.pristine(&ctor) {
+                        if TYPED_ARRAY_METHODS.contains(&k.as_str()) && self.pristine(&ctor) && (!mirrored || k == "set") {
                             let b = s.alloc(HeapObj::Builtin { kind: format!("TypedArray.prototype.{k}"), data: vec![].into(), ext: None });
                             return self.push(s, Abs::Ref(b));
                         }
@@ -27005,6 +27408,18 @@ impl Js {
                 let expr = typed_buffer_expr(&data.to_vec());
                 out.push(Op::Eval { dst, expr });
             }
+            // (A mirrored view is its runtime array already, and its
+            // buffer that array's: see `mirror_typed_array`.)
+            HeapObj::Builtin { kind, data, .. } if kind == "TypedArray" && data.len() == 5 => {
+                let Abs::Dyn(RExpr::Var(m)) = &data[4] else { unreachable!("a mirrored view's variable") };
+                if *m != dst {
+                    out.push(Op::Assign { var: dst, expr: RExpr::Var(*m) });
+                }
+                if let Abs::Ref(buf) = &data[1] {
+                    let bvar = self.escape_var(*buf);
+                    seen.entry(*buf).or_insert(bvar);
+                }
+            }
             HeapObj::Builtin { kind, data, .. } if kind == "TypedArray" => {
                 let data = data.clone();
                 let Abs::Str(ctor) = &data[0] else { unreachable!() };
@@ -27015,7 +27430,7 @@ impl Js {
                     // its elements, and the buffer is its `.buffer`.
                     Abs::Ref(buf) if !seen.contains_key(buf) && off == 0 && matches!(&heap[buf], HeapObj::Builtin { data: bd, .. } if bd.len() - 1 == len) => {
                         let HeapObj::Builtin { data: bd, .. } = &heap[buf] else { unreachable!() };
-                        out.push(Op::Eval { dst, expr: typed_array_literal(ctor, &bd.slice(1..bd.len())) });
+                        self.typed_array_ops(dst, *buf, ctor, &bd.slice(1..bd.len()), out);
                         let bvar = self.escape_var(*buf);
                         seen.insert(*buf, bvar);
                         out.push(Op::Eval { dst: bvar, expr: RExpr::Get(Box::new(RExpr::Var(dst)), "buffer".into()) });
@@ -27984,6 +28399,16 @@ impl Js {
             HeapObj::Builtin { kind, data, .. } if kind == "NumberObject" => {
                 shells.push(Op::Eval { dst, expr: RExpr::New(Box::new(RExpr::Global("Number".into())), vec![data[0].to_rexpr()]) });
             }
+            HeapObj::Builtin { kind, data, .. } if kind == "TypedArray" && data.len() == 5 => {
+                let Abs::Dyn(RExpr::Var(m)) = &data[4] else { unreachable!("a mirrored view's variable") };
+                if *m != dst {
+                    shells.push(Op::Assign { var: dst, expr: RExpr::Var(*m) });
+                }
+                if let Abs::Ref(buf) = &data[1] {
+                    let bvar = self.escape_var(*buf);
+                    seen.entry(*buf).or_insert(bvar);
+                }
+            }
             HeapObj::Builtin { kind, data, .. } if kind == "TypedArray" => {
                 let data = data.clone();
                 let Abs::Str(ctor) = &data[0] else { unreachable!() };
@@ -27994,7 +28419,7 @@ impl Js {
                     // its elements, and the buffer is its `.buffer`.
                     Abs::Ref(buf) if !seen.contains_key(buf) && off == 0 && matches!(&heap[buf], HeapObj::Builtin { data: bd, .. } if bd.len() - 1 == len) => {
                         let HeapObj::Builtin { data: bd, .. } = &heap[buf] else { unreachable!() };
-                        shells.push(Op::Eval { dst, expr: typed_array_literal(ctor, &bd.slice(1..bd.len())) });
+                        self.typed_array_ops(dst, *buf, ctor, &bd.slice(1..bd.len()), shells);
                         let bvar = self.escape_var(*buf);
                         seen.insert(*buf, bvar);
                         shells.push(Op::Eval { dst: bvar, expr: RExpr::Get(Box::new(RExpr::Var(dst)), "buffer".into()) });
@@ -29266,6 +29691,9 @@ impl Js {
         // of any key: see `facts::Info::made_by`.)
         let unmade = |v: usize, i: &Info| i.made_by.is_some() && reads(&RExpr::Index(Box::new(RExpr::Var(v)), Box::new(RExpr::Var(ANY_KEY_VAR))));
         let stale: Vec<usize> = s.facts.iter().filter(|(v, i)| i.props.iter().any(|(k, _)| affected(**v, k)) || unmade(**v, i)).map(|(v, _)| *v).collect();
+        if env_flag!("MIRROR_DEBUG") && !stale.is_empty() {
+            eprintln!("[STALE] pc={pc} {:?} drops {stale:?} in {}", self.code.get(pc), self.names[s.top().func]);
+        }
         for v in stale {
             if let Some(mut i) = s.facts.get(&v).cloned() {
                 i.props.retain(|(k, _)| !affected(v, k));
@@ -30350,6 +30778,20 @@ impl Js {
         // `try`.
         // A dead slot is never read again: drop its value instead of
         // materializing it to a runtime variable.
+        // (An element of a mirrored typed array's buffer that differs
+        // between the paths merged: what its runtime array holds, which
+        // each path wrote; no variable, see `mirror_typed_array`.)
+        let mirrored: Vec<usize> =
+            if fields.is_empty() { Vec::new() } else { ns.heap.keys().filter_map(|a| ta_mirror(&ns.heap, *a).map(|(_, buf, _, _, _)| buf)).collect() };
+        let (mirror_fields, plain_fields): (Vec<(usize, usize)>, Vec<(usize, usize)>) = fields.iter().partition(|(a, _)| mirrored.contains(a));
+        let fields: &[(usize, usize)] = &plain_fields;
+        for &(addr, idx) in &mirror_fields {
+            if let Some(o) = ns.heap.get_mut_quiet(&addr) {
+                if let Some(cell) = o.children_mut().into_iter().nth(idx) {
+                    *cell = mirror_unknown();
+                }
+            }
+        }
         let fi = ns.frames.len() - 1;
         let (func, at) = (ns.frames[fi].func, ns.frames[fi].pc);
         let mut live_slots: Vec<usize> = Vec::with_capacity(slots.len());

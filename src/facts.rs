@@ -1058,6 +1058,33 @@ fn refine(facts: &mut Facts, v: usize, f: impl FnOnce(&mut Info)) {
     }
 }
 
+/// `refine` of what `e` names: a variable, or a variable's property `v.k`
+/// (what is known of it until code that may write it runs, see
+/// `Info::props`: an input's `length` a guard bounded). Nothing for any
+/// other expression.
+fn refine_place(facts: &mut Facts, e: &RExpr, f: impl FnOnce(&mut Info)) {
+    match e {
+        RExpr::Var(v) => refine(facts, *v, f),
+        RExpr::Get(base, k) => {
+            let RExpr::Var(v) = &**base else { return };
+            refine(facts, *v, |i| {
+                let at = match i.props.iter().position(|(name, _)| name == k) {
+                    Some(at) => at,
+                    None => {
+                        i.props.push((k.clone(), Info::top()));
+                        i.props.len() - 1
+                    }
+                };
+                f(&mut i.props[at].1);
+                if i.props[at].1.is_top() {
+                    i.props.remove(at);
+                }
+            });
+        }
+        _ => {}
+    }
+}
+
 /// Record that `cond` evaluated to a value of truthiness `truth`.
 pub fn learn(facts: &mut Facts, cond: &RExpr, truth: bool, typed_fns: &[&str]) {
     // (What a variable is in the case `cond` decides: that case's info.)
@@ -1203,29 +1230,21 @@ pub fn learn(facts: &mut Facts, cond: &RExpr, truth: bool, typed_fns: &[&str]) {
             // `x < y` (strict) or `x <= y` holds when `truth`; otherwise (not
             // NaN) `x >= y` / `x > y`.
             if truth {
-                if let RExpr::Var(v) = x {
-                    let hi = iy.hi.map(|b| Bound { v: b.v, incl: b.incl && !strict });
-                    refine(facts, *v, |i| {
-                        i.hi = tighter_hi(i.hi, hi);
-                        i.nan = false;
-                    });
-                }
-                if let RExpr::Var(v) = y {
-                    let lo = ix.lo.map(|b| Bound { v: b.v, incl: b.incl && !strict });
-                    refine(facts, *v, |i| {
-                        i.lo = tighter_lo(i.lo, lo);
-                        i.nan = false;
-                    });
-                }
+                let hi = iy.hi.map(|b| Bound { v: b.v, incl: b.incl && !strict });
+                refine_place(facts, x, |i| {
+                    i.hi = tighter_hi(i.hi, hi);
+                    i.nan = false;
+                });
+                let lo = ix.lo.map(|b| Bound { v: b.v, incl: b.incl && !strict });
+                refine_place(facts, y, |i| {
+                    i.lo = tighter_lo(i.lo, lo);
+                    i.nan = false;
+                });
             } else {
-                if let RExpr::Var(v) = x {
-                    let lo = iy.lo.map(|b| Bound { v: b.v, incl: b.incl && strict });
-                    refine(facts, *v, |i| i.lo = tighter_lo(i.lo, lo));
-                }
-                if let RExpr::Var(v) = y {
-                    let hi = ix.hi.map(|b| Bound { v: b.v, incl: b.incl && strict });
-                    refine(facts, *v, |i| i.hi = tighter_hi(i.hi, hi));
-                }
+                let lo = iy.lo.map(|b| Bound { v: b.v, incl: b.incl && strict });
+                refine_place(facts, x, |i| i.lo = tighter_lo(i.lo, lo));
+                let hi = ix.hi.map(|b| Bound { v: b.v, incl: b.incl && strict });
+                refine_place(facts, y, |i| i.hi = tighter_hi(i.hi, hi));
             }
         }
         _ => {}
