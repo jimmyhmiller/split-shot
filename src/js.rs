@@ -4737,7 +4737,7 @@ pub struct Js {
     /// value was found no instance of (see `static_instanceof`).
     foreign_protos: std::cell::RefCell<Option<Vec<usize>>>,
     /// Per call site, how many cases `trick_lookup` split it into.
-    trick_splits: std::cell::RefCell<HashMap<usize, usize>>,
+    trick_splits: std::cell::RefCell<HashMap<(usize, usize), usize>>,
     /// While a `try`'s probe runs its region alone: the activations outside
     /// it (see `try_folds`).
     probe_outer: std::cell::RefCell<Vec<Frame>>,
@@ -14970,10 +14970,19 @@ impl Js {
                         // is (see `dispatch_fields`): the arms set its
                         // program counter to different places, which stay
                         // split, as a dispatch slot does at a join.)
+                        // (Nor what that record holds, the program's data: its
+                        // stacks, under another name here, `rs = vm.rstack`.
+                        // The whistle lifts what differs in them between
+                        // visits of a place, see `jump_to`.)
                         let records: Vec<usize> = if env_flag!("PE_NO_DISPATCH_DATA") {
                             Vec::new()
                         } else {
-                            self.dispatch_fields(s, s.top()).into_iter().map(|(a, _, _)| a).collect()
+                            let mut records: Vec<usize> = self.dispatch_fields(s, s.top()).into_iter().map(|(a, _, _)| a).collect();
+                            if !env_flag!("PE_NO_DISPATCH_RECORD_DATA") {
+                                let held: Vec<usize> = records.iter().filter_map(|a| s.heap.get(a)).flat_map(|o| o.children().into_iter().filter_map(as_ref_addr).collect::<Vec<_>>()).collect();
+                                records.extend(held);
+                            }
+                            records
                         };
                         let hm: Vec<usize> = hm.into_iter().filter(|sl| !matches!(s.top().locals.get(*sl), Some(Abs::Ref(a)) if records.contains(a))).collect();
                         let cells: Vec<usize> = cells.into_iter().map(|(_, a)| a).collect();
@@ -16651,7 +16660,8 @@ impl Js {
                 t
             }
         };
-        let info = s.facts.get(&v).cloned();
+        // (What was just said of a key made here holds already.)
+        let info = self.pending_info.borrow().get(&v).cloned().or_else(|| s.facts.get(&v).cloned());
         let decided = match info.as_ref().and_then(|i| i.eq.clone()) {
             Some(c) => Some(cases.iter().find(|(k, _)| *k == c).map(|(_, a)| a.clone()).unwrap_or(miss.clone())),
             None => {
@@ -16665,15 +16675,30 @@ impl Js {
                         // after another on runtime paths, each a case of the
                         // one before, stay finitely many.)
                         {
+                            let point = self.dispatch_point(s, s.top()).unwrap_or(0);
                             let mut n = self.trick_splits.borrow_mut();
-                            let n = n.entry(pc).or_insert(0);
+                            let n = n.entry((pc, point)).or_insert(0);
                             if *n >= TRICK_SPLITS {
                                 return None;
                             }
                             *n += 1;
                         }
                         let cond = RExpr::Bin(Bop::Eq, Box::new(RExpr::Var(v)), Box::new(k.clone()));
-                        return Some(Step::Branch { cond: Cond::Falsy(cond), t: s.clone(), f: s.clone() });
+                        // (A runtime branch as any other: each case is one
+                        // of several runtime paths from here on, see the
+                        // conditional jump's.)
+                        {
+                            let mut bc = self.branched_contexts.borrow_mut();
+                            for f in s.frames.iter().skip(1) {
+                                bc.insert((f.func, f.entry_skel.clone()));
+                            }
+                        }
+                        let mut arm = s.clone();
+                        arm.top_mut().dyn_ctl = true;
+                        arm.top_mut().branched = true;
+                        arm.branched_since_head = true;
+                        arm.dyn_branches += 1;
+                        return Some(Step::Branch { cond: Cond::Falsy(cond), t: arm.clone(), f: arm });
                     }
                 }
             }
