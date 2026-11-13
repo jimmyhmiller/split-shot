@@ -2252,6 +2252,9 @@ fn entry_check(a: usize, now: Option<&HeapObj>) {
                     if env_flag!("ENTRY_DEBUG") {
                         eprintln!("[ENTRY] {a} changed");
                         if env_flag!("ENTRY_CHANGE_DEBUG") {
+                            let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+                            let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("step_inner") && !l.contains("Client>::step")).take(8).map(|l| l.trim()).collect();
+                            eprintln!("[ENTRY]   asked by {}", frames.join(" < "));
                             eprintln!("[ENTRY]   was {:?}\n[ENTRY]   now {:?}", w.snapshot.get(&a), now);
                         }
                     }
@@ -2268,6 +2271,32 @@ fn entry_check_heap(heap: &Heap) {
     for a in touched {
         if let Some(o) = heap.get(&a) {
             entry_check(a, Some(o));
+        }
+    }
+}
+
+/// `entry_check_heap` at the end of a residual function's body that began
+/// with `start`: an object a write reached that the body leaves other
+/// than it was given it is changed; one it was not given, as
+/// `entry_check` has it.
+fn entry_check_heap_from(heap: &Heap, start: &Heap) {
+    let touched: Vec<usize> = ENTRY_WATCH.with(|w| w.borrow().as_ref().map(|w| w.touched.difference(&w.written).copied().collect()).unwrap_or_default());
+    for a in touched {
+        let Some(o) = heap.get_shared(&a) else { continue };
+        match start.get_shared(&a) {
+            Some(was) => {
+                if !(std::rc::Rc::ptr_eq(o, was) || **o == **was) {
+                    if env_flag!("ENTRY_DEBUG") {
+                        eprintln!("[ENTRY] {a} changed by a residual function's body");
+                    }
+                    ENTRY_WATCH.with(|w| {
+                        if let Some(w) = w.borrow_mut().as_mut() {
+                            w.written.insert(a);
+                        }
+                    });
+                }
+            }
+            None => entry_check(a, Some(o)),
         }
     }
 }
@@ -2297,8 +2326,25 @@ fn entry_unchanged(a: usize, now: Option<&HeapObj>) -> bool {
     if !entry_boundary_object(a) {
         return false;
     }
-    entry_check(a, now);
-    ENTRY_WATCH.with(|w| w.borrow().as_ref().is_some_and(|w| !w.written.contains(&a)))
+    // (Asked, not recorded: an object a call changes and puts back (an
+    // interpreter's call stack, pushed and popped) is what the boundary
+    // has again when the call ends, where `entry_check_heap` looks; asked
+    // while it differs, it is not unchanged now, and that is all.
+    // `PE_ENTRY_QUERY_MARKS`: recorded as changed for good.)
+    if env_flag!("PE_ENTRY_QUERY_MARKS") {
+        entry_check(a, now);
+        return ENTRY_WATCH.with(|w| w.borrow().as_ref().is_some_and(|w| !w.written.contains(&a)));
+    }
+    ENTRY_WATCH.with(|w| {
+        w.borrow().as_ref().is_some_and(|w| {
+            !w.written.contains(&a)
+                && (!w.touched.contains(&a)
+                    || match (now, w.snapshot.get_shared(&a)) {
+                        (Some(o), Some(was)) => std::ptr::eq(o, &**was) || *o == **was,
+                        _ => false,
+                    })
+        })
+    })
 }
 
 /// Whether the boundary's object `a` is one the load code made (see
@@ -4763,6 +4809,14 @@ pub struct Js {
     /// `closure_data_fns`), with the forms it was made for: by the
     /// closure's address, for the escape being run.
     closure_data_fn: std::cell::RefCell<HashMap<usize, (Vec<CapForm>, usize)>>,
+    /// The step that ended a run ended a region specialized alone (see
+    /// `halt_at`), not the code: read, and reset, where the run's end is
+    /// acted on (`step`).
+    bounded_halt: std::cell::Cell<bool>,
+    /// The heaps the residual functions' bodies being built, watched as
+    /// `main` is, began with (see `specialize_body_watched`), innermost
+    /// last.
+    body_starts: std::cell::RefCell<Vec<Heap>>,
     /// The functions whose closures are not specialized to their captures'
     /// data (see `closure_data_fns`): building one took more than
     /// `CLOSURE_DATA_STEPS` steps. Kept across passes; a pass that adds one
@@ -6205,6 +6259,8 @@ impl Js {
             fn_variant_memo: std::cell::RefCell::new(HashMap::new()),
             arg_variant_memo: std::cell::RefCell::new(HashMap::new()),
             closure_data_fn: std::cell::RefCell::new(HashMap::new()),
+            bounded_halt: std::cell::Cell::new(false),
+            body_starts: std::cell::RefCell::new(Vec::new()),
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             result_arrays: std::cell::RefCell::new(HashMap::new()),
@@ -8387,7 +8443,18 @@ impl Js {
         // `RECORD_WATCH`. None for any other body.)
         let records = std::mem::take(&mut *self.record_watch_next.borrow_mut());
         RECORD_WATCH.with(|w| w.borrow_mut().push((records, false)));
-        let body = if watched { region_watch_paused(|| self.specialize_nested(start)) } else { entry_watch_paused(|| self.specialize_nested(start)) };
+        let body = if watched {
+            self.body_starts.borrow_mut().push(start.heap.clone());
+            let body = region_watch_paused(|| self.specialize_nested(start));
+            self.body_starts.borrow_mut().pop();
+            body
+        } else {
+            // (A heap of its own: no body's start is its.)
+            let outer = std::mem::take(&mut *self.body_starts.borrow_mut());
+            let body = entry_watch_paused(|| self.specialize_nested(start));
+            *self.body_starts.borrow_mut() = outer;
+            body
+        };
         let hit = RECORD_WATCH.with(|w| w.borrow_mut().pop()).is_some_and(|(_, hit)| hit);
         self.record_watch_hit.set(hit);
         self.building_fns.borrow_mut().remove(&rfid);
@@ -13051,7 +13118,23 @@ impl Client for Js {
                 Step::Branch { cond, t, f }
             }
             Step::Halt => {
-                entry_check_heap(&s.heap);
+                // (Where the code ends, not where a region being
+                // specialized alone does (a `try`'s, a probe's: see
+                // `halt_at`): what the boundary's objects are there is
+                // what the call leaves them. A residual function's body
+                // leaves them as it was given them or not: what its
+                // caller had changed and not yet put back (its call stack,
+                // pushed) is the caller's to put back.)
+                // (Nor where a probe's path ends, a throw leaving the
+                // region it runs alone: the run it stands for goes on from
+                // there, to the handlers around it.)
+                let probe = self.probing.get() || self.unfold_probes.get() > 0 || !self.recursion_probed.borrow().is_empty() || self.straight_probe.get();
+                if (!self.bounded_halt.replace(false) && !probe) || env_flag!("PE_ENTRY_QUERY_MARKS") {
+                    match self.body_starts.borrow().last() {
+                        Some(start) if !env_flag!("PE_ENTRY_QUERY_MARKS") => entry_check_heap_from(&s.heap, start),
+                        _ => entry_check_heap(&s.heap),
+                    }
+                }
                 Step::Halt
             }
         }
@@ -13175,6 +13258,32 @@ impl Js {
             }
         }
         fields.hash(&mut h);
+        // (And which of the load code's lists the activation walks: its
+        // own, by address, or one it was given of the load code's objects
+        // (a block's instructions, copied out of a function's), by what
+        // it holds. A counter at 3 in one function's instructions is
+        // another place than at 3 in another's, which a helper scanning
+        // either would otherwise meet as one. `PE_NO_POINT_LISTS`: the
+        // counters alone.)
+        if !env_flag!("PE_NO_POINT_LISTS") {
+            for v in f.locals.iter() {
+                let Abs::Ref(a) = v else { continue };
+                let Some(HeapObj::Array(arr)) = s.heap.get(a) else { continue };
+                if s.escaped.contains(a) {
+                    continue;
+                }
+                if entry_boundary_object(*a) {
+                    (0u8, *a).hash(&mut h);
+                } else if !arr.is_empty() && arr.iter().all(|e| matches!(e, Abs::Ref(r) if entry_boundary_object(*r))) {
+                    (1u8, arr.len()).hash(&mut h);
+                    for e in arr.iter() {
+                        if let Abs::Ref(r) = e {
+                            r.hash(&mut h);
+                        }
+                    }
+                }
+            }
+        }
         Some(h.finish() as usize)
     }
 
@@ -13210,7 +13319,17 @@ impl Js {
                 .locals
                 .iter()
                 .filter_map(|v| match v {
-                    Abs::Ref(b) if !s.escaped.contains(b) && matches!(s.heap.get(b), Some(HeapObj::Array(_))) && self.boundary_data(s, *b) => match s.heap.get(b) {
+                    // (Or a list the activation was given of the load
+                    // code's unchanged parts, each an object: a block's
+                    // instructions, copied out of the function's.
+                    // `PE_NO_PART_LISTS`: the load code's own lists alone.)
+                    Abs::Ref(b)
+                        if !s.escaped.contains(b)
+                            && matches!(s.heap.get(b), Some(HeapObj::Array(_)))
+                            && (self.boundary_data(s, *b)
+                                || (!env_flag!("PE_NO_PART_LISTS")
+                                    && matches!(s.heap.get(b), Some(HeapObj::Array(arr)) if !arr.is_empty() && arr.holes.is_empty() && arr.props.is_empty() && arr.iter().all(|e| matches!(e, Abs::Ref(r) if self.boundary_data(s, *r)))))) =>
+                    match s.heap.get(b) {
                         Some(HeapObj::Array(arr)) => Some(arr.len()),
                         _ => None,
                     },
@@ -13592,6 +13711,7 @@ impl Js {
         // The foldability probe only needs to learn *whether* the region taints;
         // once it has, stop immediately instead of specializing the rest.
         if self.probing.get() && self.try_taint.get() {
+            self.bounded_halt.set(true);
             return Step::Halt;
         }
         // A bounded sub-specialization (a residual `try`'s body/catch, or the
@@ -13620,6 +13740,7 @@ impl Js {
                     let _why = self.why.merging(why::Merge::TryEnd);
                     self.materialize(s, &slots, out);
                 }
+                self.bounded_halt.set(true);
                 return Step::Halt;
             }
         }
@@ -13884,6 +14005,9 @@ impl Js {
                     // the foldability probe; on the residualized path the handler
                     // set is empty, so this is a no-op there.
                     if throws {
+                        if env_flag!("TRY_DEBUG") && self.probing.get() && !self.try_taint.get() {
+                            eprintln!("[TRY] store of {:?} (converts an unknown: {converts})", v);
+                        }
                         self.forbid_residual_in_try(s, "a may-throw store");
                     }
                     let func = s.top().func;
@@ -16181,6 +16305,35 @@ impl Js {
             self.materialize_with_fields(&mut g, &slots, &fields, out);
         }
         self.merge_facts(seen, &mut g, &out[n0..]);
+        // (A cell lifted to a variable here holds, on either path into the
+        // merged state, what that path's state had there: the variable's
+        // types are those two values' types. The same both ways round, as
+        // the merged state must be, see `generalize_upward`. An
+        // interpreter's locals, each a number at every visit, stay numbers
+        // as variables: `a + b` on them converts nothing.
+        // `PE_NO_LIFTED_TYPES`: nothing known of it.)
+        if !self.facts_off && !env_flag!("PE_NO_LIFTED_TYPES") && seen.frames.len() == from.frames.len() {
+            let mut lifted: Vec<(Abs, Abs, Abs)> = Vec::new();
+            for &k in &slots {
+                if let (Some(a), Some(b), Some(v)) = (seen.frames[fi].locals.get(k), from.frames[fi].locals.get(k), g.frames[fi].locals.get(k)) {
+                    lifted.push((a.clone(), b.clone(), v.clone()));
+                }
+            }
+            for &(addr, idx) in &fields {
+                let at = |h: &Heap| h.get(&addr).and_then(|o| o.children().get(idx).map(|c| (*c).clone()));
+                if let (Some(a), Some(b), Some(v)) = (at(&seen.heap), at(&from.heap), at(&g.heap)) {
+                    lifted.push((a, b, v));
+                }
+            }
+            for (a, b, v) in lifted {
+                let Abs::Dyn(RExpr::Var(var)) = v else { continue };
+                let (Some(ia), Some(ib)) = (self.info_abs(seen, &a), self.info_abs(from, &b)) else { continue };
+                let types = ia.types | ib.types;
+                if types != 0 && types != crate::facts::T_ALL {
+                    g.facts.insert(var, crate::facts::Info::of_types(types));
+                }
+            }
+        }
         // An escaped object is garbage now (its references became its runtime
         // variable): left in the heap, a later freeze would still find the
         // pending reads it held (reading a variable the loop has not assigned
@@ -22238,7 +22391,7 @@ impl Js {
                     let program_list = known_callback && !env_flag!("PE_NO_PROGRAM_LISTS") && self.static_program_list(s, recv);
                     // (Or on an interpreter's data at a place of its
                     // program: see `get_prop_step`.)
-                    let at_place = !env_flag!("PE_NO_PLACE_BUILTINS") && !env_flag!("PE_NO_DISPATCH_DATA") && self.dispatch_point(s, s.top()).is_some();
+                    let at_place = self.under_place(s);
                     let may_fold = self.may_fold_builtins(s, m) || (known_callback && matches!(m, "map" | "filter" | "flatMap") && self.recursion_unsteered(s)) || program_list || at_place;
                     if let (Some(&fid), true, false, false) = (self.array_prelude.get(m), may_fold, native_only, species) {
                       if known_callback || self.prelude_unfolds(s, fid, &args, &this, pc) {
@@ -24533,6 +24686,31 @@ impl Js {
         objects
     }
 
+    /// Is some activation at a place of a program it interprets (see
+    /// `dispatch_point`)? Its own, or a caller's: an instruction's handler
+    /// (`_exec(instr, stack, ...)`) collecting a call's arguments into a
+    /// list of its own runs for that place. What such code makes is
+    /// bounded by the places. `PE_NO_PLACE_BUILTINS`: never;
+    /// `PE_PLACE_BUILTINS_TOP`: the top activation alone.
+    /// Is the array at `a` a list of the load code's objects (a block's
+    /// instructions, the load code's own list or one copied out of it), or
+    /// empty (an `if` with no `else`)?
+    fn program_part_list(&self, s: &State, a: usize) -> bool {
+        !s.escaped.contains(&a)
+            && matches!(s.heap.get(&a), Some(HeapObj::Array(arr)) if arr.holes.is_empty() && arr.props.is_empty()
+                && (arr.is_empty() || arr.iter().all(|e| matches!(e, Abs::Ref(r) if entry_boundary_object(*r)))))
+    }
+
+    fn under_place(&self, s: &State) -> bool {
+        if env_flag!("PE_NO_PLACE_BUILTINS") || env_flag!("PE_NO_DISPATCH_DATA") {
+            return false;
+        }
+        if env_flag!("PE_PLACE_BUILTINS_TOP") {
+            return self.dispatch_point(s, s.top()).is_some();
+        }
+        s.frames.iter().rev().any(|f| self.dispatch_point(s, f).is_some())
+    }
+
     fn may_fold_builtins(&self, s: &State, m: &str) -> bool {
         let f = s.top();
         let earlier = &s.frames[..s.frames.len() - 1];
@@ -26199,7 +26377,7 @@ impl Js {
                     // a VM's `stack.splice(...)` for a call's arguments):
                     // that data stays modeled there, and the places bound
                     // what is made. `PE_NO_PLACE_BUILTINS`: escapes.)
-                    let at_place = !env_flag!("PE_NO_PLACE_BUILTINS") && !env_flag!("PE_NO_DISPATCH_DATA") && self.dispatch_point(s, s.top()).is_some();
+                    let at_place = self.under_place(s);
                     let fold = self.may_fold_builtins(s, k) || (matches!(k.as_str(), "map" | "filter" | "flatMap") && self.recursion_unsteered(s)) || program_list || at_place;
                     if (self.array_prelude.contains_key(k.as_str()) || matches!(k.as_str(), "values" | "keys" | "entries")) && fold && self.pristine("Array") {
                         let baddr = s.alloc(HeapObj::Builtin { kind: format!("Array.prototype.{k}"), data: vec![].into(), ext: None });
@@ -31293,19 +31471,73 @@ impl Js {
         // are no loop of the interpreted program. One given a callback
         // (`map` over a program's list) runs the interpreter in its loop.
         // `PE_PRELUDE_PLACES_REVISIT`: as any function's.)
-        let self_hosted = self.names[s.top().func].starts_with("__pe_")
-            && !env_flag!("PE_PRELUDE_PLACES_REVISIT")
-            && !s.top().locals.iter().any(|v| matches!(v, Abs::Dyn(_)) || matches!(v, Abs::Ref(a) if matches!(s.heap.get(a), Some(HeapObj::Closure { .. }))));
+        let callback = s.top().locals.iter().any(|v| matches!(v, Abs::Dyn(_)) || matches!(v, Abs::Ref(a) if matches!(s.heap.get(a), Some(HeapObj::Closure { .. }))));
+        let prelude = self.names[s.top().func].starts_with("__pe_");
+        let self_hosted = prelude && !env_flag!("PE_PRELUDE_PLACES_REVISIT") && !callback;
+        // (Nor in an activation that holds nothing dynamic, in its locals
+        // or in what they hold: a helper that scans a block of the program
+        // (`_skipBlock(instructions, ip)`) computes on static values alone,
+        // its loop bounded by its own static test; called again for the
+        // same block after a runtime branch, it is no loop of the program
+        // that runtime data controls. An interpreter's own loop holds the
+        // program's data. `PE_STATIC_FRAME_PLACES_REVISIT`: weighed too.)
+        // (Asked last: it walks what the activation reaches.)
+        let static_frame = |s: &State| {
+            if env_flag!("PE_STATIC_FRAME_PLACES_REVISIT") {
+                return false;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut work: Vec<usize> = Vec::new();
+            for v in s.top().locals.iter() {
+                match v {
+                    Abs::Dyn(_) => return false,
+                    Abs::Ref(a) => work.push(*a),
+                    _ => {}
+                }
+            }
+            while let Some(a) = work.pop() {
+                if !seen.insert(a) {
+                    continue;
+                }
+                let Some(o) = s.heap.get(&a) else { continue };
+                if o.holds_no_dyn() {
+                    continue;
+                }
+                for c in o.children() {
+                    match c {
+                        Abs::Dyn(_) => return false,
+                        Abs::Ref(r) => work.push(*r),
+                        _ => {}
+                    }
+                }
+            }
+            true
+        };
         if let (false, Some(k)) = (self_hosted, self.dispatch_key(s)) {
-            if s.dispatch_seen.get(&k).is_some_and(|n| *n != s.dyn_branches) {
+            if s.dispatch_seen.get(&k).is_some_and(|n| *n != s.dyn_branches) && !static_frame(s) {
+                if env_flag!("DYNLOOP_DEBUG") {
+                    let dynamic: Vec<String> = s.top().locals.iter().enumerate().filter(|(_, v)| match v {
+                        Abs::Dyn(_) => true,
+                        Abs::Ref(a) => s.heap.get(a).is_some_and(|o| !o.holds_no_dyn() && o.children().into_iter().any(|c| matches!(c, Abs::Dyn(_)))),
+                        _ => false,
+                    }).map(|(k, v)| format!("{k}: {}", format!("{v:?}").chars().take(60).collect::<String>())).collect();
+                    eprintln!("[DYNLOOP] {} pc {}: a place met again after a runtime branch (dynamic locals {dynamic:?})", self.names[s.top().func], s.top().pc);
+                }
                 return true;
             }
         }
         // (A constant-test loop one of whose exits has been dynamic.)
         if self.loop_exit_dynamic.borrow().contains(&self.loop_ctx(s, s.top().pc)) {
+            if env_flag!("DYNLOOP_DEBUG") {
+                eprintln!("[DYNLOOP] {} pc {}: an exit of it was dynamic", self.names[s.top().func], s.top().pc);
+            }
             return true;
         }
-        self.dry_run_condition(s, &mut Vec::new())
+        let dynamic = self.dry_run_condition(s, &mut Vec::new());
+        if dynamic && env_flag!("DYNLOOP_DEBUG") {
+            eprintln!("[DYNLOOP] {} pc {}: its condition is dynamic", self.names[s.top().func], s.top().pc);
+        }
+        dynamic
     }
 
     /// Dry-run the condition of the loop whose head `s` is at, under the
@@ -31552,7 +31784,18 @@ impl Js {
                         && self.dispatch_nodes[func].get(slot).copied().unwrap_or(false)
                         && (matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if !ns.escaped.contains(a) && matches!(ns.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))))
                             || (matches!(&ns.frames[fi].locals[slot], Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && !env_flag!("PE_NO_INDEX_NODES")));
+                    // (So too a list of the program's parts the arms chose
+                    // (`branch = condition ? body : elseBody`, the two arms
+                    // of an interpreted `if`), under an activation at a
+                    // place of that program (see `under_place`): merged, it
+                    // would be a runtime list, walked interpreted.
+                    // `PE_NO_LIST_CHOICE`: merged.)
+                    let list = !env_flag!("PE_NO_LIST_CHOICE")
+                        && !env_flag!("PE_NO_DISPATCH_POINTS")
+                        && matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if self.program_part_list(ns, *a))
+                        && self.under_place(ns);
                     !(node
+                        || list
                         || slot < self.drives_dispatch[func].len()
                             && self.drives_dispatch[func][slot]
                             && !ns.frames[fi].locals[slot].is_dynamic())
@@ -31636,6 +31879,10 @@ impl Js {
     /// The jump (from `from`'s instruction, or falling through from the one
     /// before) to `target`.
     fn jump_to(&self, from: usize, target: usize, s: &mut State, out: &mut Vec<Op>) -> Step<Js> {
+        self.jump_to_inner(from, target, s, out)
+    }
+
+    fn jump_to_inner(&self, from: usize, target: usize, s: &mut State, out: &mut Vec<Op>) -> Step<Js> {
         // A forward jump, to no loop head and no join pending, in an
         // activation that has taken no dynamic branch (nor has a handler):
         // no other path reaches the target in this state (one that forked in
@@ -32235,6 +32482,19 @@ impl Js {
                 | ("Math", "cbrt")
                 | ("Math", "pow")
                 | ("Math", "random")
+                | ("Math", "imul")
+                | ("Math", "clz32")
+                | ("Math", "fround")
+                | ("Math", "hypot")
+                | ("Math", "exp")
+                | ("Math", "log")
+                | ("Math", "log2")
+                | ("Math", "log10")
+                | ("Math", "sin")
+                | ("Math", "cos")
+                | ("Math", "tan")
+                | ("Math", "atan")
+                | ("Math", "atan2")
         )
     }
 
@@ -32541,13 +32801,23 @@ impl Js {
         let counts = (self.structured_inlined.borrow().clone(), self.trick_splits.borrow().clone());
         let mut found = false;
         let mut at_entry = true;
+        // (Through the code after the handler too, in its function: a
+        // `finally`'s handler notes the exception and falls into the
+        // `finally`'s code, which throws it again at its end.
+        // `PE_NO_FINALLY_RETHROW`: the handler's own code alone.)
+        let func = s.top().func;
+        let func_end = self.entries.get(func + 1).copied().unwrap_or(self.code.len());
+        let limit = if env_flag!("PE_NO_FINALLY_RETHROW") { end } else { func_end };
         for _ in 0..10_000 {
             let pc = p.top().pc;
-            if p.frames.len() != 1 || pc < catch_pc || pc >= end {
+            if p.frames.len() != 1 || pc < catch_pc || pc >= limit {
                 break;
             }
             if matches!(self.code[pc], Instr::Throw) {
                 found = p.top().ostack.last() == Some(&foreign);
+                break;
+            }
+            if matches!(self.code[pc], Instr::Ret) {
                 break;
             }
             let mut out = Vec::new();
