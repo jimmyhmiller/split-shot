@@ -2226,6 +2226,7 @@ fn region_note(a: usize) {
 #[track_caller]
 fn note_entry_write(a: usize) {
     region_note(a);
+    record_watch_note(a);
     let at = std::panic::Location::caller();
     ENTRY_WATCH.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
@@ -4740,6 +4741,23 @@ pub struct Js {
     /// made one of them a residual function taking a cell's value and also
     /// another form (two copies of its code). Persists across passes.
     no_unbox_fids: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// The calls (a function and what else is static of its arguments) that
+    /// take a record argument as a runtime value after all: the residual
+    /// function made for its shape wrote the record or made it a runtime
+    /// value (see `make_arg_variant`). Persists across passes.
+    record_refused: std::cell::RefCell<std::collections::HashSet<(usize, Vec<ArgShape>)>>,
+    /// A pass made a residual function for a record's shape that it then
+    /// refused: its residual calls it, and is specialized again.
+    record_violation: std::cell::Cell<bool>,
+    /// No record shapes at all (the passes refusing them did not end).
+    records_off: std::cell::Cell<bool>,
+    /// The record-shaped residual functions being built, outermost first:
+    /// the function and what else is static of its arguments.
+    record_building: std::cell::RefCell<Vec<(usize, Vec<ArgShape>)>>,
+    /// The record objects of the body about to be specialized (see
+    /// `RECORD_WATCH`), and whether the body last specialized hit its own.
+    record_watch_next: std::cell::RefCell<Vec<usize>>,
+    record_watch_hit: std::cell::Cell<bool>,
     /// Per function, how far each capture of its closures is known (see
     /// `CapCeil`): lowered where the forms its closures asked for in a pass
     /// differ, so that they ask for one. Persists across passes; its
@@ -6082,6 +6100,12 @@ impl Js {
             fn_variant_memo: std::cell::RefCell::new(HashMap::new()),
             arg_variant_memo: std::cell::RefCell::new(HashMap::new()),
             no_unbox_fids: std::cell::RefCell::new(std::collections::HashSet::new()),
+            record_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
+            record_violation: std::cell::Cell::new(false),
+            records_off: std::cell::Cell::new(false),
+            record_building: std::cell::RefCell::new(Vec::new()),
+            record_watch_next: std::cell::RefCell::new(Vec::new()),
+            record_watch_hit: std::cell::Cell::new(false),
             cap_ceilings: Default::default(),
             cap_ceilings_version: std::cell::Cell::new(0),
             cap_requests: Default::default(),
@@ -7289,7 +7313,7 @@ impl Js {
     /// point or node, each calling the next. The places are finitely many:
     /// a program counter's values index a static program; the load code's
     /// objects are finitely many; and `ARG_VARIANTS` bounds them besides.)
-    fn arg_shapes(&self, s: &State, fid: usize, args: &[Abs]) -> Option<Vec<ArgShape>> {
+    fn arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs) -> Option<Vec<ArgShape>> {
         if env_flag!("PE_NO_ARG_VARIANTS")
             || self.arguments_slot[fid].is_some()
             || self.is_async[fid]
@@ -7299,7 +7323,7 @@ impl Js {
         }
         let ncap = self.ncaptured[fid];
         let program = self.dispatch_program.get(fid);
-        let shapes: Vec<ArgShape> = (0..self.nparams[fid])
+        let mut shapes: Vec<ArgShape> = (0..self.nparams[fid])
             .map(|j| {
                 let v = args.get(j).cloned().unwrap_or(Abs::Undef);
                 let counter = program.and_then(|p| p.get(ncap + j)).copied().unwrap_or(false);
@@ -7310,7 +7334,138 @@ impl Js {
                 }
             })
             .collect();
+        // (Only beside an argument that says where in a program the call
+        // is: a record alone is no place, and its shapes could go on
+        // without end.)
+        if shapes.iter().any(|sh| *sh != ArgShape::Runtime) {
+            self.record_arg_shapes(s, fid, args, captured, this, &mut shapes);
+        }
         shapes.iter().any(|sh| *sh != ArgShape::Runtime).then_some(shapes)
+    }
+
+    /// `shapes` with every record shape a runtime value: what a call's
+    /// record shapes are refused by (see `record_refused`).
+    fn without_records(shapes: &[ArgShape]) -> Vec<ArgShape> {
+        shapes.iter().map(|sh| if matches!(sh, ArgShape::Record(_)) { ArgShape::Runtime } else { sh.clone() }).collect()
+    }
+
+    /// Give the runtime arguments of `shapes` that are records their shapes
+    /// (see `record_shape`), all or none: none when two share an object,
+    /// when an object of one is reached by what the call makes a runtime
+    /// value (another argument, a capture, the receiver), or when this
+    /// call's record shapes were refused (`record_refused`). Only with
+    /// `PE_RECORD_VARIANTS` for now.
+    fn record_arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs, shapes: &mut [ArgShape]) {
+        // (Not yet the default: an interpreter's recursion inlined a few
+        // deep still loses the environment where its loops are tied, see
+        // the split-shot-reduction pad. `PE_RECORD_VARIANTS`: on.)
+        if !env_flag!("PE_RECORD_VARIANTS") || self.records_off.get() || self.react.is_some() {
+            return;
+        }
+        if self.record_refused.borrow().contains(&(fid, shapes.to_vec())) {
+            return;
+        }
+        let mut records: Vec<(usize, std::rc::Rc<RecordShape>, Vec<usize>)> = Vec::new();
+        for (j, sh) in shapes.iter().enumerate() {
+            let (ArgShape::Runtime, Some(Abs::Ref(a))) = (sh, args.get(j)) else { continue };
+            if let Some((shape, addrs, _)) = self.record_shape(s, *a) {
+                records.push((j, std::rc::Rc::new(shape), addrs));
+            }
+        }
+        if records.is_empty() {
+            return;
+        }
+        let mut all: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let disjoint = records.iter().all(|(_, _, addrs)| addrs.iter().all(|a| all.insert(*a)));
+        // (What the call makes runtime values.)
+        let mut reach = std::collections::HashSet::new();
+        let taken: Vec<usize> = records.iter().map(|(j, _, _)| *j).collect();
+        let roots = args.iter().enumerate().filter(|(j, _)| !taken.contains(j) && !matches!(shapes.get(*j), Some(ArgShape::Data(_)))).map(|(_, v)| v).chain(captured.iter()).chain(std::iter::once(this));
+        for v in roots {
+            if let Abs::Ref(a) = v {
+                if !self.boundary_data(s, *a) {
+                    Js::reachable(&s.heap, *a, &mut reach);
+                }
+            }
+        }
+        if !disjoint || all.iter().any(|a| reach.contains(a)) {
+            return;
+        }
+        for (j, shape, _) in records {
+            shapes[j] = ArgShape::Record(shape);
+        }
+    }
+
+    /// The shape of the record at `root` in `s` (see `ArgShape::Record`),
+    /// the addresses of its objects (in the shape's order) and its leaves'
+    /// values (in passing order). A record: ordinary objects of data
+    /// properties, arrays without holes, and maps keyed by strings, that
+    /// this specialization made and no runtime code holds, linked to each
+    /// other and to the load code's unchanged objects, at most `REC_NODES`
+    /// of them with `REC_LEAVES` leaves. `None` for anything else.
+    fn record_shape(&self, s: &State, root: usize) -> Option<(RecordShape, Vec<usize>, Vec<Abs>)> {
+        let leaf = || Abs::Dyn(RExpr::Var(REC_LEAF_VAR));
+        let mut order: Vec<usize> = vec![root];
+        let mut nodes: Vec<HeapObj> = Vec::new();
+        let mut leaves: Vec<Abs> = Vec::new();
+        let mut i = 0;
+        while i < order.len() {
+            let a = order[i];
+            i += 1;
+            if s.escaped.contains(&a) || entry_boundary_object(a) {
+                return None;
+            }
+            let o = s.heap.get(&a)?;
+            let map = match o {
+                HeapObj::Object { class: ObjClass::Ordinary, private, props, extensible: true, .. } => {
+                    if !private.is_empty() || props.iter().any(|p| !matches!(p.val, PVal::Data(_)) || p.attrs != 7) {
+                        return None;
+                    }
+                    false
+                }
+                HeapObj::Array(arr) => {
+                    if !arr.holes.is_empty() || !arr.props.is_empty() || arr.frozen {
+                        return None;
+                    }
+                    false
+                }
+                HeapObj::Builtin { kind, data, ext: None } if kind == "Map" => {
+                    // (Its keys strings, live: its values alone are leaves.)
+                    if data.chunks(3).iter().any(|e| !matches!((&e[0], &e[2]), (Abs::Str(_), Abs::Bool(true)))) {
+                        return None;
+                    }
+                    true
+                }
+                _ => return None,
+            };
+            let mut t = o.clone();
+            for (k, c) in t.children_mut().into_iter().enumerate() {
+                if map && k % 3 != 1 {
+                    continue;
+                }
+                let v = match &*c {
+                    Abs::Num(_) | Abs::Dyn(_) => {
+                        leaves.push(c.clone());
+                        leaf()
+                    }
+                    Abs::Ref(b) => match order.iter().position(|x| x == b) {
+                        Some(at) => Abs::Num(JsNum::int(at as i64)),
+                        None if self.boundary_data(s, *b) => Abs::Ref(*b),
+                        None => {
+                            order.push(*b);
+                            Abs::Num(JsNum::int((order.len() - 1) as i64))
+                        }
+                    },
+                    prim => prim.clone(),
+                };
+                *c = v;
+            }
+            nodes.push(t);
+            if order.len() > REC_NODES || leaves.len() > REC_LEAVES {
+                return None;
+            }
+        }
+        Some((RecordShape { nodes, leaves: leaves.len() }, order, leaves))
     }
 
     /// The captures of a closure (`captured`) a residual function
@@ -7358,7 +7513,7 @@ impl Js {
     /// The residual function of `fid` (captures as `forms`) specialized for
     /// arguments of `shapes` (see `arg_shapes`), made from the caller's
     /// state `s` if not made yet; `None` past `ARG_VARIANTS` of them.
-    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs]) -> Option<usize> {
+    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs], args: &[Abs]) -> Option<usize> {
         let caps = self.cap_shapes(s, captured);
         let mut key_shapes = shapes.to_vec();
         key_shapes.extend(caps.iter().cloned());
@@ -7371,7 +7526,7 @@ impl Js {
         }
         let rfid = self.residual_fns.borrow().len();
         self.arg_variant_memo.borrow_mut().insert(key, rfid);
-        self.make_arg_variant(s, fid, rfid, forms, shapes, &caps);
+        self.make_arg_variant(s, fid, rfid, forms, shapes, &caps, args);
         Some(rfid)
     }
 
@@ -7381,10 +7536,35 @@ impl Js {
     /// caller's state `s` has them. Specialized watching the boundary's
     /// objects as `main` is (see `EntryWatch`): what it changes of them, or
     /// makes runtime values, is `main`'s doing.
-    fn make_arg_variant(&self, s: &State, fid: usize, rfid: usize, forms: &[CapForm], shapes: &[ArgShape], cap_shapes: &[ArgShape]) {
+    ///
+    /// A record argument (`ArgShape::Record`) is made anew in the body, of
+    /// its shape, its leaves the parameters: the body's own copy, which
+    /// stands for the caller's record only while the body neither writes it
+    /// nor makes it a runtime value (the caller's would not be written, and
+    /// is another object). A body that does either is refused: this call's
+    /// record shapes are runtime values from the next pass on
+    /// (`record_refused`), as are those of the record-shaped functions being
+    /// built around it, which called it so.
+    fn make_arg_variant(&self, s: &State, fid: usize, rfid: usize, forms: &[CapForm], shapes: &[ArgShape], cap_shapes: &[ArgShape], args: &[Abs]) {
         let ncap = self.ncaptured[fid];
-        let runtime: Vec<usize> = shapes.iter().enumerate().filter(|(_, sh)| **sh == ArgShape::Runtime).map(|(j, _)| j).collect();
-        let nparams = runtime.len();
+        // (The first parameter of each argument passed: a runtime argument
+        // is one, a record its leaves.)
+        let mut first_param: Vec<Option<usize>> = Vec::with_capacity(shapes.len());
+        let mut nparams = 0usize;
+        for sh in shapes {
+            match sh {
+                ArgShape::Runtime => {
+                    first_param.push(Some(nparams));
+                    nparams += 1;
+                }
+                ArgShape::Record(r) => {
+                    first_param.push(Some(nparams));
+                    nparams += r.leaves;
+                }
+                _ => first_param.push(None),
+            }
+        }
+        let has_records = shapes.iter().any(|sh| matches!(sh, ArgShape::Record(_)));
         let ntake = ncap + Js::import_paths(forms).len();
         self.push_residual_fn(fid, Some(fid), rfid, forms, ntake, nparams);
         // (The captures known as data are not passed: so its calls made
@@ -7407,6 +7587,14 @@ impl Js {
         // caller's.)
         let mut heap = Heap::new();
         let mut work: Vec<usize> = shapes.iter().chain(cap_shapes).filter_map(|sh| if let ArgShape::Data(a) = sh { Some(*a) } else { None }).collect();
+        // (And those a record links to.)
+        for sh in shapes {
+            if let ArgShape::Record(r) = sh {
+                for n in &r.nodes {
+                    n.for_each_child_ref(&mut |c| work.push(c));
+                }
+            }
+        }
         while let Some(a) = work.pop() {
             if heap.contains_key(&a) {
                 continue;
@@ -7432,18 +7620,71 @@ impl Js {
             }
             start.frames[0].locals[i] = v;
         }
+        let mut record_addrs: Vec<usize> = Vec::new();
         for (j, sh) in shapes.iter().enumerate() {
             start.frames[0].locals[ncap + j] = match sh {
-                ArgShape::Runtime => Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, runtime.iter().position(|r| *r == j).expect("a runtime argument")))),
+                ArgShape::Runtime => Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, first_param[j].expect("a runtime argument")))),
                 ArgShape::Static(v) => v.clone(),
                 ArgShape::Data(a) => Abs::Ref(*a),
+                ArgShape::Record(r) => {
+                    // (Its objects made here, each named as the caller's is
+                    // (made where that one was: an iteration's object stands
+                    // for it at a loop, see `pair_fresh`).)
+                    let theirs = match args.get(j) {
+                        Some(Abs::Ref(a)) => self.record_shape(s, *a).map(|(_, addrs, _)| addrs).unwrap_or_default(),
+                        _ => Vec::new(),
+                    };
+                    let base = start.next_addr;
+                    let mut next_leaf = first_param[j].expect("a record argument");
+                    for (k, n) in r.nodes.iter().enumerate() {
+                        let mut o = n.clone();
+                        for c in o.children_mut() {
+                            let v = match &*c {
+                                Abs::Dyn(RExpr::Var(v)) if *v == REC_LEAF_VAR => {
+                                    next_leaf += 1;
+                                    Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, next_leaf - 1)))
+                                }
+                                Abs::Num(n) => Abs::Ref(base + n.as_index().expect("a record object's index")),
+                                other => other.clone(),
+                            };
+                            *c = v;
+                        }
+                        let made = start.alloc(o);
+                        assert_eq!(made, base + k, "a record's objects are made in order");
+                        if let Some(site) = theirs.get(k).and_then(|a| self.creation_pc.borrow().get(a).copied()) {
+                            self.creation_pc.borrow_mut().insert(made, site);
+                        }
+                        record_addrs.push(made);
+                    }
+                    Abs::Ref(base)
+                }
             };
         }
         // (Its static context, which its own calls of itself are compared
         // with: see `do_call`.)
         let context: Vec<Abs> = start.frames[0].locals[ncap..ncap + shapes.len()].iter().chain(start.frames[0].locals[..ncap].iter()).cloned().collect();
         start.frames[0].entry_skel = skeleton_of(&start.heap, &context).into();
+        if has_records {
+            self.record_building.borrow_mut().push((fid, Js::without_records(shapes)));
+            *self.record_watch_next.borrow_mut() = record_addrs;
+        }
         let body = self.specialize_body_watched(rfid, start, self.fn_strict[fid], true);
+        if has_records {
+            if self.record_watch_hit.get() {
+                // (Refused, with the record-shaped bodies being built around
+                // it: each passed this one its record's leaves, where it now
+                // passes the record.)
+                if env_flag!("ARGVAR_DEBUG") {
+                    eprintln!("[ARGVAR] {} rf{rfid}: record shapes refused ({} around it): {:?}", self.names[fid], self.record_building.borrow().len() - 1, Js::without_records(shapes));
+                }
+                let mut refused = self.record_refused.borrow_mut();
+                for k in self.record_building.borrow().iter() {
+                    refused.insert(k.clone());
+                }
+                self.record_violation.set(true);
+            }
+            self.record_building.borrow_mut().pop();
+        }
         self.drop_unread_captures(fid, rfid, ntake, nparams, &body);
         self.residual_fns.borrow_mut()[rfid].body = body;
     }
@@ -7919,7 +8160,13 @@ impl Js {
         let saved_body = self.current_body.replace(Some(rfid));
         let saved_mat = self.take_mat_state();
         self.building_fns.borrow_mut().insert(rfid);
+        // (Its record arguments' objects, watched while it is built: see
+        // `RECORD_WATCH`. None for any other body.)
+        let records = std::mem::take(&mut *self.record_watch_next.borrow_mut());
+        RECORD_WATCH.with(|w| w.borrow_mut().push((records, false)));
         let body = if watched { region_watch_paused(|| self.specialize_nested(start)) } else { entry_watch_paused(|| self.specialize_nested(start)) };
+        let hit = RECORD_WATCH.with(|w| w.borrow_mut().pop()).is_some_and(|(_, hit)| hit);
+        self.record_watch_hit.set(hit);
         self.building_fns.borrow_mut().remove(&rfid);
         self.restore_mat_state(saved_mat);
         self.current_body.set(saved_body);
@@ -8834,10 +9081,18 @@ impl Js {
         // than looping forever; in practice one or two passes suffice.
         const MAX_PASSES: usize = 16;
         let mut last = None;
+        let mut record_violated = false;
         for _ in 0..MAX_PASSES {
             self.reset_for_respecialization();
+            self.record_violation.set(false);
             let prog = self.specialize_entry();
             let mut added = false;
+            // (A residual function made for a record's shape and refused:
+            // the residual calls it. Again, without it.)
+            record_violated = self.record_violation.get();
+            if record_violated {
+                added = true;
+            }
             let load = self.entry.load.borrow();
             // (The residual functions the residual has: those it reaches.
             // Others were made on a path given up, or to be measured.)
@@ -8958,6 +9213,13 @@ impl Js {
             }
             last = Some(prog);
         }
+        // (The last pass still refused a record's shape: its residual is no
+        // sound one. Without record shapes.)
+        if record_violated && !self.records_off.get() {
+            self.records_off.set(true);
+            return self.specialize_program();
+        }
+        assert!(!record_violated, "internal: a record shape refused with record shapes off");
         // Did not converge within the cap. The last residual is still sound; any
         // residual duplication would surface in the differential oracle/fuzzer.
         // (Not one split at the boundary: what a call of `main` changes was
@@ -12771,7 +13033,9 @@ impl Js {
                             let at = n.0 as usize;
                             let jumps = self.dispatch_jumps.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false);
                             let in_program = self.dispatch_program.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false);
-                            (jumps && at < longest) || (in_program && !env_flag!("PE_NO_STATEMENT_LISTS") && at < list)
+                            // (Its end too: the place after its last part,
+                            // where the loop over it is left.)
+                            (jumps && at < longest) || (in_program && !env_flag!("PE_NO_STATEMENT_LISTS") && list > 0 && at <= list)
                         }
                         Abs::Str(st) => starts_key(st),
                         _ => false,
@@ -12785,7 +13049,7 @@ impl Js {
             }
             // (A counter over a short list is bounded by it, however the
             // loop's condition goes on: `i < stmts.length && !returned`.)
-            if matches!(&f.locals[*slot], Abs::Num(n) if (n.0 as usize) < list) {
+            if matches!(&f.locals[*slot], Abs::Num(n) if list > 0 && (n.0 as usize) <= list) {
                 return true;
             }
             if !is_top || !self.loop_head[f.pc] {
@@ -12811,6 +13075,20 @@ impl Js {
                 if !shapes.is_empty() && shapes.iter().all(|a| seen.heap.get(a).zip(cand.heap.get(a)).is_some_and(|(o, n)| shape_grew(o, n))) {
                     return false;
                 }
+            }
+        }
+        // (A loop under runtime control that began with an object it was
+        // given (an interpreter's environment, its caller's) and now holds
+        // one it made in its place, the given one still held outside the
+        // loop: no one object stands for both (the given one is another's
+        // too, see `pair_fresh`), so the iteration that began with it is
+        // run on its own, and the loop is tied between the iterations that
+        // hold their own. A bounded number of times on a path, as above.
+        // `PE_NO_INHERITED_PEEL`: weighed as any difference.)
+        if facts.dynamic && !yielded && !env_flag!("PE_NO_INHERITED_PEEL") && seen.frames.len() == cand.frames.len() {
+            let visits = cand.head_visits.get(&self.head_key(cand)).copied().unwrap_or(0);
+            if visits <= INHERITED_PEELS && self.inherited_object_replaced(seen, cand) {
+                return false;
             }
         }
         let fired = (differ || seen != cand) && (yielded || facts.dynamic || self.loop_diverges_with(seen, cand, Some(&facts.guard_fields)) || self.join_mergeable(seen, cand));
@@ -19208,6 +19486,55 @@ impl Js {
         a
     }
 
+    /// Does `cand` hold, where `seen` held an object (reached from the same
+    /// root by the same path, see `pair_fresh`), a new object of the same
+    /// shape, while the one `seen` held there is still held elsewhere in
+    /// `cand`? (What a loop was given, replaced by what it made: see
+    /// `whistle_with`.)
+    fn inherited_object_replaced(&self, seen: &State, cand: &State) -> bool {
+        if seen.frames.iter().zip(&cand.frames).any(|(a, b)| a.func != b.func || a.pc != b.pc || a.locals.len() != b.locals.len() || a.ostack.len() != b.ostack.len()) {
+            return false;
+        }
+        let alike = |s: &HeapObj, f: &HeapObj| match (s, f) {
+            (HeapObj::Array(a), HeapObj::Array(b)) => a.len() == b.len() && a.props.len() == b.props.len(),
+            (HeapObj::Object { .. }, HeapObj::Object { .. }) => obj_cell_labels(s) == obj_cell_labels(f),
+            _ => false,
+        };
+        let mut visited: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        let mut work: Vec<(usize, usize)> = Vec::new();
+        for (a, b) in seen.frames.iter().zip(&cand.frames) {
+            for (x, y) in a.values().zip(b.values()) {
+                if let (Abs::Ref(x), Abs::Ref(y)) = (x, y) {
+                    work.push((*x, *y));
+                }
+            }
+        }
+        while let Some((x, y)) = work.pop() {
+            if !visited.insert((x, y)) {
+                continue;
+            }
+            let (Some(so), Some(fo)) = (seen.heap.get(&x), cand.heap.get(&y)) else { continue };
+            if !alike(so, fo) {
+                continue;
+            }
+            if x != y {
+                if cand.heap.contains_key(&x) && !seen.heap.contains_key(&y) && !cand.escaped.contains(&x) && !cand.escaped.contains(&y) {
+                    return true;
+                }
+                continue;
+            }
+            let (sk, fk) = (so.children(), fo.children());
+            if sk.len() == fk.len() {
+                for (a, b) in sk.into_iter().zip(fk) {
+                    if let (Abs::Ref(a), Abs::Ref(b)) = (a, b) {
+                        work.push((*a, *b));
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// The objects of `from` that stand where a different object of `seen`
     /// stood, as `from address -> seen address`: reached from the same root
     /// (the same slot of the same frame, the same global) by the same path of
@@ -22432,15 +22759,20 @@ impl Js {
             // partly static: the residual function specialized for those,
             // see `arg_shapes`.)
             let shapes = if dynamic_recursion && !try_stays && !matches!(ret, RetMode::Construct | RetMode::SuperConstruct) && self.react.is_none() {
-                self.arg_shapes(s, fid, &args)
+                self.arg_shapes(s, fid, &args, &captured, &this)
             } else {
                 None
             };
             let variant = shapes.as_ref().and_then(|sh| {
                 let forms = forms_once.clone().unwrap_or_else(|| vec![CapForm::PASSED; self.ncaptured[fid]]);
-                self.residual_fn_for_args(s, fid, &forms, sh, &captured).map(|r| (r, forms))
+                self.residual_fn_for_args(s, fid, &forms, sh, &captured, &args).map(|r| (r, forms))
             });
             if env_flag!("ARGVAR_DEBUG") {
+                if env_flag!("ARGVAR_FRAMES") && matches!(args.first(), Some(Abs::Undef)) {
+                    for f in s.frames.iter() {
+                        eprintln!("[ARGVAR]   frame {} pc={} branched={} dyn_ctl={} locals={}", self.names[f.func], f.pc, f.branched, f.dyn_ctl, format!("{:?}", f.locals).chars().take(400).collect::<String>());
+                    }
+                }
                 eprintln!(
                     "[ARGVAR] {} at pc={pc} body={:?} depth={} args={} shapes={:?} -> {:?}",
                     self.names[fid],
@@ -22451,6 +22783,7 @@ impl Js {
                         ArgShape::Runtime => "R".to_string(),
                         ArgShape::Static(v) => format!("{v:?}"),
                         ArgShape::Data(a) => format!("@{a}"),
+                        ArgShape::Record(r) => format!("record[{} objects, {} leaves]", r.nodes.len(), r.leaves),
                     }).collect::<Vec<_>>()),
                     variant.as_ref().map(|v| v.0)
                 );
@@ -22481,16 +22814,24 @@ impl Js {
             let this = this_r.clone().map_or(this, Abs::Dyn);
             // (A residual function specialized for the arguments takes the
             // runtime ones.)
+            // (And a record's leaves, see `ArgShape::Record`.)
             let arg_rs: Vec<RExpr> = match &shapes {
-                Some(sh) => args
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| sh.get(*j) == Some(&ArgShape::Runtime))
-                    .map(|(_, a)| a.clone())
-                    .collect::<Vec<_>>()
-                    .iter()
-                    .map(|a| self.operand_rexpr(s, a, &mut escaped, out))
-                    .collect(),
+                Some(sh) => {
+                    let mut passed: Vec<Abs> = Vec::new();
+                    for (j, a) in args.iter().enumerate() {
+                        match sh.get(j) {
+                            Some(ArgShape::Runtime) => passed.push(a.clone()),
+                            Some(ArgShape::Record(r)) => {
+                                let Abs::Ref(addr) = a else { unreachable!("a record argument is an object") };
+                                let (shape, _, leaves) = self.record_shape(s, *addr).expect("internal: a record argument lost its shape before the call");
+                                assert!(shape == **r, "internal: a record argument changed shape before the call");
+                                passed.extend(leaves);
+                            }
+                            _ => {}
+                        }
+                    }
+                    passed.iter().map(|a| self.operand_rexpr(s, a, &mut escaped, out)).collect()
+                }
                 None => args.iter().map(|a| self.operand_rexpr(s, a, &mut escaped, out)).collect(),
             };
             // A residual function takes its captures as leading parameters, so
@@ -27122,6 +27463,7 @@ impl Js {
         out: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        record_watch_note(addr);
         // (Made a runtime value: for a residual `try` being specialized, an
         // object of its state it does not keep as it is; for `main`, an
         // object of the load code's state to make once, at load.)
@@ -27928,6 +28270,7 @@ impl Js {
         fills: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        record_watch_note(addr);
         // (One the load code made: that object, see `EntryWatch::hoisted`.)
         if let Some((var, added)) = entry_hoisted_now(addr, heap.get(&addr)) {
             if var != dst {
@@ -32826,7 +33169,69 @@ enum ArgShape {
     /// no code has changed it, not passed: an interpreter's program, its
     /// syntax tree. (Its runtime identity is the load code's.)
     Data(usize),
+    /// A record the caller made and no runtime code holds (an interpreter's
+    /// environment: a frame of slots, a map of variables, linked to the
+    /// frames around it), known by its shape: the objects it is made of and
+    /// what of them is static; its runtime values and numbers (its leaves)
+    /// are passed in, one parameter each. See `Js::record_shape`.
+    Record(std::rc::Rc<RecordShape>),
 }
+
+/// The shape of a record argument (see `ArgShape::Record`): its objects in
+/// the order a walk from the argument finds them (the argument first), each
+/// with its values replaced: a runtime value or a number by the leaf mark
+/// (`REC_LEAF_VAR`: passed in, in this order), another of its objects by
+/// that object's index (a number), the load code's unchanged object by its
+/// address, any other static primitive kept. And how many leaves it has.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct RecordShape {
+    nodes: Vec<HeapObj>,
+    leaves: usize,
+}
+
+/// The variable that marks a leaf in a `RecordShape`.
+const REC_LEAF_VAR: usize = usize::MAX - 1;
+
+/// How many objects, and how many leaves, a record argument may have (see
+/// `Js::record_shape`): a larger one is passed as a runtime value.
+const REC_NODES: usize = 12;
+const REC_LEAVES: usize = 24;
+
+thread_local! {
+    /// While a residual function specialized for record arguments is built
+    /// (see `Js::make_arg_variant`): the addresses its body holds those
+    /// records' objects at, and whether it wrote one or made one a runtime
+    /// value (see `record_watch_note`). One entry per body being built, the
+    /// innermost last.
+    static RECORD_WATCH: std::cell::RefCell<Vec<(Vec<usize>, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The object at `a` is written, or made a runtime value: if it is one of
+/// the record arguments of the body being built, that body is no stand-in
+/// for the function given the caller's record (see `Js::make_arg_variant`).
+#[track_caller]
+fn record_watch_note(a: usize) {
+    RECORD_WATCH.with(|w| {
+        if let Some((addrs, hit)) = w.borrow_mut().last_mut() {
+            if !*hit && addrs.contains(&a) {
+                if env_flag!("ARGVAR_DEBUG") {
+                    let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+                    let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("record_watch_note")).take(6).map(|l| l.trim()).collect();
+                    eprintln!("[ARGVAR] record object @{a} written or made runtime at {}: {}", std::panic::Location::caller(), frames.join(" < "));
+                }
+                *hit = true;
+            }
+        }
+    });
+}
+
+/// How many times a path may pass one loop head that holds, where an
+/// earlier visit held an object still held elsewhere, a new one (see
+/// `whistle_with`), before the whistle weighs it as any other. (The head
+/// is counted through every activation inlined on the path, see
+/// `State::head_visits`: an interpreter's recursion inlined a few deep
+/// passes it once in each.)
+const INHERITED_PEELS: u32 = 8;
 
 /// How many times a path may pass one loop head whose objects only gained
 /// keys before the whistle weighs it as any other (see `whistle_with`).

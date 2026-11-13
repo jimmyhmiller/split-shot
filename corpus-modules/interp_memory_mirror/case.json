@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{ "bytes": [] }, { "bytes": [7] }, { "bytes": [1, 2, 3, 250, 9] }, { "bytes": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255] }],
+  "repeat": true,
+  "forbid": "\\.step\\(|illegal opcode"
+}

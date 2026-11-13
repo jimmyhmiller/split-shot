@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{ "word": "" }, { "word": "a" }, { "word": "abba" }, { "word": "abxa" }, { "word": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }],
+  "repeat": true,
+  "forbid": "\\.get\\("
+}
