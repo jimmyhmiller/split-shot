@@ -4847,6 +4847,17 @@ pub struct Js {
     /// code a closure specialized to it (`MADE_HELD`). Kept across passes;
     /// a pass that adds one is run again.
     made_refused: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// The residual functions specialized for their arguments whose
+    /// receiver is the load code's unchanged object, known to them and not
+    /// passed (see `residual_fn_for_args`), with that object.
+    data_receivers: std::cell::RefCell<HashMap<usize, usize>>,
+    /// This pass found load-time objects a receiver's recursion carries
+    /// changed (see `do_call`): it is run again with them runtime state.
+    receiver_state_found: std::cell::Cell<bool>,
+    /// The pass is to be run again from another boundary state, whatever
+    /// it makes from here on: every path ends at its next step, and its
+    /// residual is not looked at (see `specialize_program`).
+    pass_abandoned: std::cell::Cell<bool>,
     /// What each residual function built so far returns, as far as its
     /// callers may know it (see `ret_step`, `do_call`): `Some(n)`, on
     /// every path a new array of `n` elements the function made and no
@@ -6285,6 +6296,9 @@ impl Js {
             body_starts: std::cell::RefCell::new(Vec::new()),
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
+            data_receivers: std::cell::RefCell::new(HashMap::new()),
+            receiver_state_found: std::cell::Cell::new(false),
+            pass_abandoned: std::cell::Cell::new(false),
             result_arrays: std::cell::RefCell::new(HashMap::new()),
             node_params: std::cell::RefCell::new(std::collections::HashSet::new()),
             closure_data_violation: std::cell::Cell::new(false),
@@ -7767,10 +7781,26 @@ impl Js {
     /// The residual function of `fid` (captures as `forms`) specialized for
     /// arguments of `shapes` (see `arg_shapes`), made from the caller's
     /// state `s` if not made yet; `None` past `ARG_VARIANTS` of them.
-    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs], args: &[Abs]) -> Option<usize> {
+    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs], args: &[Abs], this: &Abs) -> Option<usize> {
         let caps = self.cap_shapes(s, fid, captured);
+        // (Its receiver, when that is the load code's unchanged data: an
+        // interpreter's own object, its methods called on it. Known to
+        // the function, not passed (see `make_arg_variant`,
+        // `data_receivers`). `PE_NO_DATA_RECEIVER`: a runtime value.)
+        let receiver = match this {
+            Abs::Ref(a)
+                if !env_flag!("PE_NO_DATA_RECEIVER")
+                    && matches!(self.fn_kinds[fid], FnKind::Normal | FnKind::Method)
+                    && matches!(s.heap.get(a), Some(HeapObj::Object { class: ObjClass::Ordinary, .. }))
+                    && self.boundary_data(s, *a) =>
+            {
+                ArgShape::Data(*a)
+            }
+            _ => ArgShape::Runtime,
+        };
         let mut key_shapes = shapes.to_vec();
         key_shapes.extend(caps.iter().cloned());
+        key_shapes.push(receiver.clone());
         let key = (fid, forms.to_vec(), key_shapes);
         if let Some(&r) = self.arg_variant_memo.borrow().get(&key) {
             return Some(r);
@@ -7780,6 +7810,9 @@ impl Js {
         }
         let rfid = self.residual_fns.borrow().len();
         self.arg_variant_memo.borrow_mut().insert(key, rfid);
+        if let ArgShape::Data(a) = receiver {
+            self.data_receivers.borrow_mut().insert(rfid, a);
+        }
         self.make_arg_variant(s, fid, rfid, forms, shapes, &caps, args);
         Some(rfid)
     }
@@ -7868,6 +7901,8 @@ impl Js {
         // (And the trees `main` made, likewise: the body's own copies,
         // which stand for the caller's while it neither writes one nor
         // makes one a runtime value, as a record's do.)
+        let receiver = self.data_receivers.borrow().get(&rfid).copied();
+        work.extend(receiver);
         let mut made_addrs: Vec<usize> = Vec::new();
         for sh in shapes.iter().chain(cap_shapes) {
             if let ArgShape::Made(m) = sh {
@@ -7952,9 +7987,15 @@ impl Js {
         }
         // (Its static context, which its own calls of itself are compared
         // with: see `do_call`.)
+        if let Some(a) = receiver {
+            start.frames[0].this = Abs::Ref(a);
+        }
         let mut context: Vec<Abs> = start.frames[0].locals[ncap..ncap + shapes.len()].iter().chain(start.frames[0].locals[..ncap].iter()).cloned().collect();
         if !env_flag!("PE_NO_THIS_CONTEXT") {
-            context.push(Abs::Dyn(RExpr::This));
+            context.push(match receiver {
+                Some(a) => Abs::Ref(a),
+                None => Abs::Dyn(RExpr::This),
+            });
         }
         start.frames[0].entry_skel = skeleton_of(&start.heap, &context).into();
         let has_made = !made_addrs.is_empty();
@@ -9422,6 +9463,16 @@ impl Js {
                 eprintln!("[PASS] begin (records off: {})", self.records_off.get());
             }
             let prog = self.specialize_entry();
+            // (Abandoned: again, from the boundary it asked for. Its
+            // residual is no program to look at.)
+            if self.pass_abandoned.replace(false) {
+                self.receiver_state_found.set(false);
+                if env_flag!("ARGVAR_DEBUG") || env_flag!("PASS_DEBUG") {
+                    eprintln!("[PASS] abandoned: again, with the state its recursion carries runtime state");
+                }
+                drop(prog);
+                continue;
+            }
             // (Debugging aid: the first pass's residual as it is, which is
             // no sound residual when a later pass was needed.)
             if env_flag!("PE_DEBUG_FIRST_PASS") {
@@ -9442,6 +9493,9 @@ impl Js {
             // (A prototype relied on as one runtime code has not had, made
             // a runtime object after: see `static_instanceof`.)
             if self.unseen_violation.replace(false) {
+                added = true;
+            }
+            if self.receiver_state_found.replace(false) {
                 added = true;
             }
             let held_written = MADE_HELD.with(|w| std::mem::take(&mut *w.borrow_mut()).1);
@@ -10114,6 +10168,7 @@ impl Js {
     /// (`unpristine`, `no_unbox_fids`, React's) persists.
     fn reset_for_respecialization(&self) {
         self.residual_fns.borrow_mut().clear();
+        self.data_receivers.borrow_mut().clear();
         self.unseen_relied.borrow_mut().clear();
         self.caught.borrow_mut().clear();
         self.pass_made.borrow_mut().clear();
@@ -12734,17 +12789,44 @@ fn skel_list_instance(old: &[Skel], new: &[Skel]) -> bool {
 /// of call).
 fn skel_progress(old: &[Skel], new: &[Skel]) -> bool {
     let structured = |k: &Skel| matches!(k, Skel::Arr(..) | Skel::Obj(..) | Skel::Clo(..) | Skel::Ref(_));
+    // (The receiver is the last of a call's context, see `do_call`.)
+    let receiver = if env_flag!("PE_NO_THIS_CONTEXT") { usize::MAX } else { new.len().wrapping_sub(1) };
     old.len() != new.len()
-        || old.iter().zip(new).any(|(o, n)| {
+        || old.iter().zip(new).enumerate().any(|(i, (o, n))| {
             match (o, n) {
                 (Skel::Prim(Abs::Str(a)), Skel::Prim(Abs::Str(b))) => a.len() > b.len() && a.ends_with(b),
                 // (Out of a structure to a static primitive: a walk
                 // reaching a leaf, a literal where a node may be. No way
                 // back: a primitive to a structure is none.)
                 (_, Skel::Prim(_) | Skel::Num) if structured(o) && !env_flag!("PE_NO_LEAF_PROGRESS") => true,
-                _ => structured(o) && structured(n) && !skel_instance(o, n) && !skel_instance(n, o),
+                // (Nor a receiver whose state only grew: an interpreter's
+                // call stack, one frame longer at each call it interprets,
+                // is the same machine deeper, not another place in a
+                // program. `PE_GROWTH_IS_PROGRESS`: a different one.)
+                _ => {
+                    structured(o)
+                        && structured(n)
+                        && !skel_instance(o, n)
+                        && !skel_instance(n, o)
+                        && (i != receiver || env_flag!("PE_GROWTH_IS_PROGRESS") || !(skel_grown(o, n) || skel_grown(n, o)))
+                }
             }
         })
+}
+
+/// Is `new` what `old` is but for arrays in it that are longer, each
+/// beginning as `old`'s does (see `skel_progress`)?
+fn skel_grown(old: &Skel, new: &Skel) -> bool {
+    match (old, new) {
+        (Skel::Dyn, _) => true,
+        (Skel::Ref(a), Skel::Ref(b)) => a == b,
+        (Skel::Num, Skel::Num) => true,
+        (Skel::Prim(x), Skel::Prim(y)) => x == y,
+        (Skel::Arr(n, xs), Skel::Arr(m, ys)) => n <= m && xs.len() <= ys.len() && xs.iter().zip(ys).all(|(o, n)| skel_grown(o, n)),
+        (Skel::Obj(xs), Skel::Obj(ys)) => xs.len() == ys.len() && xs.iter().zip(ys).all(|(u, v)| u.0 == v.0 && skel_grown(&u.1, &v.1)),
+        (Skel::Clo(f, xs), Skel::Clo(g, ys)) => f == g && xs.len() == ys.len() && xs.iter().zip(ys).all(|(o, n)| skel_grown(o, n)),
+        _ => false,
+    }
 }
 
 #[test]
@@ -13757,6 +13839,11 @@ impl Js {
         // boundary there, where the paths merge.
         if !at_entry && s.pending_joins.last().is_some_and(|j| j.end == pc && j.depth == s.frames.len()) {
             return self.jump_to(pc.wrapping_sub(1), pc, s, out);
+        }
+        // (A pass abandoned: see `pass_abandoned`.)
+        if self.pass_abandoned.get() {
+            self.bounded_halt.set(true);
+            return Step::Halt;
         }
         // The foldability probe only needs to learn *whether* the region taints;
         // once it has, stop immediately instead of specializing the rest.
@@ -14831,6 +14918,9 @@ impl Js {
                 self.advance(s)
             }
             Instr::GetIndex => {
+                if let Some(step) = self.trick_index(s, pc, out) {
+                    return step;
+                }
                 // A choice of objects: the property of each, chosen (for a
                 // key known now, or a string one known at runtime).
                 if let Some(c) = Js::choice_at(s, 1) {
@@ -17855,6 +17945,98 @@ impl Js {
         };
         let answer = decided?;
         s.top_mut().ostack.truncate(len - nargs - 2);
+        s.top_mut().pc += 1;
+        s.top_mut().ostack.push(answer);
+        Some(Step::Continue)
+    }
+
+    /// `list[i]` of a short list of the program's own values the runtime
+    /// does not hold (the load code's unchanged data: a branch table's
+    /// labels, a table of function indices), `i` a runtime number, under
+    /// an activation at a place of the program: "The Trick" as
+    /// `trick_lookup` does it for a map, a case on `i` over the list's
+    /// indices, each case's element known; no index of it, `undefined`
+    /// (a number that is no index of an array reads none of its
+    /// properties, the standard prototypes having no such). The index is
+    /// known to be a number: a string could name `length` or a method.
+    /// `PE_NO_INDEX_TRICK`: the runtime's read.
+    fn trick_index(&self, s: &mut State, pc: usize, out: &mut Vec<Op>) -> Option<Step<Js>> {
+        if self.facts_off || env_flag!("PE_NO_LEARN") || env_flag!("PE_NO_TRICK") || env_flag!("PE_NO_INDEX_TRICK") {
+            return None;
+        }
+        let len = s.top().ostack.len();
+        if len < 2 {
+            return None;
+        }
+        let (base, key) = (s.top().ostack[len - 2].clone(), s.top().ostack[len - 1].clone());
+        let (Abs::Ref(r), Abs::Dyn(e)) = (&base, &key) else { return None };
+        if s.escaped.contains(r) {
+            return None;
+        }
+        let Some(HeapObj::Array(arr)) = s.heap.get(r) else { return None };
+        if arr.is_empty() || arr.len() > TRICK_KEYS || !arr.holes.is_empty() || !arr.props.is_empty() || !arr.standard() {
+            return None;
+        }
+        if arr.iter().any(|v| matches!(v, Abs::Dyn(_))) || !self.pristine("Array") || !self.pristine("Object") {
+            return None;
+        }
+        let cases: Vec<(RExpr, Abs)> = arr.iter().enumerate().map(|(i, v)| (RExpr::Num(JsNum::int(i as i64)), v.clone())).collect();
+        if !self.boundary_data(s, *r) || !self.under_place(s) {
+            return None;
+        }
+        if !self.info_abs(s, &key).is_some_and(|i| i.types == crate::facts::T_NUM) {
+            return None;
+        }
+        // (The index in a variable of its own, which the facts can speak of.)
+        let v = match e {
+            RExpr::Var(v) => *v,
+            other => {
+                let t = self.aux_var(142, pc, 0);
+                let lookup = |v: usize| s.facts.get(&v).cloned();
+                let info = Js::identity_info(crate::facts::info_of(other, &lookup, self.typed_intrinsics()));
+                self.emit_temp(s, t, other.clone(), pc, out);
+                s.top_mut().ostack[len - 1] = Abs::Dyn(RExpr::Var(t));
+                self.pending_info.borrow_mut().insert(t, info);
+                t
+            }
+        };
+        let info = self.pending_info.borrow().get(&v).cloned().or_else(|| s.facts.get(&v).cloned());
+        let decided = match info.as_ref().and_then(|i| i.eq.clone()) {
+            Some(c) => Some(cases.iter().find(|(k, _)| *k == c).map(|(_, a)| a.clone()).unwrap_or(Abs::Undef)),
+            None => {
+                let ne = info.map(|i| i.ne).unwrap_or_default();
+                let left: Vec<&(RExpr, Abs)> = cases.iter().filter(|(k, _)| !ne.contains(k)).collect();
+                match left.first() {
+                    None => Some(Abs::Undef),
+                    Some((k, _)) => {
+                        {
+                            let point = self.dispatch_point(s, s.top()).unwrap_or(0);
+                            let mut n = self.trick_splits.borrow_mut();
+                            let n = n.entry((pc, point)).or_insert(0);
+                            if *n >= TRICK_SPLITS {
+                                return None;
+                            }
+                            *n += 1;
+                        }
+                        let cond = RExpr::Bin(Bop::Eq, Box::new(RExpr::Var(v)), Box::new(k.clone()));
+                        {
+                            let mut bc = self.branched_contexts.borrow_mut();
+                            for f in s.frames.iter().skip(1) {
+                                bc.insert((f.func, f.entry_skel.clone()));
+                            }
+                        }
+                        let mut arm = s.clone();
+                        arm.top_mut().dyn_ctl = true;
+                        arm.top_mut().branched = true;
+                        arm.branched_since_head = true;
+                        arm.dyn_branches += 1;
+                        return Some(Step::Branch { cond: Cond::Falsy(cond), t: arm.clone(), f: arm });
+                    }
+                }
+            }
+        };
+        let answer = decided?;
+        s.top_mut().ostack.truncate(len - 2);
         s.top_mut().pc += 1;
         s.top_mut().ostack.push(answer);
         Some(Step::Continue)
@@ -23820,9 +24002,39 @@ impl Js {
             } else {
                 None
             };
+            // (A receiver that is the load code's object and would be its
+            // unchanged data but for load-time objects it reaches that
+            // this call finds changed (an interpreter's call stack, a
+            // frame pushed): those are state the recursion carries at
+            // runtime. They are runtime state from the boundary on in the
+            // next pass, where the receiver is then data.
+            // `PE_NO_RECEIVER_STATE`: left as they are.)
+            if let (Some(_), Abs::Ref(a)) = (&shapes, &this) {
+                if !env_flag!("PE_NO_RECEIVER_STATE") && !env_flag!("PE_NO_DATA_RECEIVER") && entry_boundary_object(*a) && !self.boundary_data(s, *a) {
+                    let mut reach = std::collections::HashSet::new();
+                    Js::reachable(&s.heap, *a, &mut reach);
+                    reach.insert(*a);
+                    let changed: Vec<usize> = reach.into_iter().filter(|x| entry_boundary_object(*x) && !s.escaped.contains(x) && !entry_unchanged(*x, s.heap.get(x))).collect();
+                    if !changed.is_empty() {
+                        if env_flag!("ARGVAR_DEBUG") {
+                            eprintln!("[ARGVAR] {}: the receiver reaches changed load-time objects {changed:?}: runtime state from the next pass on", self.names[fid]);
+                        }
+                        let mut dynamic = self.entry.dynamic.borrow_mut();
+                        for x in changed {
+                            if dynamic.insert(x) {
+                                self.receiver_state_found.set(true);
+                                // (What this pass makes from here on is
+                                // made again from another boundary: its
+                                // paths end, see `step`.)
+                                self.pass_abandoned.set(true);
+                            }
+                        }
+                    }
+                }
+            }
             let variant = shapes.as_ref().and_then(|sh| {
                 let forms = forms_once.clone().unwrap_or_else(|| vec![CapForm::PASSED; self.ncaptured[fid]]);
-                self.residual_fn_for_args(s, fid, &forms, sh, &captured, &args).map(|r| (r, forms))
+                self.residual_fn_for_args(s, fid, &forms, sh, &captured, &args, &this).map(|r| (r, forms))
             });
             if env_flag!("ARGVAR_DEBUG") {
                 if env_flag!("ARGVAR_FRAMES") && matches!(args.first(), Some(Abs::Undef)) {
@@ -23873,8 +24085,9 @@ impl Js {
                 && !self.is_async[fid]
                 && !self.reads_this(fid)
                 && !env_flag!("PE_NO_UNREAD_THIS");
+            let data_receiver = self.data_receivers.borrow().contains_key(&rfid);
             let this_r = match &this {
-                _ if self.fn_kinds[fid] == FnKind::Arrow || construct || unread_this => None,
+                _ if self.fn_kinds[fid] == FnKind::Arrow || construct || unread_this || data_receiver => None,
                 Abs::Undef => None,
                 t => Some(self.operand_rexpr(s, t, &mut escaped, out)),
             };
@@ -30441,7 +30654,7 @@ impl Js {
                 self.closure_data_steps.set(0);
             }
             self.closure_data_depth.set(outer + 1);
-            let made = self.residual_fn_for_args(s, fid, &forms, &shapes, &captured, &[]);
+            let made = self.residual_fn_for_args(s, fid, &forms, &shapes, &captured, &[], &Abs::Undef);
             self.closure_data_depth.set(outer);
             if self.closure_data_over.get() {
                 self.closure_data_refused.borrow_mut().insert(fid);
