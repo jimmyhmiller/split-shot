@@ -4946,6 +4946,10 @@ pub struct Js {
     /// given number of known elements (see `open_token`): by variable, the
     /// array and that number.
     open_tokens: std::cell::RefCell<HashMap<usize, (usize, usize)>>,
+    /// What each object of the boundary reaches there (itself too), by
+    /// address: for `boundary_data`, which is asked of the same few
+    /// objects at every step. Of the pass's boundary: emptied with it.
+    boundary_reach: std::cell::RefCell<HashMap<usize, std::rc::Rc<std::collections::HashSet<usize, FxBuild>>>>,
     /// This pass found load-time objects a receiver's recursion carries
     /// changed (see `do_call`): it is run again with them runtime state.
     receiver_state_found: std::cell::Cell<bool>,
@@ -6396,6 +6400,7 @@ impl Js {
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             data_receivers: std::cell::RefCell::new(HashMap::new()),
             open_tokens: std::cell::RefCell::new(HashMap::new()),
+            boundary_reach: std::cell::RefCell::new(HashMap::new()),
             receiver_state_found: std::cell::Cell::new(false),
             pass_abandoned: std::cell::Cell::new(false),
             result_arrays: std::cell::RefCell::new(HashMap::new()),
@@ -7903,6 +7908,65 @@ impl Js {
     /// Is the object at `a` in `s` the load code's, as the boundary has it,
     /// as is everything it reaches, none of it a runtime value yet?
     fn boundary_data(&self, s: &State, a: usize) -> bool {
+        // (Asked at every step of the same few objects, each reaching the
+        // whole program: what the object reached at the boundary is
+        // found once. It reaches the same now while no write has reached
+        // any of that; then, with none of it a runtime value, it is the
+        // boundary's. Anything else is answered by the walk below.
+        // `PE_SLOW_BOUNDARY_DATA`: always by the walk.)
+        if !env_flag!("PE_SLOW_BOUNDARY_DATA") && entry_boundary_object(a) && s.heap.contains_key(&a) {
+            let cached = self.boundary_reach.borrow().get(&a).cloned();
+            let reach = match cached {
+                Some(r) => Some(r),
+                None => ENTRY_WATCH.with(|w| {
+                    let w = w.borrow();
+                    let w = w.as_ref()?;
+                    if !w.snapshot.contains_key(&a) {
+                        return None;
+                    }
+                    let mut set: std::collections::HashSet<usize, FxBuild> = Default::default();
+                    let mut work = vec![a];
+                    while let Some(x) = work.pop() {
+                        if set.insert(x) {
+                            if let Some(o) = w.snapshot.get(&x) {
+                                o.for_each_child_ref(&mut |c| work.push(c));
+                            }
+                        }
+                    }
+                    let r = std::rc::Rc::new(set);
+                    self.boundary_reach.borrow_mut().insert(a, r.clone());
+                    Some(r)
+                }),
+            };
+            if let Some(reach) = reach {
+                let open = self.entry.open.borrow();
+                let fast = !s.escaped.iter().any(|e| reach.contains(e))
+                    && ENTRY_WATCH.with(|w| {
+                        w.borrow().as_ref().is_some_and(|w| {
+                            w.touched.iter().filter(|t| reach.contains(t)).all(|t| {
+                                let now = s.heap.get_shared(t);
+                                let was = w.snapshot.get_shared(t);
+                                // (An array the residual functions have
+                                // open, which held nothing at the
+                                // boundary: skipped by the walk, and
+                                // nothing reached through it.)
+                                if open.contains(t) {
+                                    return matches!(was.map(|o| &**o), Some(HeapObj::Array(xs)) if xs.len() == 0)
+                                        && matches!(now.map(|o| &**o), Some(HeapObj::Array(_) | HeapObj::Builtin { .. }));
+                                }
+                                !w.written.contains(t)
+                                    && match (now, was) {
+                                        (Some(o), Some(was)) => std::rc::Rc::ptr_eq(o, was) || **o == **was,
+                                        _ => false,
+                                    }
+                            })
+                        })
+                    });
+                if fast {
+                    return true;
+                }
+            }
+        }
         let mut reach = std::collections::HashSet::new();
         let mut work = vec![a];
         while let Some(x) = work.pop() {
@@ -10013,6 +10077,7 @@ impl Js {
             _ => None,
         }).collect();
         ENTRY_WATCH.with(|w| *w.borrow_mut() = Some(EntryWatch { limit: state.next_addr, snapshot: state.heap.clone(), hoisted, global_roots, ..Default::default() }));
+        self.boundary_reach.borrow_mut().clear();
         let boundary_heap: std::collections::BTreeSet<usize> = state.heap.keys().copied().collect();
         if env_flag!("ENTRY_DEBUG") {
             eprintln!("[ENTRY] main from the boundary: heap {}, globals {}, blocks so far {}", state.heap.len(), state.globals.len(), self.spec_blocks.get());
@@ -14237,7 +14302,25 @@ impl Js {
                 if env_flag!("HANDLER_DEBUG") {
                     eprintln!("[HANDLER] pc={pc} catch_pc={catch_pc} exc_slot={exc_slot:?} body_end={body_end} end={end}: {:?}", &self.code[*catch_pc..(*end).min(*catch_pc + 24)]);
                 }
-                if load_transparent || self.probing.get() || self.try_folds(s, &handler, *body_end, *end) {
+                // (A transparent handler's region needs no probe: no
+                // runtime exception is the handler's to take, so a
+                // may-throw operation in it asks for no runtime `try`
+                // (one under a `try` inside it is that one's, see
+                // `forbid_residual_in_try`). What the probe would catch,
+                // a prototype the handler counts on made a runtime
+                // object in the region, the run catches as it happens
+                // and the pass is run again (see `escape_all`), where
+                // those prototypes are the load code's. A probe of every
+                // region specialized each nested one twice over: an
+                // interpreter's `try` per instruction, blocks in blocks,
+                // took time exponential in their depth.
+                // `PE_PROBE_TRANSPARENT_TRIES`: probed.)
+                let unprobed = handler.transparent
+                    && !load_transparent
+                    && !env_flag!("PE_PROBE_TRANSPARENT_TRIES")
+                    && !env_flag!("PE_NO_HANDLER_PROTO_REDO")
+                    && handler.unseen.iter().all(|p| entry_boundary_object(*p));
+                if load_transparent || self.probing.get() || unprobed || self.try_folds(s, &handler, *body_end, *end) {
                     s.handlers.push(handler);
                     self.advance(s)
                 } else {
