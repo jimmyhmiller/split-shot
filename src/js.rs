@@ -18490,10 +18490,20 @@ impl Js {
             None => {
                 let ne = info.as_ref().map(|i| i.ne.clone()).unwrap_or_default();
                 let left: Vec<&(RExpr, Abs)> = cases.iter().enumerate().filter(|(i, (k, _))| !ne.contains(k) && within(*i)).map(|(_, c)| c).collect();
+                // (The indices that hold one element are one case: a
+                // branch table's labels, most of them the default's. A
+                // case each made as many paths as the table is long, each
+                // going on with what it knew of the index.
+                // `PE_NO_INDEX_GROUPS`: a case each.)
+                let grouped = !env_flag!("PE_NO_INDEX_GROUPS");
+                let same: Vec<RExpr> = match left.first() {
+                    Some((_, a)) if grouped => left.iter().filter(|(_, b)| b == a).map(|(k, _)| k.clone()).collect(),
+                    _ => Vec::new(),
+                };
                 match left.first() {
                     None => Some(Abs::Undef),
-                    Some((_, a)) if whole && left.len() == 1 => Some(a.clone()),
-                    Some((k, _)) => {
+                    Some((_, a)) if whole && (left.len() == 1 || same.len() == left.len()) => Some(a.clone()),
+                    Some((k, a)) => {
                         {
                             let point = self.dispatch_point(s, s.top()).unwrap_or(0);
                             let mut n = self.trick_splits.borrow_mut();
@@ -18503,7 +18513,7 @@ impl Js {
                             }
                             *n += 1;
                         }
-                        let cond = RExpr::Bin(Bop::Eq, Box::new(RExpr::Var(v)), Box::new(k.clone()));
+                        let is = |k: &RExpr| RExpr::Bin(Bop::Eq, Box::new(RExpr::Var(v)), Box::new(k.clone()));
                         {
                             let mut bc = self.branched_contexts.borrow_mut();
                             for f in s.frames.iter().skip(1) {
@@ -18515,7 +18525,17 @@ impl Js {
                         arm.top_mut().branched = true;
                         arm.branched_since_head = true;
                         arm.dyn_branches += 1;
-                        return Some(Step::Branch { cond: Cond::Falsy(cond), t: arm.clone(), f: arm });
+                        if same.len() > 1 {
+                            // (Where it is one of them, the element; where
+                            // it is none, the cases left: see `learn`.)
+                            let cond = same.iter().map(is).reduce(|x, y| RExpr::Opaque("||".into(), vec![x, y])).expect("more than one index");
+                            let mut hit = arm.clone();
+                            hit.top_mut().ostack.truncate(len - 2);
+                            hit.top_mut().pc += 1;
+                            hit.top_mut().ostack.push(a.clone());
+                            return Some(Step::Branch { cond: Cond::Falsy(cond), t: arm, f: hit });
+                        }
+                        return Some(Step::Branch { cond: Cond::Falsy(is(k)), t: arm.clone(), f: arm });
                     }
                 }
             }
