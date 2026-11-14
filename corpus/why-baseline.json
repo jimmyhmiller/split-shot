@@ -332,7 +332,7 @@
   "gap": 9
  },
  "descent_parser.js": {
-  "merged": 106,
+  "merged": 98,
   "gap": 0
  },
  "destructure.js": {
@@ -393,7 +393,7 @@
  },
  "error_objects_modeled.js": {
   "merged": 1,
-  "gap": 16
+  "gap": 12
  },
  "esbuild_cjs_interop.js": {
   "merged": 0,

@@ -13395,7 +13395,15 @@ impl Js {
                         PVal::Data(Abs::Num(n))
                             if n.0 >= 0.0
                                 && n.0.fract() == 0.0
-                                && bases.iter().any(|b| if b == LOCAL_BASE { (n.0 as usize) < local_len } else { len_at(b).is_some_and(|len| (n.0 as usize) < len) }) =>
+                                // (Up to the list's end, which is a place
+                                // too: where its last instruction, a block
+                                // that spans the rest, leaves the counter
+                                // while that block runs.
+                                // `PE_NO_END_PLACE`: before it.)
+                                && bases.iter().any(|b| {
+                                    let end = usize::from(!env_flag!("PE_NO_END_PLACE"));
+                                    if b == LOCAL_BASE { local_len > 0 && (n.0 as usize) < local_len + end } else { len_at(b).is_some_and(|len| len > 0 && (n.0 as usize) < len + end) }
+                                }) =>
                         {
                             Some((k.to_string(), n.0 as usize))
                         }
@@ -23720,6 +23728,21 @@ impl Js {
             // deeper, or never: either way the runtime does what the original
             // does) continues as a runtime call.
             || s.frames.len() >= MAX_DEPTH;
+        if !dynamic_recursion && env_flag!("RECUR_DEBUG") && chain.iter().any(|f| f.func == fid) {
+            let active: Vec<String> = chain
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.func == fid)
+                .map(|(i, f)| format!("frame {i}: progress {}, branched since {}", skel_progress(&f.entry_skel, &now), chain[i..].iter().any(|g| g.branched)))
+                .collect();
+            eprintln!(
+                "[RECUR] {} unfolded again at depth {}: top dyn_ctl {}, leaf {leaf_call}, list call {program_list_call}, list callback {list_callback}, all-dynamic stuck {all_dynamic_stuck}; {}",
+                self.names[fid],
+                s.frames.len(),
+                s.top().dyn_ctl,
+                active.join("; ")
+            );
+        }
         if dynamic_recursion && env_flag!("RESID_DEBUG") {
             let all_dyn = !args.is_empty() && args.iter().all(|a| a.is_dynamic());
             let stalled: Vec<String> = s
@@ -31965,6 +31988,14 @@ impl Js {
                         && !env_flag!("PE_NO_DISPATCH_POINTS")
                         && matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if self.program_part_list(ns, *a))
                         && self.under_place(ns);
+                    if env_flag!("JOINMERGE_DEBUG") {
+                        let v = &ns.frames[fi].locals[slot];
+                        let what = match v {
+                            Abs::Ref(a) => format!("@{a} {}", format!("{:?}", ns.heap.get(a)).chars().take(140).collect::<String>()),
+                            v => format!("{v:?}").chars().take(80).collect(),
+                        };
+                        eprintln!("[JOINMERGE] slot {slot} at {target}: {what}; a list of parts {}, under a place {}", matches!(v, Abs::Ref(a) if self.program_part_list(ns, *a)), self.under_place(ns));
+                    }
                     !(node
                         || list
                         || slot < self.drives_dispatch[func].len()
@@ -32970,6 +33001,11 @@ impl Js {
         );
         let saved_foreign = self.foreign_protos.replace(Some(Vec::new()));
         let counts = (self.structured_inlined.borrow().clone(), self.trick_splits.borrow().clone());
+        // (The handler run alone, in an activation of its own: no region
+        // being specialized around it ends where its code does (an outer
+        // activation of the same function's `try`, whose end is this
+        // one's).)
+        let saved_halt = std::mem::take(&mut *self.halt_at.borrow_mut());
         let mut found = false;
         let mut at_entry = true;
         // (Through the code after the handler too, in its function: a
@@ -32998,10 +33034,16 @@ impl Js {
                     p = n;
                     at_entry = true;
                 }
-                _ => break,
+                _ => {
+                    if env_flag!("HANDLER_DEBUG") {
+                        eprintln!("[HANDLER] catch_pc={catch_pc}: stopped at pc {pc} {:?}, emitting {}", self.code.get(pc), out.iter().map(|o| format!("{o:?}").chars().take(160).collect::<String>()).collect::<Vec<_>>().join("; "));
+                    }
+                    break;
+                }
             }
         }
         let used = self.foreign_protos.replace(saved_foreign).unwrap_or_default();
+        *self.halt_at.borrow_mut() = saved_halt;
         *self.structured_inlined.borrow_mut() = counts.0;
         *self.trick_splits.borrow_mut() = counts.1;
         *self.materialized_fids.borrow_mut() = saved.0;
