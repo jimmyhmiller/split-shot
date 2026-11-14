@@ -1955,3 +1955,16 @@ function __pe_std_Number(value) {
   }
   return +value;
 }
+
+// ---------------------------------------------------------------------------
+// A field of load-time state that calls of the entry assign, kept apart from
+// its object (see `EntrySplit::cells` in src/js.rs): the field's value lives
+// in a runtime cell made by the load code, and the object, otherwise as the
+// load code left it, reads and writes the cell through these.
+// ---------------------------------------------------------------------------
+function __pe_cell_get(cell) {
+  return cell.value;
+}
+function __pe_cell_set(cell, v) {
+  cell.value = v;
+}

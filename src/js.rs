@@ -1835,6 +1835,20 @@ struct EntrySplit {
     stable: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// What the last split pass watched, and the boundary's objects.
     watched: std::cell::RefCell<Option<(EntryWatch, std::collections::BTreeSet<usize>)>>,
+    /// Data properties of the boundary's objects (by address and key) that
+    /// calls assign, where that is all a call does to the object and
+    /// runtime code never holds it: the property's value is runtime state,
+    /// the object is not. The load code makes a cell `{value: v}` for the
+    /// value, and `main` has the property as an accessor of that cell (the
+    /// prelude's `__pe_cell_get` and `__pe_cell_set`, bound to it): a read
+    /// reads the cell, a write writes it, and the object stays what the
+    /// load code left, its other properties known (an interpreter's
+    /// instance whose memory a `grow` replaces, its module still known).
+    /// The object is an ordinary data property's to the program: one made
+    /// a runtime value, or asked what kind of property it has, is runtime
+    /// state whole (`dynamic`) in the next pass.
+    /// `PE_NO_FIELD_CELLS`: none, the object runtime state whole.
+    cells: std::cell::RefCell<std::collections::BTreeSet<(usize, String)>>,
 }
 
 /// What the end states of a script's top-level code (several, after a
@@ -2162,8 +2176,42 @@ struct EntryWatch {
     /// The globals holding objects the load code made, and those objects.
     global_roots: Vec<(String, usize)>,
     written: std::collections::BTreeSet<usize>,
+    /// Of an object written whose change, where it was found, was the
+    /// values of some of its data properties and nothing else: those
+    /// properties (see `EntrySplit::cells`).
+    field_writes: std::collections::BTreeMap<usize, std::collections::BTreeSet<String>>,
+    /// Objects with a property kept in a cell (see `EntrySplit::cells`)
+    /// asked what kind of property it is.
+    cell_reflected: std::collections::BTreeSet<usize>,
     escaped: std::collections::BTreeSet<usize>,
     globals: std::collections::BTreeSet<String>,
+}
+
+/// The data properties whose values alone tell `now` from `was`: `None`
+/// when anything else does (a key, an attribute, the prototype, an
+/// accessor), or either is no ordinary object.
+fn field_only_change(now: &HeapObj, was: &HeapObj) -> Option<std::collections::BTreeSet<String>> {
+    let (HeapObj::Object { props: p1, proto: o1, class: ObjClass::Ordinary, private: v1, extensible: e1 }, HeapObj::Object { props: p0, proto: o0, class: ObjClass::Ordinary, private: v0, extensible: e0 }) = (now, was) else {
+        return None;
+    };
+    if o1 != o0 || v1 != v0 || e1 != e0 || p1.len() != p0.len() {
+        return None;
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    for (a, b) in p1.iter().zip(p0.iter()) {
+        if a.key != b.key || a.attrs != b.attrs {
+            return None;
+        }
+        if a.val == b.val {
+            continue;
+        }
+        let (PVal::Data(_), PVal::Data(_), PKey::Str(k)) = (&a.val, &b.val, &a.key) else { return None };
+        if a.attrs != DEFAULT_ATTRS {
+            return None;
+        }
+        keys.insert(k.clone());
+    }
+    Some(keys)
 }
 
 thread_local! {
@@ -2257,6 +2305,9 @@ fn entry_check(a: usize, now: Option<&HeapObj>) {
                             eprintln!("[ENTRY]   asked by {}", frames.join(" < "));
                             eprintln!("[ENTRY]   was {:?}\n[ENTRY]   now {:?}", w.snapshot.get(&a), now);
                         }
+                    }
+                    if let Some(keys) = now.zip(w.snapshot.get(&a)).and_then(|(o, was)| field_only_change(o, was)) {
+                        w.field_writes.insert(a, keys);
                     }
                     w.written.insert(a);
                 }
@@ -2411,6 +2462,16 @@ fn note_entry_escape(a: usize) {
                     let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("step_inner") && !l.contains("Client>::step") && !l.contains("note_entry")).take(10).map(|l| l.trim()).collect();
                     eprintln!("[ENTRY] made runtime: {a}, by {}", frames.join(" < "));
                 }
+            }
+        }
+    });
+}
+
+fn note_cell_reflected(a: usize) {
+    ENTRY_WATCH.with(|w| {
+        if let Some(w) = w.borrow_mut().as_mut() {
+            if a < w.limit {
+                w.cell_reflected.insert(a);
             }
         }
     });
@@ -4953,6 +5014,9 @@ pub struct Js {
     /// Set by the probe when the try body would emit a may-throw residual op, so
     /// the engine knows the try must residualize instead of fold inline.
     try_taint: std::cell::Cell<bool>,
+    /// The `try` a `try_folds` probe is deciding has a transparent handler
+    /// (see `forbid_residual_in_try`).
+    probe_transparent: std::cell::Cell<bool>,
     /// True while specializing a residual `try`'s body/catch: a write to a
     /// *top-frame* local emits a residual assignment immediately (in source
     /// order) rather than only updating the abstract local. This keeps effects
@@ -6329,6 +6393,7 @@ impl Js {
             probe_outer: std::cell::RefCell::new(Vec::new()),
             trick_splits: std::cell::RefCell::new(HashMap::new()),
             try_taint: std::cell::Cell::new(false),
+            probe_transparent: std::cell::Cell::new(false),
             spec_steps: std::cell::Cell::new(0),
             spec_blocks: std::cell::Cell::new(0),
             spec_weight: std::cell::Cell::new(0),
@@ -10016,7 +10081,36 @@ impl Js {
         }
         let mut dynamic = self.entry.dynamic.borrow_mut();
         let before = dynamic.len();
-        dynamic.extend(watch.written.intersection(&boundary_heap).copied());
+        // (An object whose data properties' values are all a call changed:
+        // those properties, if nothing below makes it runtime state whole.
+        // See `EntrySplit::cells`.)
+        let mut cells = self.entry.cells.borrow_mut();
+        let cells_before = cells.len();
+        for a in watch.written.intersection(&boundary_heap) {
+            match watch.field_writes.get(a) {
+                Some(keys) if !keys.is_empty() && !env_flag!("PE_NO_FIELD_CELLS") && self.names.iter().any(|n| n == "__pe_cell_get") => {
+                    cells.extend(keys.iter().map(|k| (*a, k.clone())));
+                }
+                _ => {
+                    dynamic.insert(*a);
+                }
+            }
+        }
+        dynamic.extend(watch.cell_reflected.iter().copied());
+        let with_cells: std::collections::BTreeSet<usize> = cells.iter().map(|(a, _)| *a).collect();
+        dynamic.extend(watch.escaped.iter().filter(|a| with_cells.contains(a)).copied());
+        // (Nor one the load code makes a runtime object: it is its own
+        // cell.)
+        dynamic.extend(with_cells.iter().filter(|a| watch.hoisted.contains_key(a)).copied());
+        // (However one came to be made at runtime, its accessors with it:
+        // none has a property apart.)
+        let accessor_made = {
+            let made = self.materialized_fids.borrow();
+            self.names.iter().enumerate().any(|(fid, n)| (n == "__pe_cell_get" || n == "__pe_cell_set") && made.contains(&fid))
+        };
+        if accessor_made {
+            dynamic.extend(with_cells.iter().copied());
+        }
         // (A frozen ordinary object no write changes.)
         let frozen = |a: &usize| {
             matches!(watch.snapshot.get(a), Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. })
@@ -10096,13 +10190,16 @@ impl Js {
         if w.wild {
             self.entry.all_globals_dynamic.set(true);
         }
-        let added = dynamic.len() > before || hoist_grew || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
+        // (Runtime state whole, it has no property apart.)
+        cells.retain(|(a, _)| !dynamic.contains(a));
+        let cells_changed = cells.len() != cells_before;
+        let added = dynamic.len() > before || cells_changed || hoist_grew || globals.len() > globals_before || self.entry.all_globals_dynamic.get() != all_before || unwritten_read;
         // (Load state `main` changes, found now: see `closure_data_fns`.)
-        if dynamic.len() > before {
+        if dynamic.len() > before || cells_changed {
             self.closure_data_off.set(true);
         }
         if env_flag!("ENTRY_DEBUG") {
-            eprintln!("[ENTRY] conflicts: dynamic {:?} globals {:?} all {} (runtime writes {runtime_writes}) -> again {added}", dynamic, globals, self.entry.all_globals_dynamic.get());
+            eprintln!("[ENTRY] conflicts: dynamic {:?} cells {:?} globals {:?} all {} (runtime writes {runtime_writes}) -> again {added}", dynamic, cells, globals, self.entry.all_globals_dynamic.get());
             // (`ENTRY_DUMP`: the pass's `main`, block by block.)
             if env_flag!("ENTRY_DUMP") {
                 for (i, b) in main.blocks.iter().enumerate() {
@@ -24602,6 +24699,16 @@ impl Js {
     /// runtime. Never runs user code: anything that would (a getter, a
     /// `toJSON`, a `valueOf`) is left to the runtime.
     fn try_builtin_on_heap(&self, s: &mut State, g: &str, method: &str, args: &[Abs], pc: usize) -> Option<Abs> {
+        // (Asked what kind of property an object has, one with a property
+        // kept in a cell: to the program an ordinary data property. See
+        // `EntrySplit::cells`.)
+        if matches!((g, method), ("Object" | "Reflect", "getOwnPropertyDescriptor") | ("Object", "getOwnPropertyDescriptors" | "isFrozen" | "isSealed")) {
+            if let Some(Abs::Ref(o)) = args.first() {
+                if self.entry.cells.borrow().iter().any(|(a, _)| a == o) {
+                    note_cell_reflected(*o);
+                }
+            }
+        }
         let arg = |i: usize| args.get(i).cloned().unwrap_or(Abs::Undef);
         let new_array = |s: &mut State, elems: Vec<Abs>| -> Abs {
             let a = s.alloc(HeapObj::Array(ArrayObj::from(elems)));
@@ -25881,8 +25988,58 @@ impl Js {
         s.next_addr = c0.next_addr;
     }
 
+    /// Each property a call assigns apart from its object (see
+    /// `EntrySplit::cells`): its value moved to a cell, the property an
+    /// accessor of that cell. The cells made, which are runtime state.
+    fn make_field_cells(&self, s: &mut State) -> Vec<usize> {
+        let cells = self.entry.cells.borrow().clone();
+        let fid = |name: &str| self.names.iter().position(|n| n == name);
+        let (Some(get), Some(set)) = (fid("__pe_cell_get"), fid("__pe_cell_set")) else { return Vec::new() };
+        let mut made = Vec::new();
+        let mut accessors: Option<(Abs, Abs)> = None;
+        for (a, k) in cells {
+            if s.escaped.contains(&a) || self.entry.dynamic.borrow().contains(&a) {
+                continue;
+            }
+            let Some(HeapObj::Object { props, class: ObjClass::Ordinary, .. }) = s.heap.get(&a) else { continue };
+            let Some(v) = props.iter().find_map(|p| match (&p.key, &p.val) {
+                (PKey::Str(key), PVal::Data(v)) if *key == k && p.attrs == DEFAULT_ATTRS => Some(v.clone()),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let (get, set) = accessors
+                .get_or_insert_with(|| {
+                    let mut closure = |fid: usize| {
+                        let mut obj = HeapObj::closure(fid, Vec::new());
+                        if let HeapObj::Closure { known, once, .. } = &mut obj {
+                            *known = true;
+                            *once = true;
+                        }
+                        Abs::Ref(s.alloc(obj))
+                    };
+                    (closure(get), closure(set))
+                })
+                .clone();
+            let cell = s.alloc(HeapObj::object(vec![Prop::data("value", v)]));
+            let mut bound = |target: Abs, name: &str, length: i64| {
+                let data = vec![target, Abs::Undef, Abs::Str(format!("bound {name}")), Abs::Num(JsNum::int(length)), Abs::Ref(cell)];
+                Abs::Ref(s.alloc(HeapObj::Builtin { kind: BOUND_FUNCTION.into(), data: data.into(), ext: None }))
+            };
+            let (g, st) = (bound(get, "__pe_cell_get", 0), bound(set, "__pe_cell_set", 1));
+            if let Some(HeapObj::Object { props, .. }) = s.heap.get_mut(&a) {
+                if let Some(p) = props.iter_mut().find(|p| matches!(&p.key, PKey::Str(key) if *key == k)) {
+                    p.val = PVal::Accessor { get: g, set: st };
+                }
+            }
+            made.push(cell);
+        }
+        made
+    }
+
     fn boundary_finish(&self, s: &mut State, generalize: bool, agreeing: bool, out: &mut Vec<Op>) {
-        let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
+        let cells = self.make_field_cells(s);
+        let dynamic: Vec<usize> = self.entry.dynamic.borrow().iter().copied().chain(cells).filter(|a| s.heap.contains_key(a) && !s.escaped.contains(a)).collect();
         let mut escaped = std::collections::HashSet::new();
         for a in Js::holders_first(&s.heap, &dynamic, 2) {
             if s.heap.contains_key(&a) && !s.escaped.contains(&a) {
@@ -33412,9 +33569,21 @@ impl Js {
     /// real `try`/`catch`. During the foldability probe we only *record* that
     /// this happened (`try_taint`); the real run never reaches here on the fold
     /// path (the probe already steered it to `residualize_try`).
+    ///
+    /// (The probe of a `try` whose own handler is transparent: a handler a
+    /// runtime exception must reach is then a `try`'s inside the region
+    /// (a callee's `try`/`finally` under a caller's that only rethrows),
+    /// pushed as the probe passed it. That `try` is decided where the run
+    /// comes to it, by a probe of its own; a runtime one there, what it
+    /// throws passes the transparent handler as any runtime exception
+    /// does. The region of the `try` probed needs none for it.
+    /// `PE_TAINT_INNER_TRY`: the probed `try` is a runtime one too.)
     fn forbid_residual_in_try(&self, s: &State, _what: &str) {
         if s.handlers.iter().any(|h| !h.transparent) {
             if self.probing.get() {
+                if self.probe_transparent.get() && s.handlers.first().is_some_and(|h| h.transparent) && !env_flag!("PE_TAINT_INNER_TRY") {
+                    return;
+                }
                 if env_flag!("TRY_DEBUG") && !self.try_taint.get() {
                     let frames: Vec<&str> = s.frames.iter().map(|f| self.names[f.func].as_str()).collect();
                     eprintln!("[TRY] taint pc={} what={_what} in {} instr={:?}", s.top().pc, frames.join(" > "), self.code.get(s.top().pc));
@@ -33749,6 +33918,7 @@ impl Js {
         // and clobber its accumulated taint. (Same hazard `residual_fn_for` guards.)
         let saved_probing = self.probing.replace(true);
         let saved_taint = self.try_taint.replace(false);
+        let saved_transparent = self.probe_transparent.replace(handler.transparent);
         // (What the probe counts toward the bounds the run decides by (see
         // `structured_inlined`, `trick_splits`), and the contexts it found
         // branching, are the probe's: the run, deciding from what was
@@ -33768,6 +33938,7 @@ impl Js {
         let folds = !self.try_taint.get();
         self.probing.set(saved_probing);
         self.try_taint.set(saved_taint);
+        self.probe_transparent.set(saved_transparent);
         folds
     }
 
