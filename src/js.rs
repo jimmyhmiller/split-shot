@@ -2467,6 +2467,16 @@ fn note_entry_escape(a: usize) {
     });
 }
 
+/// `DANGLE_DEBUG`: a record argument's object dropped from a heap, and by
+/// what.
+fn dangle_note(a: usize) {
+    if a >= RECORD_ADDRS && env_flag!("DANGLE_DEBUG") {
+        let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+        let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("dangle_note")).take(8).map(|l| l.trim()).collect();
+        eprintln!("[DANGLE] @{a} dropped by {}", frames.join(" < "));
+    }
+}
+
 fn note_cell_reflected(a: usize) {
     ENTRY_WATCH.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
@@ -2613,6 +2623,7 @@ impl Heap {
         for (a, o) in self.m.iter() {
             if !keep(*a) {
                 entry_check(*a, Some(o));
+                dangle_note(*a);
                 m.remove(a);
                 continue;
             }
@@ -2638,6 +2649,7 @@ impl Heap {
         let dead: Vec<usize> = self.m.keys().copied().filter(|a| !keep(*a)).collect();
         for a in dead {
             entry_check(a, self.m.get(&a).map(|o| &**o));
+            dangle_note(a);
             self.m.remove(&a);
         }
     }
@@ -12900,15 +12912,36 @@ fn skel_progress(old: &[Skel], new: &[Skel]) -> bool {
                 // call stack, one frame longer at each call it interprets,
                 // is the same machine deeper, not another place in a
                 // program. `PE_GROWTH_IS_PROGRESS`: a different one.)
+                // (Nor one that differs only in which of its numbers are
+                // known: `[2, x]` and `[y, 1]`, the arguments an
+                // interpreted function was called with and those of its
+                // call of itself, are the same list of numbers, not
+                // another place. `PE_BINDING_TIME_PROGRESS`: a different
+                // one.)
                 _ => {
                     structured(o)
                         && structured(n)
                         && !skel_instance(o, n)
                         && !skel_instance(n, o)
+                        && (env_flag!("PE_BINDING_TIME_PROGRESS") || !skel_same_but_numbers(o, n))
                         && (i != receiver || env_flag!("PE_GROWTH_IS_PROGRESS") || !(skel_grown(o, n) || skel_grown(n, o)))
                 }
             }
         })
+}
+
+/// Are `a` and `b` the same structure, but for numbers one knows where the
+/// other has a runtime value (see `skel_progress`)?
+fn skel_same_but_numbers(a: &Skel, b: &Skel) -> bool {
+    match (a, b) {
+        (Skel::Dyn | Skel::Num, Skel::Dyn | Skel::Num) => true,
+        (Skel::Ref(x), Skel::Ref(y)) => x == y,
+        (Skel::Prim(x), Skel::Prim(y)) => x == y,
+        (Skel::Arr(n, xs), Skel::Arr(m, ys)) => n == m && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| skel_same_but_numbers(x, y)),
+        (Skel::Obj(xs), Skel::Obj(ys)) => xs.len() == ys.len() && xs.iter().zip(ys).all(|(u, v)| u.0 == v.0 && skel_same_but_numbers(&u.1, &v.1)),
+        (Skel::Clo(f, xs), Skel::Clo(g, ys)) => f == g && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| skel_same_but_numbers(x, y)),
+        _ => false,
+    }
 }
 
 /// Is `new` what `old` is but for arrays in it that are longer, each
@@ -17243,7 +17276,7 @@ impl Js {
             let converts = |e: &RExpr| if !in_try || env_flag!("PE_IFCONV_SYNTACTIC") { converts_unknown(e) } else { self.converts_unknown_in(st, e) };
             let risky = |v: &Abs| matches!(v, Abs::Dyn(e) if !before.contains(e) && (self.throws(e) || converts(e)));
             st.frames.iter().flat_map(|f| f.values()).any(risky)
-                || st.heap.iter().filter(|(a, o)| **a >= base || s.heap.get(a) != Some(*o)).any(|(_, o)| o.children().into_iter().any(risky))
+                || st.heap.iter().filter(|(a, o)| made_since(base, **a) || s.heap.get(a) != Some(*o)).any(|(_, o)| o.children().into_iter().any(risky))
         };
         // (A short-circuiting operator's arm that ran something at runtime
         // and leaves an object it made for the value: that object made at
@@ -17256,7 +17289,7 @@ impl Js {
                     Js::reachable(&st.heap, *a, &mut reach);
                 }
             }
-            reach.iter().any(|a| *a >= base)
+            reach.iter().any(|a| made_since(base, *a))
         };
         if guarded && !react_guarded && arms_ran && (made_live(&st_t) || made_live(&st_f)) {
             if dbg {
@@ -17402,7 +17435,7 @@ impl Js {
         // path's.)
         let mut versions: Vec<usize> = Vec::new();
         for (addr, o) in a.heap.iter() {
-            if *addr < base && b.heap.get(addr).is_some_and(|ob| ob != o) {
+            if !made_since(base, *addr) && b.heap.get(addr).is_some_and(|ob| ob != o) {
                 versions.push(*addr);
             }
         }
@@ -17446,7 +17479,7 @@ impl Js {
             let mut n: HashMap<usize, usize> = HashMap::new();
             let mut count = |v: &Abs| {
                 if let Abs::Ref(x) = v {
-                    if *x >= base {
+                    if made_since(base, *x) {
                         *n.entry(*x).or_insert(0) += 1;
                     }
                 }
@@ -17472,7 +17505,7 @@ impl Js {
         // (An object one arm no longer references may be collected there:
         // the merged heap has the ones that existed from either.)
         let mut m = a.clone();
-        m.heap = a.heap.iter().chain(b.heap.iter()).filter(|(addr, _)| **addr < base).map(|(k, v)| (*k, v.clone())).collect();
+        m.heap = a.heap.iter().chain(b.heap.iter()).filter(|(addr, _)| !made_since(base, **addr)).map(|(k, v)| (*k, v.clone())).collect();
         m.next_addr = b.next_addr;
         // (What an arm no longer knows only because it no longer reached
         // the variable, collected, it knew before the branch: but for a
@@ -24086,7 +24119,21 @@ impl Js {
                 .iter()
                 .enumerate()
                 .filter(|(_, f)| f.func == fid)
-                .map(|(i, f)| format!("frame {i}: progress {}, branched since {}", skel_progress(&f.entry_skel, &now), chain[i..].iter().any(|g| g.branched)))
+                .map(|(i, f)| {
+                    // (`RECUR_SKEL_DEBUG`: the arguments that differ.)
+                    let differing: String = if env_flag!("RECUR_SKEL_DEBUG") {
+                        f.entry_skel
+                            .iter()
+                            .zip(&now)
+                            .enumerate()
+                            .filter(|(_, (o, n))| o != n)
+                            .map(|(k, (o, n))| format!(" [arg {k}: {} -> {}]", format!("{o:?}").chars().take(300).collect::<String>(), format!("{n:?}").chars().take(300).collect::<String>()))
+                            .collect()
+                    } else {
+                        String::new()
+                    };
+                    format!("frame {i}: progress {}, branched since {}{differing}", skel_progress(&f.entry_skel, &now), chain[i..].iter().any(|g| g.branched))
+                })
                 .collect();
             eprintln!(
                 "[RECUR] {} unfolded again at depth {}: top dyn_ctl {}, leaf {leaf_call}, list call {program_list_call}, list callback {list_callback}, all-dynamic stuck {all_dynamic_stuck}; {}",
@@ -24560,9 +24607,13 @@ impl Js {
                     );
                 }
                 if matches!(o, Abs::Dyn(_)) && !s.escaped.contains(&p) && !env_flag!("PE_NO_UNSEEN_PROTO") {
-                    if let Some(used) = self.foreign_protos.borrow_mut().as_mut() {
-                        used.push(p);
-                        return Some(false);
+                    // (But one a handler counted on so that the run then
+                    // made a runtime object: see `escape_all`.)
+                    if !self.seen_protos.borrow().contains(&p) {
+                        if let Some(used) = self.foreign_protos.borrow_mut().as_mut() {
+                            used.push(p);
+                            return Some(false);
+                        }
                     }
                     // (And of a value a handler was given, an exception the
                     // program's own code threw (see `do_throw`), for the
@@ -31263,7 +31314,19 @@ impl Js {
             if self.probing.get() {
                 self.try_taint.set(true);
             } else {
-                panic!("internal: a prototype a transparent handler relies on escaped outside its region's probe (rethrows_foreign)");
+                // (In the run itself, which the probe did not foresee: a
+                // `try` inside the region that the run made a runtime one
+                // (see `forbid_residual_in_try`) throws an object the
+                // program made. The load code's prototype: seen from now
+                // on, and the pass run again, no handler counting on it.
+                // `PE_NO_HANDLER_PROTO_REDO`: an error.)
+                let relied: Vec<usize> = s.handlers.iter().flat_map(|h| h.unseen.iter().copied()).filter(|p| made.contains_key(p)).collect();
+                if relied.iter().all(|p| entry_boundary_object(*p)) && !env_flag!("PE_NO_HANDLER_PROTO_REDO") {
+                    self.seen_protos.borrow_mut().extend(relied);
+                    self.unseen_violation.set(true);
+                } else {
+                    panic!("internal: a prototype a transparent handler relies on escaped outside its region's probe (rethrows_foreign)");
+                }
             }
         }
         values
@@ -31776,6 +31839,34 @@ impl Js {
         // Only live objects: an unreachable one (an escaped object's stale
         // copy) is never read again, and freezing a read inside it would
         // emit a read of a variable that may not be assigned yet.
+        // (`DANGLE_DEBUG`: a reference to an object the heap does not
+        // hold, and what holds it.)
+        if env_flag!("DANGLE_DEBUG") {
+            for (fi, f) in s.frames.iter().enumerate() {
+                let roots: Vec<(String, &Abs)> = f
+                    .locals
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (format!("local {i} (live {})", self.is_live(f.func, f.pc, i)), v))
+                    .chain(f.ostack.iter().enumerate().map(|(i, v)| (format!("stack {i}"), v)))
+                    .chain(std::iter::once(("this".to_string(), &f.this)))
+                    .collect();
+                for (what, v) in roots {
+                    let Abs::Ref(a) = v else { continue };
+                    let mut seen = std::collections::HashSet::new();
+                    let mut work = vec![(*a, format!("frame {fi} ({} at pc {}) {what}", self.names[f.func], f.pc))];
+                    while let Some((x, path)) = work.pop() {
+                        if !seen.insert(x) {
+                            continue;
+                        }
+                        match s.heap.get(&x) {
+                            None => eprintln!("[DANGLE] pc={pc} @{x} missing: {path}"),
+                            Some(o) => o.for_each_child_ref(&mut |c| work.push((c, format!("{path} > @{x} {}", format!("{o:?}").chars().take(60).collect::<String>())))),
+                        }
+                    }
+                }
+            }
+        }
         let mut live = std::collections::HashSet::new();
         for v in s.frames.iter().flat_map(|f| f.values()).chain(s.fns.values()).chain(s.globals.values().map(|(v, _)| v)) {
             if let Abs::Ref(a) = v {
@@ -35383,6 +35474,13 @@ fn made_held_note(a: usize, now: Option<&std::rc::Rc<HeapObj>>) {
         }
         w.1.extend(fids);
     });
+}
+
+/// Whether the object at `a` was made since `base` was the next address
+/// to hand out. (A record argument's object, held past every address a
+/// path allocates, was there from the start: see `RECORD_ADDRS`.)
+fn made_since(base: usize, a: usize) -> bool {
+    a >= base && a < RECORD_ADDRS
 }
 
 /// The variable that marks a leaf in a `RecordShape`.
