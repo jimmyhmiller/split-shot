@@ -2406,7 +2406,11 @@ fn note_entry_escape(a: usize) {
     ENTRY_WATCH.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
             if a < w.limit {
-                w.escaped.insert(a);
+                if w.escaped.insert(a) && env_flag!("ENTRY_ESCAPE_DEBUG") {
+                    let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+                    let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("step_inner") && !l.contains("Client>::step") && !l.contains("note_entry")).take(10).map(|l| l.trim()).collect();
+                    eprintln!("[ENTRY] made runtime: {a}, by {}", frames.join(" < "));
+                }
             }
         }
     });
@@ -4813,6 +4817,19 @@ pub struct Js {
     /// `halt_at`), not the code: read, and reset, where the run's end is
     /// acted on (`step`).
     bounded_halt: std::cell::Cell<bool>,
+    /// The load code's prototypes an `instanceof` of a runtime value was
+    /// answered by, as ones runtime code has not had (see
+    /// `static_instanceof`), this pass; the load code's objects made
+    /// runtime ones this pass; the prototypes found made after being
+    /// relied on (kept across passes: not relied on again), and whether
+    /// this pass found one (it is run again).
+    unseen_relied: std::cell::RefCell<std::collections::HashSet<usize>>,
+    /// The values handlers were given this pass (see `do_throw`): a
+    /// runtime variable (`true`) or a modeled object's address.
+    caught: std::cell::RefCell<std::collections::HashSet<(bool, usize)>>,
+    pass_made: std::cell::RefCell<std::collections::HashSet<usize>>,
+    seen_protos: std::cell::RefCell<std::collections::HashSet<usize>>,
+    unseen_violation: std::cell::Cell<bool>,
     /// The heaps the residual functions' bodies being built, watched as
     /// `main` is, began with (see `specialize_body_watched`), innermost
     /// last.
@@ -6260,6 +6277,11 @@ impl Js {
             arg_variant_memo: std::cell::RefCell::new(HashMap::new()),
             closure_data_fn: std::cell::RefCell::new(HashMap::new()),
             bounded_halt: std::cell::Cell::new(false),
+            unseen_relied: Default::default(),
+            caught: Default::default(),
+            pass_made: Default::default(),
+            seen_protos: Default::default(),
+            unseen_violation: std::cell::Cell::new(false),
             body_starts: std::cell::RefCell::new(Vec::new()),
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
@@ -6597,6 +6619,13 @@ impl Js {
     /// Does function `fid`'s own code read `new.target`?
     /// Does the code of `fid` read its `this` (an arrow in it that does has
     /// it captured by the function, which reads it there)?
+    /// Is `e` a standard error constructor's `prototype`, as the standard
+    /// has it (the program changes neither it nor `Error`'s nor
+    /// `Object`'s)? `PE_NO_ERROR_PROTO_WRITES`: never.
+    fn standard_error_proto(&self, e: &RExpr) -> bool {
+        !env_flag!("PE_NO_ERROR_PROTO_WRITES") && error_proto_name(e).is_some_and(|n| self.pristine(n) && self.pristine("Error") && self.pristine("Object"))
+    }
+
     fn reads_this(&self, fid: usize) -> bool {
         let hi = self.entries.get(fid + 1).copied().unwrap_or(self.code.len());
         self.code[self.entries[fid]..hi].iter().any(|i| matches!(i, Instr::PushThis | Instr::SuperCall(_) | Instr::SuperCallSpread))
@@ -9410,6 +9439,11 @@ impl Js {
             }
             // (A tree a closure given to runtime code was specialized to,
             // written since: see `MADE_HELD`.)
+            // (A prototype relied on as one runtime code has not had, made
+            // a runtime object after: see `static_instanceof`.)
+            if self.unseen_violation.replace(false) {
+                added = true;
+            }
             let held_written = MADE_HELD.with(|w| std::mem::take(&mut *w.borrow_mut()).1);
             if !held_written.is_empty() {
                 self.made_refused.borrow_mut().extend(held_written);
@@ -10080,6 +10114,9 @@ impl Js {
     /// (`unpristine`, `no_unbox_fids`, React's) persists.
     fn reset_for_respecialization(&self) {
         self.residual_fns.borrow_mut().clear();
+        self.unseen_relied.borrow_mut().clear();
+        self.caught.borrow_mut().clear();
+        self.pass_made.borrow_mut().clear();
         self.result_arrays.borrow_mut().clear();
         self.fn_memo.borrow_mut().clear();
         self.fn_variant_memo.borrow_mut().clear();
@@ -10837,6 +10874,11 @@ fn set_resolves_statically(heap: &Heap, addr: usize, k: &str, ordinary: &dyn Fn(
             Abs::Undef => return intrinsics_pristine(matches!(o, HeapObj::Closure { .. })),
             Abs::Null => return true,
             Abs::Ref(p) => cur = *p,
+            // (A standard error prototype, as `ordinary` vouches for it:
+            // its `name` and `message` are writable data properties too,
+            // which an error subclass's `this.name = ...` shadows. Not
+            // `stack`, the runtime's.)
+            Abs::Dyn(e) if error_proto_name(e).is_some() => return ordinary(e) && k != "stack",
             Abs::Dyn(e) => return ordinary(e) && !matches!(k, "name" | "length" | "caller" | "arguments"),
             other => panic!("malformed [[Prototype]] {other:?}"),
         }
@@ -16282,7 +16324,24 @@ impl Js {
                         continue;
                     }
                     let (oc, cc) = (o.children(), c.children());
-                    if oc.len() == cc.len() && oc.iter().zip(cc.iter()).any(|(x, y)| x != y && (matches!(x, Abs::Ref(_)) || matches!(y, Abs::Ref(_)))) {
+                    // (Not where the object held at one visit is the one
+                    // whose runtime variable is held at the other: the
+                    // same object, the load code's, made a runtime value
+                    // in between (a machine's memory, written through a
+                    // view), which the merged state has as that variable.
+                    // (An object `main` made, one of any number: its
+                    // holder a runtime value too, as before.)
+                    // `PE_NO_SAME_ESCAPED_FIELD`: a change.)
+                    let same_escaped = |x: &Abs, y: &Abs| {
+                        !env_flag!("PE_NO_SAME_ESCAPED_FIELD")
+                            && match (x, y) {
+                                (Abs::Ref(a), Abs::Dyn(RExpr::Var(v))) | (Abs::Dyn(RExpr::Var(v)), Abs::Ref(a)) => {
+                                    entry_boundary_object(*a) && *v == self.escape_var(*a) && (g.escaped.contains(a) || seen.escaped.contains(a))
+                                }
+                                _ => false,
+                            }
+                    };
+                    if oc.len() == cc.len() && oc.iter().zip(cc.iter()).any(|(x, y)| x != y && (matches!(x, Abs::Ref(_)) || matches!(y, Abs::Ref(_))) && !same_escaped(x, y)) {
                         changed.push(*addr);
                     }
                 }
@@ -24079,10 +24138,90 @@ impl Js {
                 // handler does with an exception runtime code raised. There
                 // the answer decides that no runtime `try` is needed; in the
                 // program's code at large, a test the runtime makes anyway.)
+                if env_flag!("INSTANCEOF_DEBUG") {
+                    let what = match o {
+                        Abs::Ref(a) => format!("@{a} {}", format!("{:?}", s.heap.get(a)).chars().take(200).collect::<String>()),
+                        v => format!("{v:?}").chars().take(120).collect(),
+                    };
+                    eprintln!(
+                        "[INSTANCEOF] of prototype @{p}: value {what}; escaped here {}, boundary {}, hoisted {}, seen {}, made this pass {}",
+                        s.escaped.contains(&p),
+                        entry_boundary_object(p),
+                        entry_is_hoisted(p),
+                        self.seen_protos.borrow().contains(&p),
+                        self.pass_made.borrow().contains(&p)
+                    );
+                }
                 if matches!(o, Abs::Dyn(_)) && !s.escaped.contains(&p) && !env_flag!("PE_NO_UNSEEN_PROTO") {
                     if let Some(used) = self.foreign_protos.borrow_mut().as_mut() {
                         used.push(p);
                         return Some(false);
+                    }
+                    // (And of a value a handler was given, an exception the
+                    // program's own code threw (see `do_throw`), for the
+                    // load code's own prototype that no code of `main` has
+                    // made a runtime object, in this pass or an earlier
+                    // one, nor the load code holds as one: a handler run
+                    // for a runtime exception asks this of its signal
+                    // classes. Any other runtime value: a test the runtime
+                    // makes, as the note above says. Relied on
+                    // for the rest of the pass (`unseen_relied`): should
+                    // the prototype be made runtime after all, the pass is
+                    // run again with it known as seen.
+                    // `PE_NO_UNSEEN_PROTO_AT_LARGE`: asked at runtime.)
+                    let caught = matches!(o, Abs::Dyn(RExpr::Var(x)) if self.caught.borrow().contains(&(true, *x)));
+                    if !env_flag!("PE_NO_UNSEEN_PROTO_AT_LARGE")
+                        && caught
+                        && entry_boundary_object(p)
+                        && !entry_is_hoisted(p)
+                        && !self.seen_protos.borrow().contains(&p)
+                        && !self.pass_made.borrow().contains(&p)
+                    {
+                        self.unseen_relied.borrow_mut().insert(p);
+                        return Some(false);
+                    }
+                }
+                // (A modeled object whose chain of prototypes reaches a
+                // runtime one, an instance of a class that is a runtime
+                // value: an instance where `p` is before that one;
+                // otherwise as a runtime value is, above.)
+                if let Abs::Ref(a) = o {
+                    let mut cur = *a;
+                    let mut before: Vec<usize> = Vec::new();
+                    let mut runtime_tail = false;
+                    for _ in 0..10_000 {
+                        let proto = match s.heap.get(&cur) {
+                            Some(HeapObj::Object { proto, .. } | HeapObj::Closure { proto, known: true, .. }) => proto.clone(),
+                            _ => break,
+                        };
+                        match proto {
+                            Abs::Ref(q) => {
+                                before.push(q);
+                                cur = q;
+                            }
+                            Abs::Dyn(e) => {
+                                let standard = ["Object", "Array", "Function", "Map", "Set", "WeakMap", "WeakSet"].iter().any(|g| is_intrinsic_proto(&e, g)) || error_proto_name(&e).is_some();
+                                runtime_tail = !standard;
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                    if runtime_tail && self.caught.borrow().contains(&(false, *a)) {
+                        if before.contains(&p) {
+                            return Some(true);
+                        }
+                        if !s.escaped.contains(&p)
+                            && !env_flag!("PE_NO_UNSEEN_PROTO")
+                            && !env_flag!("PE_NO_UNSEEN_PROTO_AT_LARGE")
+                            && entry_boundary_object(p)
+                            && !entry_is_hoisted(p)
+                            && !self.seen_protos.borrow().contains(&p)
+                            && !self.pass_made.borrow().contains(&p)
+                        {
+                            self.unseen_relied.borrow_mut().insert(p);
+                            return Some(false);
+                        }
                     }
                 }
                 let (protos, _) = chain(s, o)?;
@@ -24283,7 +24422,7 @@ impl Js {
                 }
                 // `Object.assign` assigns (setters on the target run): only
                 // when every key assigns plainly.
-                if !all.iter().all(|(k, _)| k.as_str().is_some_and(|k| set_resolves_statically(&s.heap, t, k, &|e| self.ordinary_value(e) || self.react_data_proto(s, e), &|f| self.intrinsic_protos_pristine(f)))) {
+                if !all.iter().all(|(k, _)| k.as_str().is_some_and(|k| set_resolves_statically(&s.heap, t, k, &|e| self.ordinary_value(e) || self.react_data_proto(s, e) || self.standard_error_proto(e), &|f| self.intrinsic_protos_pristine(f)))) {
                     return None;
                 }
                 for (k, v) in all {
@@ -25939,7 +26078,7 @@ impl Js {
                         if k == "prototype" {
                             self.ensure_prototype(s, addr);
                         }
-                        set_resolves_statically(&s.heap, addr, k, &|e| self.ordinary_value(e) || self.react_data_proto(s, e), &|f| self.intrinsic_protos_pristine(f))
+                        set_resolves_statically(&s.heap, addr, k, &|e| self.ordinary_value(e) || self.react_data_proto(s, e) || self.standard_error_proto(e), &|f| self.intrinsic_protos_pristine(f))
                     } =>
             {
                 let v = self.emit_if_maythrow(s, pc, 0, v, out);
@@ -28245,6 +28384,16 @@ impl Js {
         match s.handlers.pop() {
             Some(h) => {
                 s.frames.truncate(h.frame_depth);
+                // (What a handler is given: see `static_instanceof`.)
+                match &v {
+                    Abs::Dyn(RExpr::Var(x)) => {
+                        self.caught.borrow_mut().insert((true, *x));
+                    }
+                    Abs::Ref(a) => {
+                        self.caught.borrow_mut().insert((false, *a));
+                    }
+                    _ => {}
+                }
                 let f = s.frames.last_mut().unwrap();
                 f.ostack.truncate(h.ostack_depth);
                 if let Some(slot) = h.exc_slot {
@@ -28252,6 +28401,16 @@ impl Js {
                 }
                 f.pc = h.catch_pc;
                 Step::Continue
+            }
+            // (In the probe of a `try`'s region (see `try_folds`), run
+            // alone: the throw leaves the region for the handlers around
+            // it, where the run it stands for takes it. Its path ends here
+            // with nothing made: making the thrown object would record the
+            // load code's class of it as a runtime object (`EntryWatch`),
+            // which the run never makes. `PE_PROBE_THROW_MAKES`: made.)
+            None if self.probing.get() && !env_flag!("PE_PROBE_THROW_MAKES") => {
+                self.bounded_halt.set(true);
+                Step::Halt
             }
             None => {
                 let mut v = v;
@@ -30617,6 +30776,18 @@ impl Js {
         }
         s.escaped.extend(made.keys().copied());
         escaped.extend(made.keys().copied());
+        // (The load code's objects made runtime ones this pass, and those
+        // among them a test relied on runtime code not having: see
+        // `static_instanceof`.)
+        if entry_boundary_object(0) || made.keys().any(|a| entry_boundary_object(*a)) {
+            let mut pass_made = self.pass_made.borrow_mut();
+            for a in made.keys().filter(|a| entry_boundary_object(**a)) {
+                pass_made.insert(*a);
+                if self.unseen_relied.borrow().contains(a) && self.seen_protos.borrow_mut().insert(*a) {
+                    self.unseen_violation.set(true);
+                }
+            }
+        }
         // (A prototype a transparent handler counts on runtime code not
         // having (see `rethrows_foreign`) now made runtime: a runtime
         // exception may inherit it, which that handler would handle. The

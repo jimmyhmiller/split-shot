@@ -1544,6 +1544,31 @@ impl<'a> Pta<'a> {
         Some(out)
     }
 
+    /// Does `Object.defineProperty(o, k, {value: v, ...})` leave the
+    /// boundary object `o` names as the snapshot has it (see `restores`:
+    /// the property it has there under `k`, of those attributes, holding
+    /// what `v` is)? Materialization's own filling of the object it
+    /// makes: a class's `prototype`, that one's `constructor`.
+    fn redefines_as_made(&mut self, path: &str, _args: &[Pts]) -> bool {
+        if std::env::var("PE_NO_PTS_REDEFINE").is_ok() || !matches!(path, "Object.defineProperty" | "Reflect.defineProperty") {
+            return false;
+        }
+        let exprs = self.arg_exprs.clone();
+        let (Some(obj), Some(RExpr::Str(k)), Some(RExpr::ObjectLit(fields))) = (exprs.first(), exprs.get(1), exprs.get(2)) else { return false };
+        let field = |name: &str| fields.iter().find(|(f, _)| f == name).map(|(_, v)| v);
+        if field("get").is_some() || field("set").is_some() {
+            return false;
+        }
+        let Some(val) = field("value") else { return false };
+        let Some(b) = self.restores(obj, k, val) else { return false };
+        // (Of the attributes it has there.)
+        let Loc::B(a) = self.locs[b as usize] else { return false };
+        let Some(attrs) = self.snapshot.get(&a).and_then(|o| o.own(k)).map(|p| p.attrs) else { return false };
+        let flag = |name: &str| matches!(field(name), Some(RExpr::Bool(true)));
+        let given = (if flag("writable") { super::WRITABLE } else { 0 }) | (if flag("enumerable") { super::ENUMERABLE } else { 0 }) | (if flag("configurable") { super::CONFIGURABLE } else { 0 });
+        given == attrs
+    }
+
     /// A standard function, by its path.
     fn static_call(&mut self, path: &str, args: &[Pts]) -> Pts {
         match path {
@@ -1627,7 +1652,15 @@ impl<'a> Pta<'a> {
         }
         if mutating {
             if let Some(first) = args.first() {
-                self.write(first);
+                // (A definition that gives a boundary object the property
+                // it has at the boundary, holding the boundary object it
+                // holds: `main` making its own copy of a load-time class
+                // (its `prototype`, that one's `constructor`), no change
+                // of what the load code made. `PE_NO_PTS_REDEFINE`: a
+                // write.)
+                if !self.redefines_as_made(path, args) {
+                    self.write(first);
+                }
                 // (`assign` copies what the others hold, getters run.)
                 let mut more: Pts = args.iter().skip(1).flatten().copied().collect();
                 if matches!(path, "Object.assign" | "Reflect.set") {
@@ -1872,6 +1905,19 @@ impl<'a> Pta<'a> {
     fn restores(&mut self, obj: &RExpr, k: &str, val: &RExpr) -> Option<u32> {
         let RExpr::Var(o) = obj else { return None };
         let a = *self.names.get(o)?;
+        // (Its prototype, set to the one it has there: a class's parent.)
+        if k == "__proto__" {
+            let proto = match self.snapshot.get(&a)? {
+                HeapObj::Object { proto, .. } | HeapObj::Closure { proto, .. } => proto.clone(),
+                _ => return None,
+            };
+            let same = match (&proto, val) {
+                (Abs::Dyn(e), v) => e == v,
+                (Abs::Ref(b), RExpr::Var(w)) => self.names.get(w) == Some(b),
+                _ => false,
+            };
+            return same.then(|| self.id(Loc::B(a)));
+        }
         let prop = self.snapshot.get(&a)?.props()?.iter().find(|p| p.key.as_str() == Some(k))?;
         let PVal::Data(held) = &prop.val else { return None };
         let same = match (held, val) {
