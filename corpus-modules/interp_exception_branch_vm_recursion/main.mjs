@@ -5,11 +5,17 @@
 // same function stalls and becomes a residual function specialized to its
 // index, its argument list passed by its elements. Its receiver is the
 // machine: the load code's object, known to the function and not passed
-// (`data_receivers`) once what the recursion carries in it, the call
-// stack, is runtime state from the boundary on. The first pass finds
-// that, and is abandoned for one that begins so (`pass_abandoned`). What
-// remains of the interpreter is that bookkeeping: a frame pushed and
-// popped around each call, in a `try`.
+// (`data_receivers`), though what the recursion carries in it, the call
+// stack, is one frame longer at each call. That array only grows at its
+// end and the residual never reads it: it is the model's alone
+// (`EntrySplit::open`). The residual function's body has it open, what
+// its callers pushed unknown and its own frame known at the end
+// (`OPEN_ARRAY`): the frame it pushes and pops, in a `finally`, are the
+// model's steps, the body leaves the array as it found it, and its
+// callers count on that. Nothing of the interpreter remains: no call
+// stack, no `try`, the locals in variables. The first pass finds the
+// array, and is abandoned for one that begins with it so
+// (`pass_abandoned`).
 class Branch {
   constructor(depth) {
     this.depth = depth;

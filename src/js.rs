@@ -1849,6 +1849,24 @@ struct EntrySplit {
     /// state whole (`dynamic`) in the next pass.
     /// `PE_NO_FIELD_CELLS`: none, the object runtime state whole.
     cells: std::cell::RefCell<std::collections::BTreeSet<(usize, String)>>,
+    /// The boundary's arrays that a recursion of the interpreted program
+    /// carries, each call one element longer (an interpreter's call stack),
+    /// and that the residual never needs: no array at runtime at all. To
+    /// `main`, whose calls find it as the load code left it and leave it
+    /// so, it is the model's array as ever. A residual function that knows
+    /// the receiver holding it as the load code's data (see
+    /// `data_receivers`) is called with it at any length: its body has it
+    /// as an open array (`OPEN_ARRAY`), what its callers pushed unknown,
+    /// and must leave it as it found it (checked where the body ends,
+    /// `entry_check_heap_from`), which its callers count on, their own
+    /// model of it unchanged by the call. Whatever would need the array at
+    /// runtime (an open one made a runtime value or read where the model
+    /// does not know it, a closed one made a runtime value, a length token
+    /// in the residual) is a violation (`open_violations`): the array is
+    /// runtime state from the boundary on in the next pass (`dynamic`), as
+    /// before. `PE_NO_OPEN_ARRAYS`: always so.
+    open: std::cell::RefCell<std::collections::BTreeSet<usize>>,
+    open_violations: std::cell::RefCell<std::collections::BTreeSet<usize>>,
 }
 
 /// What the end states of a script's top-level code (several, after a
@@ -4924,6 +4942,10 @@ pub struct Js {
     /// receiver is the load code's unchanged object, known to them and not
     /// passed (see `residual_fn_for_args`), with that object.
     data_receivers: std::cell::RefCell<HashMap<usize, usize>>,
+    /// The variables that stand for an open array's length when it holds a
+    /// given number of known elements (see `open_token`): by variable, the
+    /// array and that number.
+    open_tokens: std::cell::RefCell<HashMap<usize, (usize, usize)>>,
     /// This pass found load-time objects a receiver's recursion carries
     /// changed (see `do_call`): it is run again with them runtime state.
     receiver_state_found: std::cell::Cell<bool>,
@@ -6373,6 +6395,7 @@ impl Js {
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             data_receivers: std::cell::RefCell::new(HashMap::new()),
+            open_tokens: std::cell::RefCell::new(HashMap::new()),
             receiver_state_found: std::cell::Cell::new(false),
             pass_abandoned: std::cell::Cell::new(false),
             result_arrays: std::cell::RefCell::new(HashMap::new()),
@@ -7827,6 +7850,56 @@ impl Js {
         Some(std::rc::Rc::new(MadeData { root: a, nodes }))
     }
 
+    /// The skeleton of a call's context (see `skeleton_of`), an object
+    /// that is the load code's, unchanged, by its identity: such an object
+    /// is a part of the program an interpreter runs (an instruction, a
+    /// node, a list of them), and another one of the same form is another
+    /// place in that program, where the same one again is its recursion.
+    /// (Two `call` instructions of one function index are objects of one
+    /// form: by form alone, an instruction function reaching the second
+    /// through the first had made no progress.)
+    /// (At any depth: the arms of two conditionals, lists an interpreter
+    /// made of the instructions of each, are lists of the same form of
+    /// different instructions.)
+    /// `PE_NO_BOUNDARY_SKELETONS`: by form.
+    fn context_skeleton(&self, s: &State, context: &[Abs]) -> Vec<Skel> {
+        if env_flag!("PE_NO_BOUNDARY_SKELETONS") {
+            return skeleton_of(&s.heap, context);
+        }
+        let place = |a: usize| {
+            entry_boundary_object(a)
+                && !s.escaped.contains(&a)
+                && matches!(s.heap.get(&a), Some(HeapObj::Object { class: ObjClass::Ordinary, .. } | HeapObj::Array(_)))
+                && entry_unchanged(a, s.heap.get(&a))
+        };
+        context.iter().map(|v| skel_of_places(&s.heap, v, 0, &place)).collect()
+    }
+
+    /// The length of the open array at `a` (see `OPEN_ARRAY`) while the
+    /// model knows `depth` elements at its end: a variable no code
+    /// assigns, the same wherever the array is that deep (its length is
+    /// what its callers left plus that number, whenever it is read). The
+    /// residual must not name it (see `entry_conflicts`).
+    fn open_token(&self, s: &mut State, a: usize, depth: usize) -> Abs {
+        let v = self.aux_var(131, a, depth);
+        self.open_tokens.borrow_mut().insert(v, (a, depth));
+        if !self.facts_off {
+            s.facts.insert(v, Info { nan: false, int: true, truthy: None, ..Info::of_types(crate::facts::T_NUM) });
+        }
+        Abs::Dyn(RExpr::Var(v))
+    }
+
+    /// The array at `a`, which the model alone holds (see
+    /// `EntrySplit::open`), is needed at runtime: runtime state from the
+    /// boundary on in the next pass.
+    fn open_violation(&self, a: usize, what: &str) {
+        if self.entry.open_violations.borrow_mut().insert(a) && env_flag!("OPEN_DEBUG") {
+            let bt = format!("{}", std::backtrace::Backtrace::force_capture());
+            let frames: Vec<&str> = bt.lines().filter(|l| l.contains("partial::js::") && !l.contains("open_violation")).take(8).map(|l| l.trim()).collect();
+            eprintln!("[OPEN] @{a}: {what} (probing {}): {}", self.probing.get(), frames.join(" < "));
+        }
+    }
+
     /// Is the object at `a` in `s` the load code's, as the boundary has it,
     /// as is everything it reaches, none of it a runtime value yet?
     fn boundary_data(&self, s: &State, a: usize) -> bool {
@@ -7842,6 +7915,11 @@ impl Js {
                 }
                 return false;
             };
+            // (An array the residual functions have open, whatever it
+            // holds here: see `EntrySplit::open`.)
+            if self.entry.open.borrow().contains(&x) && !s.escaped.contains(&x) && matches!(o, HeapObj::Array(_) | HeapObj::Builtin { .. }) {
+                continue;
+            }
             // (A final cell is what it was made, however it escaped.)
             let final_cell = matches!(o, HeapObj::Object { class: ObjClass::FinalCell { .. }, .. });
             if (s.escaped.contains(&x) && !final_cell) || !entry_unchanged(x, Some(o)) {
@@ -8062,6 +8140,13 @@ impl Js {
                 }
             };
         }
+        // (The arrays the model alone holds, as a residual function has
+        // them: what its callers pushed unknown. See `EntrySplit::open`.)
+        for a in self.entry.open.borrow().iter() {
+            if entry_boundary_object(*a) && matches!(start.heap.get(a), Some(HeapObj::Array(_))) {
+                start.heap.insert_quiet(*a, HeapObj::Builtin { kind: OPEN_ARRAY.into(), data: Vec::new().into(), ext: None });
+            }
+        }
         // (Its static context, which its own calls of itself are compared
         // with: see `do_call`.)
         if let Some(a) = receiver {
@@ -8074,7 +8159,7 @@ impl Js {
                 None => Abs::Dyn(RExpr::This),
             });
         }
-        start.frames[0].entry_skel = skeleton_of(&start.heap, &context).into();
+        start.frames[0].entry_skel = self.context_skeleton(&start, &context).into();
         let has_made = !made_addrs.is_empty();
         if has_records {
             self.record_building.borrow_mut().push((fid, Js::without_records(shapes)));
@@ -10202,6 +10287,21 @@ impl Js {
         if w.wild {
             self.entry.all_globals_dynamic.set(true);
         }
+        // (An array the model alone held that the residual needs after
+        // all, or whose length token it names: see `EntrySplit::open`.)
+        {
+            let mut open = self.entry.open.borrow_mut();
+            dynamic.extend(std::mem::take(&mut *self.entry.open_violations.borrow_mut()).into_iter().filter(|a| open.contains(a)));
+            let named: Vec<usize> = self
+                .open_tokens
+                .borrow()
+                .iter()
+                .filter(|(v, _)| std::iter::once(main).chain(code.iter().map(|&r| &fns[r].body)).any(|p| program_names_var(p, **v)))
+                .map(|(_, (a, _))| *a)
+                .collect();
+            dynamic.extend(named.into_iter().filter(|a| open.contains(a)));
+            open.retain(|a| !dynamic.contains(a));
+        }
         // (Runtime state whole, it has no property apart.)
         cells.retain(|(a, _)| !dynamic.contains(a));
         let cells_changed = cells.len() != cells_before;
@@ -11250,6 +11350,24 @@ fn proxy_or_bound_ops(js: &Js, kind: &str, dst: usize, addr: usize, parts: Vec<R
 /// name, length, ...args]`, `name` and `length` its own, as `bind` made
 /// them from `f`'s then.
 const BOUND_FUNCTION: &str = "BoundFunction";
+/// An array the model holds only the end of: an interpreter's call stack
+/// as a recursive function of the interpreted program has it, where it
+/// begins with whatever its callers pushed (unknown, and never read) and
+/// ends with what this activation pushed (its `data`, known). It exists
+/// only in the model: a push, a pop of what was pushed, its length (a
+/// token, see `Js::open_token`) and a read at a known distance from the
+/// end are the model's alone, and the residual has no array at all. See
+/// `EntrySplit::open`.
+const OPEN_ARRAY: &str = "OpenArray";
+
+/// How many elements the model knows at the end of the open array at `a`,
+/// if it is one.
+fn open_array_depth(heap: &Heap, a: usize) -> Option<usize> {
+    match heap.get(&a) {
+        Some(HeapObj::Builtin { kind, data, .. }) if kind == OPEN_ARRAY => Some(data.len()),
+        _ => None,
+    }
+}
 
 /// The well-known symbols the standard prototype of a modeled built-in of
 /// this kind has (and `Object.prototype`, which has none): with the string
@@ -12742,24 +12860,30 @@ const SKEL_DEPTH: usize = 4;
 const SKEL_WIDTH: usize = 16;
 
 fn skel_of(heap: &Heap, v: &Abs, depth: usize) -> Skel {
+    skel_of_places(heap, v, depth, &|_| false)
+}
+
+/// `skel_of`, an object `place` holds of by its identity at any depth
+/// (see `Js::context_skeleton`).
+fn skel_of_places(heap: &Heap, v: &Abs, depth: usize, place: &dyn Fn(usize) -> bool) -> Skel {
     match v {
         Abs::Dyn(_) => Skel::Dyn,
         Abs::Num(_) => Skel::Num,
-        Abs::Ref(p) if depth >= SKEL_DEPTH => Skel::Ref(*p),
+        Abs::Ref(p) if depth >= SKEL_DEPTH || place(*p) => Skel::Ref(*p),
         Abs::Ref(p) => match heap.get(p) {
             Some(HeapObj::Array(xs)) if xs.len() <= SKEL_WIDTH => {
-                Skel::Arr(xs.len(), xs.iter().map(|x| skel_of(heap, x, depth + 1)).collect())
+                Skel::Arr(xs.len(), xs.iter().map(|x| skel_of_places(heap, x, depth + 1, place)).collect())
             }
             Some(o @ HeapObj::Object { props, .. }) if props.len() <= SKEL_WIDTH => {
                 // Labeled by property key (and kind and attributes), so two
                 // skeletons agree only on the same shape; the prototype last.
                 let labels = obj_cell_labels(o);
                 Skel::Obj(
-                    labels.into_iter().zip(o.children()).map(|(k, x)| (k, skel_of(heap, x, depth + 1))).collect(),
+                    labels.into_iter().zip(o.children()).map(|(k, x)| (k, skel_of_places(heap, x, depth + 1, place))).collect(),
                 )
             }
             Some(o @ HeapObj::Closure { fid, captured, props, .. }) if captured.len() + props.len() <= SKEL_WIDTH => {
-                Skel::Clo(*fid, o.children().into_iter().map(|x| skel_of(heap, x, depth + 1)).collect())
+                Skel::Clo(*fid, o.children().into_iter().map(|x| skel_of_places(heap, x, depth + 1, place)).collect())
             }
             // (A map keyed by strings, all live: as an object of those
             // keys is. An interpreter's environment made anew at each call
@@ -12776,7 +12900,7 @@ fn skel_of(heap: &Heap, v: &Abs, depth: usize) -> Skel {
                         .iter()
                         .map(|e| {
                             let Abs::Str(k) = &e[0] else { unreachable!("a string key") };
-                            (format!("map {k}"), skel_of(heap, &e[1], depth + 1))
+                            (format!("map {k}"), skel_of_places(heap, &e[1], depth + 1, place))
                         })
                         .collect(),
                 )
@@ -15007,6 +15131,15 @@ impl Js {
                             elems.push(v);
                         }
                     }
+                    // (An open array: one more element known at its end.
+                    // See `OPEN_ARRAY`.)
+                    Abs::Ref(addr) if open_array_depth(&s.heap, addr).is_some() && self.pristine("Array") => {
+                        if let Some(HeapObj::Builtin { data, .. }) = s.heap.get_mut(&addr) {
+                            let mut tail = data.to_vec();
+                            tail.push(v);
+                            *data = tail.into();
+                        }
+                    }
                     // (A choice holding its arrays alone: on each, see
                     // `choice_array_mutate`.)
                     Abs::Ref(addr) if matches!(&s.heap[&addr], HeapObj::Choice { .. }) && self.choice_array_mutate(s, "push", addr, std::slice::from_ref(&v), pc).is_some() => {}
@@ -15048,6 +15181,32 @@ impl Js {
                 self.advance(s)
             }
             Instr::GetIndex => {
+                // (An open array read at a known distance from its end:
+                // `a[a.length - 1]`. See `OPEN_ARRAY`.)
+                if let [.., Abs::Ref(a), Abs::Dyn(i)] = s.top().ostack.as_slice() {
+                    if let Some(depth) = open_array_depth(&s.heap, *a) {
+                        let a = *a;
+                        let at = match i {
+                            RExpr::Bin(Bop::Sub, t, k) => match (&**t, &**k) {
+                                (RExpr::Var(t), RExpr::Num(k)) => self.open_tokens.borrow().get(t).copied().filter(|(b, _)| *b == a).and_then(|(_, d)| {
+                                    let k = k.as_index()?;
+                                    d.checked_sub(k).filter(|at| k >= 1 && *at < depth)
+                                }),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let Some(at) = at {
+                            let v = match s.heap.get(&a) {
+                                Some(HeapObj::Builtin { data, .. }) => data.to_vec()[at].clone(),
+                                _ => unreachable!("an open array"),
+                            };
+                            let n = s.top().ostack.len();
+                            s.top_mut().ostack.truncate(n - 2);
+                            return self.push(s, v);
+                        }
+                    }
+                }
                 if let Some(step) = self.trick_index(s, pc, out) {
                     return step;
                 }
@@ -23235,6 +23394,46 @@ impl Js {
                 if let Some(method) = kind.strip_prefix("Array.") {
                     if let Some(Abs::Ref(arr_addr)) = data.first() {
                         let arr_addr = *arr_addr;
+                        // (Of an open array: what it knows of its end
+                        // pushed to or popped. A pop of what it does not
+                        // know is no step of the model's.)
+                        if let Some(depth) = open_array_depth(&s.heap, arr_addr) {
+                            let known = match s.heap.get_mut(&arr_addr) {
+                                Some(HeapObj::Builtin { data, .. }) => {
+                                    let mut tail = data.to_vec();
+                                    let v = match method {
+                                        "push" => {
+                                            tail.extend(args.iter().cloned());
+                                            Some(None)
+                                        }
+                                        "pop" if depth > 0 => Some(tail.pop()),
+                                        _ => None,
+                                    };
+                                    if v.is_some() {
+                                        *data = tail.into();
+                                    }
+                                    v
+                                }
+                                _ => None,
+                            };
+                            match known {
+                                Some(v) => {
+                                    let v = match v {
+                                        Some(v) => v,
+                                        None => self.open_token(s, arr_addr, depth + args.len()),
+                                    };
+                                    s.top_mut().pc += 1;
+                                    s.top_mut().ostack.push(v);
+                                    return Step::Continue;
+                                }
+                                None => {
+                                    self.open_violation(arr_addr, "a pop of what its callers pushed");
+                                    s.top_mut().pc += 1;
+                                    s.top_mut().ostack.push(Abs::Undef);
+                                    return Step::Continue;
+                                }
+                            }
+                        }
                         let v = match s.heap.get_mut(&arr_addr) {
                             Some(HeapObj::Array(a)) => array_pop_shift(a, method),
                             _ => panic!("bound array method on a non-array: {kind}"),
@@ -23944,7 +24143,7 @@ impl Js {
                 _ => Abs::Dyn(RExpr::This),
             });
         }
-        let mut now = skeleton_of(&s.heap, &context);
+        let mut now = self.context_skeleton(s, &context);
         // (A number given for a parameter that indexes a static array
         // (see `dispatch_slots`: which function of a module a VM's
         // `invoke(funcs, index, args)` runs) is a place in the program,
@@ -24047,6 +24246,19 @@ impl Js {
                             && !skel_progress(&f.entry_skel, &now)
                             && chain[i..].iter().any(|g| g.branched)
                             && !(list_callback && chain[i + 1..].iter().any(|g| walker(g)))
+                            // (Nor while the recursion has passed, since
+                            // that activation, through one of another
+                            // function entered at a place number (which
+                            // of a module's functions `callFunction(index,
+                            // args)` runs): that function's next call is
+                            // weighed against it, and it is the one
+                            // specialized to a place in the program. An
+                            // instruction function met again inside the
+                            // function it called is not where the
+                            // interpreted recursion is cut.
+                            // `PE_NO_PLACE_FUNCTION_DEFERS`: weighed here.)
+                            && (env_flag!("PE_NO_PLACE_FUNCTION_DEFERS")
+                                || !chain[i + 1..].iter().any(|g| g.func != fid && g.entry_skel.iter().any(|k| matches!(k, Skel::Prim(Abs::Num(_))))))
                     })));
         // (A call at another place number than every active activation of
         // the function (which of a module's functions `callFunction(funcIdx,
@@ -24249,6 +24461,31 @@ impl Js {
                         }
                         let mut dynamic = self.entry.dynamic.borrow_mut();
                         for x in changed {
+                            // (An array that only grew at its end: held
+                            // by the model alone, open to the residual
+                            // functions. See `EntrySplit::open`.)
+                            let grew = match (s.heap.get(&x), ENTRY_WATCH.with(|w| w.borrow().as_ref().and_then(|w| w.snapshot.get_shared(&x).cloned()))) {
+                                (Some(HeapObj::Array(now)), Some(was)) => match &*was {
+                                    HeapObj::Array(was) => {
+                                        now.holes.is_empty()
+                                            && was.holes.is_empty()
+                                            && now.props == was.props
+                                            && now.proto == was.proto
+                                            && now.frozen == was.frozen
+                                            && now.len() >= was.len()
+                                            && now.iter().zip(was.iter()).all(|(a, b)| a == b)
+                                    }
+                                    _ => false,
+                                },
+                                _ => false,
+                            };
+                            if grew && !env_flag!("PE_NO_OPEN_ARRAYS") && !dynamic.contains(&x) {
+                                if self.entry.open.borrow_mut().insert(x) {
+                                    self.receiver_state_found.set(true);
+                                    self.pass_abandoned.set(true);
+                                }
+                                continue;
+                            }
                             if dynamic.insert(x) {
                                 self.receiver_state_found.set(true);
                                 // (What this pass makes from here on is
@@ -26709,6 +26946,23 @@ impl Js {
             self.escape_choice_at(s, 0, out);
         }
         let o = s.top_mut().ostack.pop().unwrap();
+        // (An open array: its length a token, its `push` and `pop` the
+        // model's. See `OPEN_ARRAY`.)
+        if let Abs::Ref(a) = &o {
+            if let Some(depth) = open_array_depth(&s.heap, *a) {
+                match k.as_str() {
+                    "length" => {
+                        let t = self.open_token(s, *a, depth);
+                        return self.push(s, t);
+                    }
+                    "push" | "pop" if self.pristine("Array") => {
+                        let b = s.alloc(HeapObj::Builtin { kind: format!("Array.{k}"), data: vec![o.clone()].into(), ext: None });
+                        return self.push(s, Abs::Ref(b));
+                    }
+                    _ => {}
+                }
+            }
+        }
         // A property of `null` or `undefined`, read in a `try`: a TypeError,
         // worded as the engine words it, that the handler catches now.
         if matches!(o, Abs::Null | Abs::Undef) && !s.handlers.is_empty() && self.pristine("TypeError") {
@@ -29225,6 +29479,19 @@ impl Js {
         }
     }
 
+    /// Whether the object at `addr`, made a runtime value now, is an array
+    /// the model alone holds (see `EntrySplit::open`): an open one in a
+    /// residual function's body, or the boundary's own while `main` runs.
+    /// There is no such array at runtime: a violation, and in its place a
+    /// variable no code assigns (the pass is run again without it).
+    fn open_made(&self, addr: usize, heap: &Heap) -> bool {
+        let open = open_array_depth(heap, addr).is_some();
+        if open || (self.entry.open.borrow().contains(&addr) && entry_boundary_object(addr) && matches!(heap.get(&addr), Some(HeapObj::Array(_)))) {
+            self.open_violation(addr, "made a runtime value");
+        }
+        open
+    }
+
     fn mat_inline_obj(
         &self,
         dst: usize,
@@ -29233,6 +29500,11 @@ impl Js {
         out: &mut Vec<Op>,
         seen: &mut HashMap<usize, usize>,
     ) {
+        // (An array the model alone holds: see `open_made`.)
+        if self.open_made(addr, heap) {
+            out.push(Op::Assign { var: dst, expr: RExpr::Var(self.aux_var(132, addr, 0)) });
+            return;
+        }
         // (One the load code made: see `mat_obj`.)
         if let Some((var, added)) = entry_hoisted_now(addr, heap.get(&addr)) {
             if var != dst {
@@ -30086,6 +30358,11 @@ impl Js {
         seen: &mut HashMap<usize, usize>,
     ) {
         record_watch_note(addr);
+        // (An array the model alone holds: see `open_made`.)
+        if self.open_made(addr, heap) {
+            shells.push(Op::Assign { var: dst, expr: RExpr::Var(self.aux_var(132, addr, 0)) });
+            return;
+        }
         // (One the load code made: that object, see `EntryWatch::hoisted`.)
         if let Some((var, added)) = entry_hoisted_now(addr, heap.get(&addr)) {
             if var != dst {
