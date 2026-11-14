@@ -24029,8 +24029,18 @@ impl Js {
         let dynamic_recursion = recursive
             && !leaf_call
             && !program_list_call
+            // (Weighed where the call is under dynamic control, or an
+            // activation between the earlier one and it is marked as one
+            // that branched: one whose callee branched and came back (see
+            // `Instr::Return`) is so marked and not itself under dynamic
+            // control, nor is what it calls next. A path of that callee
+            // that left another way, an exception thrown past the caller
+            // (an interpreted `return` under a condition), never comes
+            // here: what the caller does next the condition decides, and a
+            // recursive call made there was unfolded without end.
+            // `PE_RECURSION_NEEDS_DYN_CTL`: only under dynamic control.)
             && (all_dynamic_stuck
-                || (s.top().dyn_ctl
+                || ((s.top().dyn_ctl || !env_flag!("PE_RECURSION_NEEDS_DYN_CTL"))
                     && !context.is_empty()
                     && chain.iter().enumerate().any(|(i, f)| {
                         f.func == fid

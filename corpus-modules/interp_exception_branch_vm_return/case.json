@@ -1,0 +1,6 @@
+{
+  "entry": "main.mjs",
+  "inputs": [{ "n": 0 }, { "n": 1 }, { "n": 2 }, { "n": 7 }, { "n": 15 }, { "n": -3 }, { "n": 27 }],
+  "repeat": true,
+  "forbid": "\"(br_if|get|set|const|block|loop|if|call|ret|rem)\"|\\bBranch\\b|\\bReturn\\b|\\bextract\\b|\\bskip\\b"
+}
