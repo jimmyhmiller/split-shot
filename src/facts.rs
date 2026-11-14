@@ -211,11 +211,21 @@ pub struct Info {
     /// runs: a pending read of the value's property of any key stands for
     /// it (see `Js::freeze_readers`).
     pub made_by: Option<std::rc::Rc<str>>,
+    /// The value is a Number that is an integer (finite, no fraction): the
+    /// result of a bitwise operator or shift, or an integer constant. With
+    /// bounds, it is one of finitely many values (see `Js::trick_index`).
+    pub int: bool,
+    /// Conditions that hold when the value is truthy: of `c ? x : c` (an
+    /// `&&` whose value was put in a variable), `c` and `x`. Pure tests of
+    /// variables and constants; dropped, as `cases`, when a variable they
+    /// mention is assigned (see `mentions`). A branch on the variable
+    /// learns them (see `learn`).
+    pub when_true: Vec<RExpr>,
 }
 
 impl Info {
     pub fn top() -> Info {
-        Info { types: T_ALL, lo: None, hi: None, nan: true, truthy: None, eq: None, ne: Vec::new(), cases: None, fixed: Vec::new(), props: Vec::new(), callee: None, ordinary: false, made_by: None }
+        Info { types: T_ALL, lo: None, hi: None, nan: true, truthy: None, eq: None, ne: Vec::new(), cases: None, fixed: Vec::new(), props: Vec::new(), callee: None, ordinary: false, made_by: None, int: false, when_true: Vec::new() }
     }
 
     pub fn of_types(types: u16) -> Info {
@@ -240,6 +250,7 @@ impl Info {
                 i.hi = i.lo;
                 i.nan = false;
                 i.truthy = Some(n.truthy());
+                i.int = n.f().is_finite() && n.f().fract() == 0.0;
             }
             RExpr::Str(s) => {
                 i.types = T_STR;
@@ -321,6 +332,8 @@ impl Info {
             callee: if self.callee == o.callee { self.callee.clone() } else { None },
             ordinary: self.ordinary && o.ordinary,
             made_by: if self.made_by == o.made_by { self.made_by.clone() } else { None },
+            int: self.int && o.int,
+            when_true: if self.when_true == o.when_true { self.when_true.clone() } else { Vec::new() },
         }
     }
 
@@ -561,7 +574,17 @@ pub fn info_of(e: &RExpr, lookup: Lookup, typed_fns: &[&str]) -> Info {
             match c.truthiness() {
                 Some(true) => x,
                 Some(false) => y,
-                None => Info::choice(&xs[0], x, y),
+                None => {
+                    let mut i = Info::choice(&xs[0], x, y);
+                    // (`c ? x : c`: truthy only where `c` and `x` are.
+                    // Tests of variables and constants alone: what they
+                    // read is what an assignment is seen to change.)
+                    let plain = |e: &RExpr| !crate::js::rexpr_contains(e, &|x| !matches!(x, RExpr::Var(_) | RExpr::Num(_) | RExpr::Str(_) | RExpr::Bool(_) | RExpr::Null | RExpr::Undef | RExpr::Bin(..)));
+                    if xs[2] == xs[0] && plain(&xs[0]) && plain(&xs[1]) {
+                        i.when_true = vec![xs[0].clone(), xs[1].clone()];
+                    }
+                    i
+                }
             }
         }
         RExpr::Opaque(op, xs) => {
@@ -711,12 +734,12 @@ fn bin_info(op: Bop, a: &Info, b: &Info) -> Info {
         }
         Bop::BitAnd | Bop::BitOr | Bop::BitXor | Bop::Shl | Bop::Shr => {
             if numeric == T_NUM {
-                Info { lo: Bound::incl(-2147483648.0), hi: Bound::incl(2147483647.0), nan: false, ..Info::of_types(T_NUM) }
+                Info { lo: Bound::incl(-2147483648.0), hi: Bound::incl(2147483647.0), nan: false, int: true, ..Info::of_types(T_NUM) }
             } else {
                 Info::of_types(T_NUM | T_BIGINT)
             }
         }
-        Bop::UShr => Info { lo: Bound::incl(0.0), hi: Bound::incl(4294967295.0), nan: false, ..Info::of_types(T_NUM) },
+        Bop::UShr => Info { lo: Bound::incl(0.0), hi: Bound::incl(4294967295.0), nan: false, int: true, ..Info::of_types(T_NUM) },
     }
 }
 
@@ -927,7 +950,7 @@ impl Info {
         };
         // (What it equals or not, its frozen and known properties, and what
         // it knows of a function, as much as its cases.)
-        self.eq.iter().chain(self.ne.iter()).any(&expression)
+        self.eq.iter().chain(self.ne.iter()).chain(self.when_true.iter()).any(&expression)
             || self.fixed.iter().any(|(_, e)| expression(e))
             || self.props.iter().any(|(_, i)| i.mentions(v))
             || self.cases.as_ref().is_some_and(|c| expression(&c.0) || c.1.mentions(v) || c.2.mentions(v))
@@ -948,7 +971,7 @@ impl Info {
     /// exactly what it looks at, in no particular order, perhaps repeated).
     pub fn mention_vars(&self, out: &mut Vec<usize>) {
         let e = |x: &RExpr, out: &mut Vec<usize>| crate::coalesce::rexpr_vars(x, out);
-        self.eq.iter().chain(self.ne.iter()).for_each(|x| e(x, out));
+        self.eq.iter().chain(self.ne.iter()).chain(self.when_true.iter()).for_each(|x| e(x, out));
         self.fixed.iter().for_each(|(_, x)| e(x, out));
         for (_, i) in &self.props {
             i.mention_vars(out);
@@ -1099,14 +1122,21 @@ pub fn learn(facts: &mut Facts, cond: &RExpr, truth: bool, typed_fns: &[&str]) {
         }
     }
     match cond {
-        RExpr::Var(v) => refine(facts, *v, |i| {
-            i.truthy = Some(truth);
-            if truth {
-                i.types &= !(T_UNDEF | T_NULL);
-            } else {
-                i.types &= !(T_OBJ | T_FUNC | T_SYM);
+        RExpr::Var(v) => {
+            // (What holds when it is truthy: see `Info::when_true`.)
+            let then: Vec<RExpr> = if truth { facts.get(v).map(|i| i.when_true.clone()).unwrap_or_default() } else { Vec::new() };
+            refine(facts, *v, |i| {
+                i.truthy = Some(truth);
+                if truth {
+                    i.types &= !(T_UNDEF | T_NULL);
+                } else {
+                    i.types &= !(T_OBJ | T_FUNC | T_SYM);
+                }
+            });
+            for c in &then {
+                learn(facts, c, true, typed_fns);
             }
-        }),
+        }
         RExpr::Opaque(op, xs) => match (op.as_str(), xs.as_slice()) {
             ("!", [e]) => learn(facts, e, !truth, typed_fns),
             ("&&", [a, b]) if truth => {
@@ -1134,10 +1164,20 @@ pub fn learn(facts: &mut Facts, cond: &RExpr, truth: bool, typed_fns: &[&str]) {
                 }
             }
             // `c ? x : y` with one arm truthy and the other falsy: as `c`.
+            // (`c ? x : c` is `c && x`, and `c ? c : y` is `c || y`: the
+            // forms an if-converted `&&` and `||` take.)
             ("?:", [c, x, y]) => {
                 let t = |e: &RExpr| Info::of_const(e).and_then(|i| i.truthy);
                 match (t(x), t(y)) {
                     (Some(a), Some(b)) if a != b => learn(facts, c, if a { truth } else { !truth }, typed_fns),
+                    _ if y == c && truth => {
+                        learn(facts, c, true, typed_fns);
+                        learn(facts, x, true, typed_fns);
+                    }
+                    _ if x == c && !truth => {
+                        learn(facts, c, false, typed_fns);
+                        learn(facts, y, false, typed_fns);
+                    }
                     _ => {}
                 }
             }

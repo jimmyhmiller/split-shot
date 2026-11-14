@@ -10366,7 +10366,7 @@ fn reads_prop(e: &RExpr, key: &str) -> bool {
 
 /// Does `e` contain a subexpression satisfying `pred` (e.g. a read of a location
 /// that is about to be written)?
-fn rexpr_contains(e: &RExpr, pred: &dyn Fn(&RExpr) -> bool) -> bool {
+pub(crate) fn rexpr_contains(e: &RExpr, pred: &dyn Fn(&RExpr) -> bool) -> bool {
     if pred(e) {
         return true;
     }
@@ -16184,6 +16184,9 @@ impl Js {
                                 fstate.pending_joins.push(j);
                             }
                         }
+                        if env_flag!("LEARN_DEBUG") {
+                            eprintln!("[LEARN] pc={pc} in {}: branch on {r:?}; as written {original:?}; computed {computed:?}; condition variable {cond_var:?}", self.names[s.top().func]);
+                        }
                         if cond_var.is_some() && original != r {
                             crate::facts::learn(&mut tstate.facts, &original, false, self.typed_intrinsics());
                             crate::facts::learn(&mut fstate.facts, &original, true, self.typed_intrinsics());
@@ -16506,7 +16509,7 @@ impl Js {
     /// otherwise the same and the loop ties; an object's identity facts are
     /// finitely many.
     fn identity_info(full: Info) -> Info {
-        Info { types: full.types, callee: full.callee, fixed: full.fixed, ordinary: full.ordinary, made_by: full.made_by, ..Info::top() }
+        Info { types: full.types, callee: full.callee, fixed: full.fixed, ordinary: full.ordinary, made_by: full.made_by, int: full.int, ..Info::top() }
     }
 
     /// Update `st`'s facts for the variables `ops` define, in order: an
@@ -16556,6 +16559,7 @@ impl Js {
                             }
                             let mut hull = i.clone();
                             hull.cases = None;
+                            hull.when_true.clear();
                             (!hull.mentions(*d) && !hull.is_top()).then_some((*k, hull))
                         })
                         .collect();
@@ -16914,11 +16918,29 @@ impl Js {
         if env_flag!("IFCONV_DEBUG") {
             eprintln!("[IFCONV] try pc={pc} probing={} handlers={} join={:?}", self.probing.get(), s.handlers.len(), self.if_join.get(pc).and_then(|j| j.as_ref()).map(|j| j.0));
         }
-        if self.facts_off || self.probing.get() || !s.handlers.is_empty() || env_flag!("PE_NO_IFCONV") {
+        if self.facts_off || env_flag!("PE_NO_IFCONV") {
             return None;
         }
         let (end, _) = self.if_join.get(pc)?.as_ref()?;
         let end = *end;
+        // (Under a `try`, or in the probe of one: only a short-circuiting
+        // operator whose operand computes with no call and no write, `idx
+        // >= 0 && idx < n`. It throws nothing a handler would take, the
+        // probe and the run it stands for convert it alike, and its value
+        // stays the condition it is, which a branch on it learns from: a
+        // variable merged at a join would tell that branch nothing.
+        // `PE_NO_IFCONV_IN_TRY`: none there.)
+        let in_try = self.probing.get() || !s.handlers.is_empty();
+        if in_try {
+            let plain = self.short_circuit[pc]
+                && !env_flag!("PE_NO_IFCONV_IN_TRY")
+                && !self.code[pc + 1..end].iter().any(|i| {
+                    matches!(i, Instr::Call(_) | Instr::CallMethod(_) | Instr::SetPropOp(_) | Instr::SetIndexOp | Instr::DeletePropOp(_) | Instr::JmpIfFalsy(_) | Instr::Jmp(_))
+                });
+            if !plain {
+                return None;
+            }
+        }
         if self.halt_at.borrow().iter().any(|&h| h > pc && h <= end) {
             return None;
         }
@@ -17117,7 +17139,12 @@ impl Js {
         let unsafe_at_join = |st: &State| -> bool {
             let before: std::collections::HashSet<&RExpr> =
                 s.frames.iter().flat_map(|f| f.values()).filter_map(|v| if let Abs::Dyn(e) = v { Some(e) } else { None }).collect();
-            let risky = |v: &Abs| matches!(v, Abs::Dyn(e) if !before.contains(e) && (self.throws(e) || converts_unknown(e)));
+            // (Under a `try` (see above), a conversion of a value the
+            // facts know to be a primitive runs no code: `idx < n` of a
+            // number. Elsewhere judged by the expression alone, as before.
+            // `PE_IFCONV_SYNTACTIC`: there too.)
+            let converts = |e: &RExpr| if !in_try || env_flag!("PE_IFCONV_SYNTACTIC") { converts_unknown(e) } else { self.converts_unknown_in(st, e) };
+            let risky = |v: &Abs| matches!(v, Abs::Dyn(e) if !before.contains(e) && (self.throws(e) || converts(e)));
             st.frames.iter().flat_map(|f| f.values()).any(risky)
                 || st.heap.iter().filter(|(a, o)| **a >= base || s.heap.get(a) != Some(*o)).any(|(_, o)| o.children().into_iter().any(risky))
         };
@@ -18001,13 +18028,40 @@ impl Js {
             }
         };
         let info = self.pending_info.borrow().get(&v).cloned().or_else(|| s.facts.get(&v).cloned());
+        // (An integer within bounds is one of the indices they leave: the
+        // last of them needs no test, and none left is no path at all
+        // (`idx >= 0 && idx < 2`, neither 0 nor 1). `PE_NO_INT_INDEX`:
+        // any number.)
+        let within = |i: usize| -> bool {
+            let Some(info) = info.as_ref() else { return true };
+            let x = i as f64;
+            info.lo.is_none_or(|b| if b.incl { x >= b.v.f() } else { x > b.v.f() }) && info.hi.is_none_or(|b| if b.incl { x <= b.v.f() } else { x < b.v.f() })
+        };
+        if env_flag!("TRICK_DEBUG") {
+            eprintln!(
+                "[TRICK] index at pc={pc}: {} cases, of the index (variable {v}, {}): {:?}; in the facts: {:?}; probing {}",
+                cases.len(),
+                if self.pending_info.borrow().contains_key(&v) { "pending" } else { "facts" },
+                info.as_ref().map(|i| (i.int, i.lo, i.hi, i.ne.clone(), i.eq.clone())),
+                s.facts.get(&v).map(|i| (i.int, i.lo, i.hi)),
+                self.probing.get()
+            );
+        }
+        let whole = !env_flag!("PE_NO_INT_INDEX")
+            && info.as_ref().is_some_and(|i| {
+                let n = cases.len() as f64;
+                i.int
+                    && i.lo.is_some_and(|b| if b.incl { b.v.f() > -1.0 } else { b.v.f() >= -1.0 })
+                    && i.hi.is_some_and(|b| if b.incl { b.v.f() < n } else { b.v.f() <= n })
+            });
         let decided = match info.as_ref().and_then(|i| i.eq.clone()) {
             Some(c) => Some(cases.iter().find(|(k, _)| *k == c).map(|(_, a)| a.clone()).unwrap_or(Abs::Undef)),
             None => {
-                let ne = info.map(|i| i.ne).unwrap_or_default();
-                let left: Vec<&(RExpr, Abs)> = cases.iter().filter(|(k, _)| !ne.contains(k)).collect();
+                let ne = info.as_ref().map(|i| i.ne.clone()).unwrap_or_default();
+                let left: Vec<&(RExpr, Abs)> = cases.iter().enumerate().filter(|(i, (k, _))| !ne.contains(k) && within(*i)).map(|(_, c)| c).collect();
                 match left.first() {
                     None => Some(Abs::Undef),
+                    Some((_, a)) if whole && left.len() == 1 => Some(a.clone()),
                     Some((k, _)) => {
                         {
                             let point = self.dispatch_point(s, s.top()).unwrap_or(0);
@@ -23769,8 +23823,12 @@ impl Js {
         if !env_flag!("PE_NO_INDEX_SKELETONS") && !env_flag!("PE_NO_DISPATCH_POINTS") {
             let ncap = self.ncaptured[fid];
             for (j, a) in args.iter().enumerate() {
+                // (Or one `arg_shapes` knows as a place: which of a
+                // module's functions `callFunction(funcIdx, args)` runs.
+                // `PE_NO_PROGRAM_INDEX_SKELETONS`: not those.)
                 let place = self.dispatch_jumps.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false)
-                    || self.drives_dispatch.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false);
+                    || self.drives_dispatch.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false)
+                    || (!env_flag!("PE_NO_PROGRAM_INDEX_SKELETONS") && self.dispatch_program.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false));
                 if place && matches!(a, Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0) && matches!(now.get(j), Some(Skel::Num)) {
                     now[j] = Skel::Prim(a.clone());
                 }
@@ -23850,6 +23908,22 @@ impl Js {
                             && chain[i..].iter().any(|g| g.branched)
                             && !(list_callback && chain[i + 1..].iter().any(|g| walker(g)))
                     })));
+        // (A call at another place number than every active activation of
+        // the function (which of a module's functions `callFunction(funcIdx,
+        // args)` runs) is no recursion of the interpreted program. As a
+        // residual function it would be given the receiver, and a receiver
+        // that carries state the call has changed (the interpreter's call
+        // stack, a frame pushed) would make that state runtime state for
+        // every call (see below); unfolded, it stays the model's. So such
+        // a call is unfolded where the receiver is one. Elsewhere it
+        // stalls as before, a residual function per place.
+        // `PE_NO_PLACE_CALL_UNFOLD`: stalls.)
+        let dynamic_recursion = dynamic_recursion && !(!all_dynamic_stuck && !env_flag!("PE_NO_PLACE_CALL_UNFOLD") && {
+            let place_differs = chain.iter().filter(|f| f.func == fid).all(|f| {
+                f.entry_skel.iter().zip(now.iter()).any(|(o, n)| matches!((o, n), (Skel::Prim(Abs::Num(a)), Skel::Prim(Abs::Num(b))) if a != b))
+            });
+            place_differs && matches!(&this, Abs::Ref(a) if entry_boundary_object(*a) && !self.boundary_data(s, *a))
+        });
         //
         // Shared specializations: a call under dynamic control whose context
         // (function and static skeleton of its arguments) was already inlined
@@ -32209,8 +32283,23 @@ impl Js {
                         };
                         eprintln!("[JOINMERGE] slot {slot} at {target}: {what}; a list of parts {}, under a place {}", matches!(v, Abs::Ref(a) if self.program_part_list(ns, *a)), self.under_place(ns));
                     }
+                    // (And a static number the arms left different, in a
+                    // handler an interpreter called for one instruction (an
+                    // activation at no place of its own, under one that is
+                    // at one): what a case over a branch table looked up,
+                    // `target = inRange ? labels[idx] : defaultLabel`, which
+                    // decides where the interpreted program goes. Merged, it
+                    // would be a runtime depth every block tests. Finitely
+                    // many: the table's entries. `PE_NO_HANDLER_NUMBERS`:
+                    // merged.)
+                    let handler_number = !env_flag!("PE_NO_HANDLER_NUMBERS")
+                        && !env_flag!("PE_NO_DISPATCH_POINTS")
+                        && matches!(&ns.frames[fi].locals[slot], Abs::Num(n) if n.0.fract() == 0.0)
+                        && self.dispatch_point(ns, &ns.frames[fi]).is_none()
+                        && self.under_place(ns);
                     !(node
                         || list
+                        || handler_number
                         || slot < self.drives_dispatch[func].len()
                             && self.drives_dispatch[func][slot]
                             && !ns.frames[fi].locals[slot].is_dynamic())
