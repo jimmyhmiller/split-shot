@@ -7965,6 +7965,26 @@ impl Js {
                 if fast {
                     return true;
                 }
+                // (And not the boundary's once a write changed something
+                // it reached there: what holds that object on the way from
+                // it is unchanged, or is itself what changed. With an open
+                // array among them, which the walk passes over, the walk
+                // answers.)
+                let changed = open.iter().all(|o| !reach.contains(o))
+                    && ENTRY_WATCH.with(|w| {
+                        w.borrow().as_ref().is_some_and(|w| {
+                            w.touched.iter().filter(|t| reach.contains(t)).any(|t| {
+                                w.written.contains(t)
+                                    || match (s.heap.get_shared(t), w.snapshot.get_shared(t)) {
+                                        (Some(o), Some(was)) => !(std::rc::Rc::ptr_eq(o, was) || **o == **was),
+                                        _ => false,
+                                    }
+                            })
+                        })
+                    });
+                if changed {
+                    return false;
+                }
             }
         }
         let mut reach = std::collections::HashSet::new();
@@ -9684,6 +9704,10 @@ impl Js {
         for _ in 0..MAX_PASSES {
             self.reset_for_respecialization();
             self.record_violation.set(false);
+            // (What a pass that was abandoned found needed at runtime of an
+            // array the model alone holds is no finding of this one: see
+            // `EntrySplit::open`.)
+            self.entry.open_violations.borrow_mut().clear();
             MADE_HELD.with(|w| *w.borrow_mut() = Default::default());
             if env_flag!("ARGVAR_DEBUG") || env_flag!("PASS_DEBUG") {
                 eprintln!("[PASS] begin (records off: {})", self.records_off.get());
@@ -17015,6 +17039,35 @@ impl Js {
     }
 
     /// The typed intrinsics, when the environment defines them.
+    /// What a read through a `DataView` gives (`view.getInt32(at, true)`,
+    /// the view one `new DataView(buffer)` made, `DataView` the standard
+    /// one, see `facts::Info::made_by`): a number, an integer for the
+    /// integer reads, whatever it is given. Known of the call's result as
+    /// the call is made (the call itself, given a value that may be an
+    /// object, drops what is known of the view). A function pointer an
+    /// interpreted program loads from its memory is then an integer, and
+    /// a table of functions it indexes, once it has checked the bounds,
+    /// one of finitely many: see `trick_index`.
+    /// `PE_NO_VIEW_READ_FACTS`: unknown.
+    fn view_read_info(&self, s: &State, callee: &Abs, this: &Abs) -> Option<Info> {
+        if self.facts_off || env_flag!("PE_NO_VIEW_READ_FACTS") {
+            return None;
+        }
+        let Abs::Dyn(RExpr::Get(o, m)) = callee else { return None };
+        if !matches!(this, Abs::Dyn(t) if **o == *t) {
+            return None;
+        }
+        let integer = match m.as_str() {
+            "getInt8" | "getUint8" | "getInt16" | "getUint16" | "getInt32" | "getUint32" => true,
+            "getFloat32" | "getFloat64" => false,
+            _ => return None,
+        };
+        if self.made_by(s, this).as_deref() != Some("DataView") || !self.pristine("Object") {
+            return None;
+        }
+        Some(if integer { Info { nan: false, int: true, ..Info::of_types(crate::facts::T_NUM) } } else { Info::of_types(crate::facts::T_NUM) })
+    }
+
     fn typed_intrinsics(&self) -> &'static [&'static str] {
         if self.intrinsics.is_empty() {
             &[]
@@ -18381,9 +18434,15 @@ impl Js {
         }
         let cases: Vec<(RExpr, Abs)> = arr.iter().enumerate().map(|(i, v)| (RExpr::Num(JsNum::int(i as i64)), v.clone())).collect();
         if !self.boundary_data(s, *r) || !self.under_place(s) {
+            if env_flag!("TRICK_DEBUG") {
+                eprintln!("[TRICK] index pc={pc} in {}: not tried, the list the load code's data {}, under a place {}", self.names[s.top().func], self.boundary_data(s, *r), self.under_place(s));
+            }
             return None;
         }
         if !self.info_abs(s, &key).is_some_and(|i| i.types == crate::facts::T_NUM) {
+            if env_flag!("TRICK_DEBUG") {
+                eprintln!("[TRICK] index pc={pc} in {}: not tried, the index {key:?} is {:?}", self.names[s.top().func], self.info_abs(s, &key).map(|i| i.types));
+            }
             return None;
         }
         // (The index in a variable of its own, which the facts can speak of.)
@@ -24069,7 +24128,8 @@ impl Js {
                     .or_else(|| self.react_call_result_info(s, &callee))
                     .or_else(|| self.standard_call_info(&callee))
                     .or_else(|| self.string_method_result_info(s, &callee))
-                    .or_else(|| self.regex_exec_info(s, &callee, &this));
+                    .or_else(|| self.regex_exec_info(s, &callee, &this))
+                    .or_else(|| self.view_read_info(s, &callee, &this));
                 let nonthrow = matches!(&callee, Abs::Dyn(e) if self.call_nonthrowing(s, e, &args));
                 let symbol_call = matches!(&callee, Abs::Dyn(e) if self.is_symbol_call(e, &args)) && this == Abs::Undef;
                 // (A fresh symbol's description, `ToString` of a primitive
@@ -24957,7 +25017,13 @@ impl Js {
                     // the prototype be made runtime after all, the pass is
                     // run again with it known as seen.
                     // `PE_NO_UNSEEN_PROTO_AT_LARGE`: asked at runtime.)
-                    let caught = matches!(o, Abs::Dyn(RExpr::Var(x)) if self.caught.borrow().contains(&(true, *x)));
+                    // (Of any runtime value, as it holds of any: where two
+                    // paths bring a handler different exceptions the
+                    // program threw, the handler tests a variable that
+                    // holds either, which no throw gave it.
+                    // `PE_UNSEEN_PROTO_CAUGHT_ONLY`: of a value a handler
+                    // was given alone.)
+                    let caught = !env_flag!("PE_UNSEEN_PROTO_CAUGHT_ONLY") || matches!(o, Abs::Dyn(RExpr::Var(x)) if self.caught.borrow().contains(&(true, *x)));
                     if !env_flag!("PE_NO_UNSEEN_PROTO_AT_LARGE")
                         && caught
                         && entry_boundary_object(p)
@@ -24995,7 +25061,7 @@ impl Js {
                             _ => break,
                         }
                     }
-                    if runtime_tail && self.caught.borrow().contains(&(false, *a)) {
+                    if runtime_tail && (!env_flag!("PE_UNSEEN_PROTO_CAUGHT_ONLY") || self.caught.borrow().contains(&(false, *a))) {
                         if before.contains(&p) {
                             return Some(true);
                         }
