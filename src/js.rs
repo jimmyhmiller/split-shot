@@ -40,6 +40,7 @@ use std::cell::RefCell;
 
 /// React as a model the specializer relies on (`Js::set_react`, `--react`).
 mod entry_pts;
+mod places;
 mod react;
 mod why;
 pub use why::{Cause as WhyCause, Class as WhyClass, Report as WhyReport, Unit as WhyUnit};
@@ -4626,25 +4627,14 @@ pub struct Js {
     /// these escape to residual variables before a dynamic branch so the arms
     /// merge instead of path-splitting.
     if_heap_modified: Vec<Vec<usize>>,
-    /// Per (func, slot): the slot is used as an array index (`a[slot]`), i.e. it
-    /// drives dispatch. A static-valued dispatch slot stays SPLIT at a join.
-    drives_dispatch: Vec<Vec<bool>>,
+    /// Per function, the roles its slots play for the arrays they index:
+    /// dispatch indices, places of a program, program counters, node
+    /// pointers (see `places::SlotRoles`).
+    places: Vec<places::SlotRoles>,
     /// The property names whose values some code uses as an array index
     /// (`vm.thread[vm.ip++]`): an interpreter keeping its program counter in
     /// a record (see `Js::dispatch_point`).
     dispatch_props: HashMap<String, std::collections::HashSet<String>>,
-    /// Per (func, slot): a program counter (see `drives_dispatch`): a store
-    /// gives it a value not made of constants and itself (it jumps, a
-    /// counter only counts), and it indexes an array its function does not
-    /// change (a program, not a list it builds) or is a lookup key.
-    dispatch_jumps: Vec<Vec<bool>>,
-    /// Per (func, slot): it indexes an array its function does not change,
-    /// or is a lookup key (a program counter's second condition, alone).
-    dispatch_program: Vec<Vec<bool>>,
-    /// Per (func, slot): a node pointer, a slot whose every stored value is
-    /// a property read, some of its own value (`node = node.then`): an
-    /// interpreter's place in a syntax tree it walks (see `dispatch_slots`).
-    dispatch_nodes: Vec<Vec<bool>>,
     /// Per loop-head pc: slots in the loop's header condition (induction-variable
     /// candidates). The growth whistle keeps a differing static guard UNROLLING.
     loop_guards: Vec<Vec<usize>>,
@@ -4942,6 +4932,10 @@ pub struct Js {
     /// receiver is the load code's unchanged object, known to them and not
     /// passed (see `residual_fn_for_args`), with that object.
     data_receivers: std::cell::RefCell<HashMap<usize, usize>>,
+    /// The residual functions specialized for their arguments whose
+    /// receiver is a record (see `record_arg_shapes`), known to them and
+    /// not passed.
+    record_receivers: std::cell::RefCell<std::collections::HashSet<usize>>,
     /// The variables that stand for an open array's length when it holds a
     /// given number of known elements (see `open_token`): by variable, the
     /// array and that number.
@@ -4982,7 +4976,9 @@ pub struct Js {
     /// take a record argument as a runtime value after all: the residual
     /// function made for its shape wrote the record or made it a runtime
     /// value (see `make_arg_variant`). Persists across passes.
-    record_refused: std::cell::RefCell<std::collections::HashSet<(usize, Vec<ArgShape>)>>,
+    /// (And whether the receiver was a record: refused so, it is a
+    /// runtime value, and the arguments' records are tried alone.)
+    record_refused: std::cell::RefCell<std::collections::HashSet<(usize, Vec<ArgShape>, bool)>>,
     /// A pass made a residual function for a record's shape that it then
     /// refused: its residual calls it, and is specialized again.
     record_violation: std::cell::Cell<bool>,
@@ -4990,7 +4986,7 @@ pub struct Js {
     records_off: std::cell::Cell<bool>,
     /// The record-shaped residual functions being built, outermost first:
     /// the function and what else is static of its arguments.
-    record_building: std::cell::RefCell<Vec<(usize, Vec<ArgShape>)>>,
+    record_building: std::cell::RefCell<Vec<(usize, Vec<ArgShape>, bool)>>,
     /// The record objects of the body about to be specialized (see
     /// `RECORD_WATCH`), and whether the body last specialized hit its own.
     record_watch_next: std::cell::RefCell<Vec<usize>>,
@@ -5044,9 +5040,11 @@ pub struct Js {
     foreign_protos: std::cell::RefCell<Option<Vec<usize>>>,
     /// Per call site, how many cases `trick_lookup` split it into.
     trick_splits: std::cell::RefCell<HashMap<(usize, usize), usize>>,
-    /// While a `try`'s probe runs its region alone: the activations outside
-    /// it (see `try_folds`).
-    probe_outer: std::cell::RefCell<Vec<Frame>>,
+    /// While a `try`'s region runs alone, as its probe (see `try_folds`) or
+    /// as the body and handler of a runtime `try` (see `residualize_try`):
+    /// the activations outside it, which its calls are under (see
+    /// `do_call`), the innermost last.
+    region_outer: std::cell::RefCell<Vec<Frame>>,
     /// `fn_assigned_globals`, once computed.
     fn_globals_memo: std::cell::RefCell<Option<std::rc::Rc<std::collections::HashSet<String>>>>,
     /// Set by the probe when the try body would emit a may-throw residual op, so
@@ -5097,6 +5095,19 @@ pub struct Js {
     /// expression assigned (see `track_defs`): the type a `__abstract(type,
     /// ...)` call declares, the sides of an if-converted choice.
     declared_types: std::cell::RefCell<HashMap<usize, (RExpr, Info)>>,
+    /// Per property name, the static non-negative integers the program
+    /// has written to properties of that name (a frame's return address,
+    /// `{pc, fp}` made at a call): the values a counter read back from
+    /// one may be, as `trick_store` cases on them. Kept across passes.
+    prop_numbers: std::cell::RefCell<HashMap<String, std::collections::BTreeSet<usize>>>,
+    /// The variables last bound to a property read (`t = frame.pc`), with
+    /// the property's name: what `trick_store` cases a value read so on.
+    prop_read_vars: std::cell::RefCell<HashMap<usize, String>>,
+    /// While a value is handed to runtime code that holds it (pushed on an
+    /// array the residual has, see `Instr::PushArr`): load-time objects it
+    /// reaches may be kept (see `escape_all`). Not where an escape is a
+    /// read's or a join's: there the program's paths are made one.
+    keep_hoisted_on: std::cell::Cell<bool>,
     /// The fixed properties (see `Info::fixed`) of an object frozen in the
     /// current step, by its runtime variable: `track_defs` keeps them when it
     /// sees the object made.
@@ -5716,289 +5727,7 @@ impl Js {
             if_heap_modified[jz] = mods;
         }
 
-        // Per (func, slot): does the slot's value flow into an array-INDEX
-        // position (`a[slot]`)? Such a slot is a *dispatch index* — if it is also
-        // STATIC at a control-flow join it must stay SPLIT (polyvariant) rather
-        // than merge to one dynamic variable, or the dispatch (`a[slot]`) could
-        // never fold and the interpreter never compiles away. Computed coarsely:
-        // the slots an index (of a read `a[i]` or a write `a[i] = v`) is
-        // computed from by arithmetic within a straight-line run: `a[slot]`,
-        // and an asm.js heap address `H[(base + pc) << 2 >> 2]`. (A stack
-        // simulation that forgets at a leader and at any instruction it does
-        // not follow: missing an index only forgoes a fold, so the
-        // approximation is safe.)
-        // (Run twice: `strict` as the joins have always judged a dispatch
-        // slot (an index computed from slots by arithmetic alone), and not,
-        // for the places of a program: lookup keys, concatenations.)
-        let analyse = |fid: usize, strict: bool| {
-                // (What a value on the stack is computed from: slots, by
-                // arithmetic or concatenation; or a `get`/`has` method
-                // read off an object, whose call's key drives dispatch as
-                // an index does (an interpreter's state looked up in a
-                // table: `rules.get(state + " " + symbol)`); or neither.)
-                #[derive(Clone)]
-                enum Prov {
-                    Slots(Vec<usize>),
-                    Lookup,
-                    /// A property read of the value of these slots.
-                    Field(Vec<usize>),
-                    Other,
-                }
-                let lo = entries[fid];
-                let hi = entries.get(fid + 1).copied().unwrap_or(code.len());
-                let mut dd = vec![false; nslots[fid]];
-                // (Per slot, the slots a store into it computed its value
-                // from: an index computed from a copy of the program counter,
-                // `t = pc; pc = t + 1; code[t]`, drives dispatch through the
-                // counter too.)
-                let mut derived: Vec<Vec<usize>> = vec![Vec::new(); nslots[fid]];
-                // (Per slot, whether a store gives it a value not made of
-                // constants and itself alone: a program counter jumps (`pc =
-                // ins[1]`), a loop's counter only counts.)
-                let mut jumps = vec![false; nslots[fid]];
-                // (Per slot, whether its array is changed in the function
-                // (an indexed store, a mutating method): a program an
-                // interpreter runs is not, a list it builds is. And each
-                // index read: its slots, its array's.)
-                let mut mutated = vec![false; nslots[fid]];
-                let mut reads: Vec<(Vec<usize>, Option<Vec<usize>>)> = Vec::new();
-                // (Per slot, whether a store gives it a property of its own
-                // value (`node = node.then`): it walks a structure, an
-                // interpreter's place in a syntax tree. And whether a store
-                // gives it what is no property read at all.)
-                // (Per slot, the slots whose values' properties a store
-                // gives it, the slots a store copies, and whether a store
-                // gives it anything else.)
-                let mut field_of: Vec<Vec<usize>> = vec![Vec::new(); nslots[fid]];
-                let mut copy_of: Vec<Vec<usize>> = vec![Vec::new(); nslots[fid]];
-                let mut not_read = vec![false; nslots[fid]];
-                let mut stack: Vec<Prov> = Vec::new();
-                let slots_of = |p: Option<Prov>| match p {
-                    Some(Prov::Slots(v)) => Some(v),
-                    _ => None,
-                };
-                let mut mark = |dd: &mut Vec<bool>, p: Option<Vec<usize>>| {
-                    for sl in p.unwrap_or_default() {
-                        if sl < dd.len() {
-                            dd[sl] = true;
-                        }
-                    }
-                };
-                for pc in lo..hi {
-                    if leaders[pc] {
-                        stack.clear();
-                    }
-                    match &code[pc] {
-                        Instr::Load(slot) => stack.push(Prov::Slots(vec![*slot])),
-                        Instr::PushNum(_) => stack.push(Prov::Slots(Vec::new())),
-                        Instr::PushStr(_) if !strict => stack.push(Prov::Slots(Vec::new())),
-                        Instr::Dup => {
-                            let top = stack.last().cloned().unwrap_or(Prov::Other);
-                            stack.push(top);
-                        }
-                        // (Operands combined: the slots of those that have
-                        // some, `state + " " + tape[head]` of `state`; when
-                        // `strict`, only of operands all computed so.)
-                        Instr::Bin(_) => {
-                            let (b, a) = (slots_of(stack.pop()), slots_of(stack.pop()));
-                            stack.push(match (a, b) {
-                                (Some(mut x), Some(y)) => {
-                                    x.extend(y);
-                                    Prov::Slots(x)
-                                }
-                                (None, None) => Prov::Other,
-                                _ if strict => Prov::Other,
-                                (x, y) => Prov::Slots(x.unwrap_or_default().into_iter().chain(y.unwrap_or_default()).collect()),
-                            });
-                        }
-                        // (A value computed from operands by an operator,
-                        // and a snapshot of one: from what they are. `pc++`
-                        // reads `pc` through `tonumeric` and a snapshot; its
-                        // store pops the incremented value.)
-                        Instr::OpaqueOp { arity, .. } => {
-                            let mut from: Option<Vec<usize>> = Some(Vec::new());
-                            for _ in 0..*arity {
-                                match (slots_of(stack.pop()), &mut from) {
-                                    (Some(x), Some(f)) => f.extend(x),
-                                    _ => from = None,
-                                }
-                            }
-                            stack.push(from.map_or(Prov::Other, Prov::Slots));
-                        }
-                        Instr::Snapshot => {}
-                        Instr::Store(dst) => {
-                            let top = stack.pop();
-                            if *dst < not_read.len() {
-                                match &top {
-                                    Some(Prov::Field(objs)) => field_of[*dst].extend(objs.iter().copied()),
-                                    Some(Prov::Slots(from)) if !from.is_empty() => copy_of[*dst].extend(from.iter().copied()),
-                                    _ => not_read[*dst] = true,
-                                }
-                            }
-                            let from = slots_of(top);
-                            if *dst < jumps.len() && from.as_ref().is_none_or(|v| v.iter().any(|s| s != dst)) {
-                                jumps[*dst] = true;
-                            }
-                            if let (Some(from), true) = (from, *dst < derived.len()) {
-                                derived[*dst].extend(from.into_iter().filter(|s| s != dst));
-                            }
-                        }
-                        Instr::GetProp(k) => {
-                            let obj = slots_of(stack.pop());
-                            if matches!(k.as_str(), "push" | "pop" | "shift" | "unshift" | "splice" | "reverse" | "sort" | "fill" | "copyWithin" | "set") {
-                                for sl in obj.clone().unwrap_or_default() {
-                                    if sl < mutated.len() {
-                                        mutated[sl] = true;
-                                    }
-                                }
-                            }
-                            stack.push(if k == "get" || k == "has" {
-                                Prov::Lookup
-                            } else {
-                                obj.map_or(Prov::Other, Prov::Field)
-                            });
-                        }
-                        Instr::CallMethod(n) => {
-                            let n = *n;
-                            if stack.len() >= n + 2 {
-                                let at = stack.len() - n - 2;
-                                if n >= 1 && !strict && matches!(stack[at + 1], Prov::Lookup) {
-                                    let key = slots_of(Some(stack[at + 2].clone()));
-                                    mark(&mut dd, key);
-                                }
-                                stack.truncate(at);
-                            } else {
-                                stack.clear();
-                            }
-                            stack.push(Prov::Other);
-                        }
-                        Instr::GetIndex => {
-                            let index = slots_of(stack.pop());
-                            let base = slots_of(stack.pop());
-                            // (An element at an index no slot gives
-                            // (`x[2]`, `x[x.length - 1]`) is a part of the
-                            // value read, as a property is: a syntax tree of
-                            // arrays is walked so, `x = x[2]`.
-                            // `PE_NO_INDEX_NODES`: no part, as before.)
-                            let part = match (&index, &base) {
-                                (Some(i), Some(b)) if i.is_empty() && !b.is_empty() && !env_flag!("PE_NO_INDEX_NODES") => Some(b.clone()),
-                                _ => None,
-                            };
-                            reads.push((index.clone().unwrap_or_default(), base));
-                            mark(&mut dd, index);
-                            stack.push(part.map_or(Prov::Other, Prov::Field));
-                        }
-                        Instr::SetIndexOp => {
-                            stack.pop();
-                            let index = slots_of(stack.pop());
-                            mark(&mut dd, index);
-                            for sl in slots_of(stack.pop()).unwrap_or_default() {
-                                if sl < mutated.len() {
-                                    mutated[sl] = true;
-                                }
-                            }
-                        }
-                        _ => stack.clear(),
-                    }
-                }
-                loop {
-                    let mut grew = false;
-                    for slot in 0..dd.len() {
-                        if dd[slot] {
-                            for &from in &derived[slot] {
-                                if from < dd.len() && !dd[from] {
-                                    dd[from] = true;
-                                    grew = true;
-                                }
-                            }
-                        }
-                    }
-                    if !grew {
-                        break;
-                    }
-                }
-                // (A program counter: a slot that jumps, indexing an array
-                // the function does not change (or one read otherwise,
-                // `this.code`), or a lookup key.)
-                let mut program = vec![false; nslots[fid]];
-                for (index, base) in &reads {
-                    if base.as_ref().is_none_or(|b| b.iter().all(|sl| !mutated.get(*sl).copied().unwrap_or(false))) {
-                        for &sl in index {
-                            if sl < program.len() {
-                                program[sl] = true;
-                            }
-                        }
-                    }
-                }
-                for sl in 0..program.len() {
-                    // (A lookup key, or a copy of a counter that indexes:
-                    // as `dd` has it, through `derived`.)
-                    if dd[sl] && !reads.iter().any(|(i, _)| i.contains(&sl)) {
-                        program[sl] = true;
-                    }
-                }
-                loop {
-                    let mut grew = false;
-                    for slot in 0..program.len() {
-                        if program[slot] {
-                            for &from in &derived[slot] {
-                                if from < program.len() && !program[from] {
-                                    program[from] = true;
-                                    grew = true;
-                                }
-                            }
-                        }
-                    }
-                    if !grew {
-                        break;
-                    }
-                }
-                let pcs: Vec<bool> = (0..jumps.len()).map(|i| jumps[i] && program[i]).collect();
-                // (A node pointer: a slot that walks a structure, every value
-                // stored in it read from one, or a copy of such a slot's
-                // (`t = node.then; node = t`): read back into itself through
-                // a property read.)
-                let n = not_read.len();
-                let mut ok: Vec<bool> = (0..n).map(|i| !not_read[i] && (!field_of[i].is_empty() || !copy_of[i].is_empty())).collect();
-                loop {
-                    let mut changed = false;
-                    for i in 0..n {
-                        if ok[i] && copy_of[i].iter().any(|&c| c >= n || !ok[c]) {
-                            ok[i] = false;
-                            changed = true;
-                        }
-                    }
-                    if !changed {
-                        break;
-                    }
-                }
-                // (Whether `i` reaches itself back along stores, through at
-                // least one property read.)
-                let nodes: Vec<bool> = (0..n)
-                    .map(|i| {
-                        if !ok[i] {
-                            return false;
-                        }
-                        // (Search over (slot, through a read yet).)
-                        let mut seen = std::collections::HashSet::new();
-                        let mut work: Vec<(usize, bool)> = field_of[i].iter().map(|&o| (o, true)).chain(copy_of[i].iter().map(|&c| (c, false))).collect();
-                        while let Some((x, read)) = work.pop() {
-                            if x == i && read {
-                                return true;
-                            }
-                            if x >= n || !seen.insert((x, read)) {
-                                continue;
-                            }
-                            work.extend(field_of[x].iter().map(|&o| (o, true)));
-                            work.extend(copy_of[x].iter().map(|&c| (c, read)));
-                        }
-                        false
-                    })
-                    .collect();
-                (dd, (jumps, (pcs, program, nodes)))
-        };
-        let drives_dispatch: Vec<Vec<bool>> = (0..program.len()).map(|fid| analyse(fid, true).0).collect();
-        let dispatch_jumps: Vec<(Vec<bool>, (Vec<bool>, Vec<bool>, Vec<bool>))> = (0..program.len()).map(|fid| analyse(fid, false).1).collect();
+        let places: Vec<places::SlotRoles> = (0..program.len()).map(|fid| places::analyse(&code, &entries, &leaders, &nslots, fid)).collect();
 
         let dispatch_props: HashMap<String, std::collections::HashSet<String>> = {
             // (Per property used as an index, the properties the arrays it
@@ -6093,14 +5822,14 @@ impl Js {
         };
         if env_flag!("DISPATCH_DEBUG") {
             eprintln!("[DISPATCH] props {dispatch_props:?}");
-            for (fid, dd) in drives_dispatch.iter().enumerate() {
-                let slots: Vec<usize> = dd.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
+            for (fid, roles) in places.iter().enumerate() {
+                let slots: Vec<usize> = roles.dispatch.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
                 if !slots.is_empty() {
                     eprintln!("[DISPATCH] fn {fid}: slots {slots:?}");
                 }
             }
-            for (fid, (_, pcs)) in dispatch_jumps.iter().enumerate() {
-                let nodes: Vec<usize> = pcs.2.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
+            for (fid, roles) in places.iter().enumerate() {
+                let nodes: Vec<usize> = roles.node.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
                 if !nodes.is_empty() {
                     eprintln!("[DISPATCH] fn {fid} ({}): node pointers {nodes:?}", program[fid].name);
                 }
@@ -6270,10 +5999,7 @@ impl Js {
             short_circuit,
             if_forward_joins,
             if_heap_modified,
-            drives_dispatch,
-            dispatch_program: dispatch_jumps.iter().map(|(_, pcs)| pcs.1.clone()).collect(),
-            dispatch_nodes: dispatch_jumps.iter().map(|(_, pcs)| pcs.2.clone()).collect(),
-            dispatch_jumps: dispatch_jumps.into_iter().map(|(_, pcs)| pcs.0).collect(),
+            places,
             dispatch_props,
             loop_guards,
             loop_guard_globals,
@@ -6399,6 +6125,7 @@ impl Js {
             closure_data_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             made_refused: std::cell::RefCell::new(std::collections::HashSet::new()),
             data_receivers: std::cell::RefCell::new(HashMap::new()),
+            record_receivers: std::cell::RefCell::new(std::collections::HashSet::new()),
             open_tokens: std::cell::RefCell::new(HashMap::new()),
             boundary_reach: std::cell::RefCell::new(HashMap::new()),
             receiver_state_found: std::cell::Cell::new(false),
@@ -6430,7 +6157,7 @@ impl Js {
             probing: std::cell::Cell::new(false),
             foreign_protos: std::cell::RefCell::new(None),
             fn_globals_memo: std::cell::RefCell::new(None),
-            probe_outer: std::cell::RefCell::new(Vec::new()),
+            region_outer: std::cell::RefCell::new(Vec::new()),
             trick_splits: std::cell::RefCell::new(HashMap::new()),
             try_taint: std::cell::Cell::new(false),
             probe_transparent: std::cell::Cell::new(false),
@@ -6445,6 +6172,9 @@ impl Js {
             facts_off: env_flag!("PE_NO_FACTS"),
             choices_off: env_flag!("PE_NO_CHOICES"),
             declared_types: std::cell::RefCell::new(HashMap::new()),
+            prop_numbers: std::cell::RefCell::new(HashMap::new()),
+            prop_read_vars: std::cell::RefCell::new(HashMap::new()),
+            keep_hoisted_on: std::cell::Cell::new(false),
             pending_fixed: std::cell::RefCell::new(HashMap::new()),
             pending_info: std::cell::RefCell::new(HashMap::new()),
             simple_vars: std::cell::RefCell::new(std::collections::HashSet::new()),
@@ -7633,12 +7363,20 @@ impl Js {
 
     /// What a residual function of `fid` called with `args` (in state `s`)
     /// may know of each argument: a static primitive in a parameter that is
-    /// a program counter (`dispatch_program`: it indexes a static program,
-    /// or is a key of a static table), the load code's object no code of
+    /// a program counter (`SlotRoles::program`: it indexes a static program,
+    /// or is a key of a static table), or that the call repeats (`invariant`:
+    /// the activation of the function it stalls at was given the same, a
+    /// matcher's pattern its recursion over the text keeps; the variants'
+    /// own calls with it are calls of themselves, and one with another is
+    /// progress, unfolded, so the values are those the specialization
+    /// meets, and `ARG_VARIANTS` bounds them besides; `PE_NO_INVARIANT_STATICS`:
+    /// not these), the load code's object no code of
     /// `main` has changed (everything it reaches too), or else a runtime
-    /// value. `None` when nothing is known (the generic residual function),
-    /// or the function is no plain one (its `arguments`, a generator, a
-    /// derived constructor's `this`), or `PE_NO_ARG_VARIANTS`.
+    /// value. And what it may know of its receiver (see `receiver_shape`,
+    /// `record_arg_shapes`). `None` when nothing is known of the arguments
+    /// (the generic residual function), or the function is no plain one
+    /// (its `arguments`, a generator, a derived constructor's `this`), or
+    /// `PE_NO_ARG_VARIANTS`.
     ///
     /// (A residual function specialized for them runs the interpreted
     /// program's place as compiled code: the interpreter's recursion over
@@ -7646,7 +7384,7 @@ impl Js {
     /// point or node, each calling the next. The places are finitely many:
     /// a program counter's values index a static program; the load code's
     /// objects are finitely many; and `ARG_VARIANTS` bounds them besides.)
-    fn arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs) -> Option<Vec<ArgShape>> {
+    fn arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs, invariant: &[bool]) -> Option<CallShapes> {
         if env_flag!("PE_NO_ARG_VARIANTS")
             || self.arguments_slot[fid].is_some()
             || self.is_async[fid]
@@ -7655,7 +7393,7 @@ impl Js {
             return None;
         }
         let ncap = self.ncaptured[fid];
-        let program = self.dispatch_program.get(fid);
+        let roles = self.places.get(fid);
         // (A parameter that has been given the load code's data, a node of
         // a program: a static primitive given to it is a node too, a
         // literal that program holds where a node may be. Finitely many,
@@ -7669,8 +7407,9 @@ impl Js {
         let mut shapes: Vec<ArgShape> = (0..self.nparams[fid])
             .map(|j| {
                 let v = args.get(j).cloned().unwrap_or(Abs::Undef);
-                let counter = program.and_then(|p| p.get(ncap + j)).copied().unwrap_or(false)
-                    || (j < args.len() && node_params.contains(&(fid, j)) && !env_flag!("PE_NO_NODE_LITERALS"));
+                let counter = roles.is_some_and(|r| r.program(ncap + j))
+                    || (j < args.len() && node_params.contains(&(fid, j)) && !env_flag!("PE_NO_NODE_LITERALS"))
+                    || invariant.get(j).copied().unwrap_or(false);
                 match v {
                     Abs::Num(_) | Abs::Str(_) | Abs::Bool(_) | Abs::Undef | Abs::Null if counter => ArgShape::Static(v),
                     Abs::Ref(a) if self.boundary_data(s, a) => ArgShape::Data(a),
@@ -7679,75 +7418,159 @@ impl Js {
             })
             .collect();
         drop(node_params);
+        let mut receiver = self.receiver_shape(s, fid, this);
         // (Only beside an argument that says where in a program the call
         // is: a record alone is no place, and its shapes could go on
         // without end.)
         if shapes.iter().any(|sh| *sh != ArgShape::Runtime) {
-            self.record_arg_shapes(s, fid, args, captured, this, &mut shapes);
+            self.record_arg_shapes(s, fid, args, captured, this, &mut shapes, &mut receiver);
         }
-        shapes.iter().any(|sh| *sh != ArgShape::Runtime).then_some(shapes)
+        shapes.iter().any(|sh| *sh != ArgShape::Runtime).then_some(CallShapes { args: shapes, receiver })
+    }
+
+    /// What a residual function of `fid` specialized for its arguments may
+    /// know of its receiver `this` short of a record (see
+    /// `record_arg_shapes`): the load code's unchanged object (an
+    /// interpreter's own object, its methods called on it), known to the
+    /// function and not passed (see `make_arg_variant`, `data_receivers`);
+    /// else a runtime value. `PE_NO_DATA_RECEIVER`: a runtime value.
+    fn receiver_shape(&self, s: &State, fid: usize, this: &Abs) -> ArgShape {
+        match this {
+            Abs::Ref(a)
+                if !env_flag!("PE_NO_DATA_RECEIVER")
+                    && matches!(self.fn_kinds[fid], FnKind::Normal | FnKind::Method)
+                    && matches!(s.heap.get(a), Some(HeapObj::Object { class: ObjClass::Ordinary, .. }))
+                    && self.boundary_data(s, *a) =>
+            {
+                ArgShape::Data(*a)
+            }
+            _ => ArgShape::Runtime,
+        }
     }
 
     /// `shapes` with every record shape a runtime value: what a call's
     /// record shapes are refused by (see `record_refused`).
     fn without_records(shapes: &[ArgShape]) -> Vec<ArgShape> {
-        shapes.iter().map(|sh| if matches!(sh, ArgShape::Record(_)) { ArgShape::Runtime } else { sh.clone() }).collect()
+        shapes.iter().map(|sh| if matches!(sh, ArgShape::Record(..)) { ArgShape::Runtime } else { sh.clone() }).collect()
     }
 
-    /// Give the runtime arguments of `shapes` that are records their shapes
-    /// (see `record_shape`), all or none: none when two share an object,
+    /// Give the runtime arguments of `shapes` that are records, and the
+    /// receiver `this` when it is one (an interpreter's own object `main`
+    /// made, its methods called on it), their shapes: one graph, which they
+    /// may share objects of (see `record_group`), all of them or none. None
     /// when an object of one is reached by what the call makes a runtime
-    /// value (another argument, a capture, the receiver), or when this
-    /// call's record shapes were refused (`record_refused`).
-    /// `PE_NO_RECORD_VARIANTS`: none.
-    fn record_arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs, shapes: &mut [ArgShape]) {
+    /// value (another argument, a capture, a receiver that is no record),
+    /// or when this call's record shapes were refused (`record_refused`).
+    /// A receiver whose record was refused is a runtime value, the
+    /// arguments' records then tried alone (as when it is no record).
+    /// `PE_NO_RECORD_VARIANTS`: none. `PE_NO_RECEIVER_RECORDS`: no
+    /// receiver's.
+    #[allow(clippy::too_many_arguments)]
+    fn record_arg_shapes(&self, s: &State, fid: usize, args: &[Abs], captured: &[Abs], this: &Abs, shapes: &mut [ArgShape], receiver: &mut ArgShape) {
         if env_flag!("PE_NO_RECORD_VARIANTS") || self.records_off.get() || self.react.is_some() {
             return;
         }
-        if self.record_refused.borrow().contains(&(fid, shapes.to_vec())) {
-            return;
-        }
-        let mut records: Vec<(usize, std::rc::Rc<RecordShape>, Vec<usize>)> = Vec::new();
-        for (j, sh) in shapes.iter().enumerate() {
-            let (ArgShape::Runtime, Some(Abs::Ref(a))) = (sh, args.get(j)) else { continue };
-            if let Some((shape, addrs, _)) = self.record_shape(s, *a) {
-                records.push((j, std::rc::Rc::new(shape), addrs));
+        let base = shapes.to_vec();
+        // (The arguments that may be records, each one alone.)
+        let arg_roots: Vec<(usize, usize)> = shapes
+            .iter()
+            .enumerate()
+            .filter_map(|(j, sh)| match (sh, args.get(j)) {
+                (ArgShape::Runtime, Some(Abs::Ref(a))) if self.record_group(s, &[*a]).is_some() => Some((j, *a)),
+                _ => None,
+            })
+            .collect();
+        let recv_root = match (&*receiver, this) {
+            (ArgShape::Runtime, Abs::Ref(a))
+                if !env_flag!("PE_NO_RECEIVER_RECORDS")
+                    && matches!(self.fn_kinds[fid], FnKind::Normal | FnKind::Method)
+                    && self.reads_this(fid)
+                    && self.record_group(s, &[*a]).is_some() =>
+            {
+                Some(*a)
             }
-        }
-        if records.is_empty() {
-            return;
-        }
-        let mut all: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        let disjoint = records.iter().all(|(_, _, addrs)| addrs.iter().all(|a| all.insert(*a)));
-        // (What the call makes runtime values.)
-        let mut reach = std::collections::HashSet::new();
-        let taken: Vec<usize> = records.iter().map(|(j, _, _)| *j).collect();
-        let roots = args.iter().enumerate().filter(|(j, _)| !taken.contains(j) && !matches!(shapes.get(*j), Some(ArgShape::Data(_)))).map(|(_, v)| v).chain(captured.iter()).chain(std::iter::once(this));
-        for v in roots {
-            if let Abs::Ref(a) = v {
-                if !self.boundary_data(s, *a) {
-                    Js::reachable(&s.heap, *a, &mut reach);
+            _ => None,
+        };
+        // (With the receiver, then without it.)
+        let tries: Vec<Option<usize>> = if recv_root.is_some() { vec![recv_root, None] } else { vec![None] };
+        for recv in tries {
+            if self.record_refused.borrow().contains(&(fid, base.clone(), recv.is_some())) {
+                continue;
+            }
+            if arg_roots.is_empty() && recv.is_none() {
+                continue;
+            }
+            let roots: Vec<usize> = arg_roots.iter().map(|(_, a)| *a).chain(recv).collect();
+            let Some((shape, addrs, _)) = self.record_group(s, &roots) else { continue };
+            // (What the call makes runtime values.)
+            let mut reach = std::collections::HashSet::new();
+            let taken: Vec<usize> = arg_roots.iter().map(|(j, _)| *j).collect();
+            let this_runtime = recv.is_none() && !matches!(receiver, ArgShape::Data(_));
+            let made_runtime = args
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| !taken.contains(j) && !matches!(shapes.get(*j), Some(ArgShape::Data(_))))
+                .map(|(_, v)| v)
+                .chain(captured.iter())
+                .chain(this_runtime.then_some(this));
+            for v in made_runtime {
+                if let Abs::Ref(a) = v {
+                    if !self.boundary_data(s, *a) {
+                        Js::reachable(&s.heap, *a, &mut reach);
+                    }
                 }
             }
-        }
-        if !disjoint || all.iter().any(|a| reach.contains(a)) {
+            if addrs.iter().any(|a| reach.contains(a)) {
+                continue;
+            }
+            let shape = std::rc::Rc::new(shape);
+            let node = |a: usize| addrs.iter().position(|x| *x == a).expect("a record's root is one of its objects");
+            for (j, a) in &arg_roots {
+                shapes[*j] = ArgShape::Record(shape.clone(), node(*a));
+            }
+            if let Some(a) = recv {
+                *receiver = ArgShape::Record(shape.clone(), node(a));
+            }
             return;
-        }
-        for (j, shape, _) in records {
-            shapes[j] = ArgShape::Record(shape);
         }
     }
 
-    /// The shape of the record at `root` in `s` (see `ArgShape::Record`),
-    /// the addresses of its objects (in the shape's order) and its leaves'
-    /// values (in passing order). A record: ordinary objects of data
-    /// properties, arrays without holes, and maps keyed by strings, that
-    /// this specialization made and no runtime code holds, linked to each
-    /// other and to the load code's unchanged objects, at most `REC_NODES`
-    /// of them with `REC_LEAVES` leaves. `None` for anything else.
-    fn record_shape(&self, s: &State, root: usize) -> Option<(RecordShape, Vec<usize>, Vec<Abs>)> {
+    /// The roots of a call's records (see `record_group`), in their order:
+    /// the arguments `shapes` makes records, then the receiver `this` when
+    /// `receiver` does.
+    fn record_roots(&self, shapes: &[ArgShape], receiver: &ArgShape, args: &[Abs], this: &Abs) -> Vec<usize> {
+        let mut roots: Vec<usize> = Vec::new();
+        for (j, sh) in shapes.iter().enumerate() {
+            if let ArgShape::Record(..) = sh {
+                let Some(Abs::Ref(a)) = args.get(j) else { unreachable!("a record argument is an object") };
+                roots.push(*a);
+            }
+        }
+        if let ArgShape::Record(..) = receiver {
+            let Abs::Ref(a) = this else { unreachable!("a record receiver is an object") };
+            roots.push(*a);
+        }
+        roots
+    }
+
+    /// The shape of the records at `roots` in `s`, one graph (see
+    /// `ArgShape::Record`), the addresses of its objects (in the shape's
+    /// order: the roots first, each once) and its leaves' values (in
+    /// passing order). A record: ordinary objects of data properties,
+    /// arrays without holes, and maps keyed by strings, that this
+    /// specialization made and no runtime code holds, linked to each other
+    /// and to the load code's unchanged objects, at most `REC_NODES` of
+    /// them with `REC_LEAVES` leaves for each root. `None` for anything
+    /// else.
+    fn record_group(&self, s: &State, roots: &[usize]) -> Option<(RecordShape, Vec<usize>, Vec<Abs>)> {
         let leaf = || Abs::Dyn(RExpr::Var(REC_LEAF_VAR));
-        let mut order: Vec<usize> = vec![root];
+        let mut order: Vec<usize> = Vec::with_capacity(roots.len());
+        for r in roots {
+            if !order.contains(r) {
+                order.push(*r);
+            }
+        }
+        let (max_nodes, max_leaves) = (REC_NODES * roots.len(), REC_LEAVES * roots.len());
         let mut nodes: Vec<HeapObj> = Vec::new();
         let mut leaves: Vec<Abs> = Vec::new();
         let mut i = 0;
@@ -7803,7 +7626,7 @@ impl Js {
                 *c = v;
             }
             nodes.push(t);
-            if order.len() > REC_NODES || leaves.len() > REC_LEAVES {
+            if order.len() > max_nodes || leaves.len() > max_leaves {
                 return None;
             }
         }
@@ -7813,13 +7636,15 @@ impl Js {
     /// The captures of a closure (`captured`) a residual function
     /// specialized for its arguments knows as data (see `ArgShape::Data`):
     /// the load code's objects no code of `main` has changed (a cell holding
-    /// the function itself, its program).
-    fn cap_shapes(&self, s: &State, fid: usize, captured: &[Abs]) -> Vec<ArgShape> {
+    /// the function itself, its program). Or what `main` made (see
+    /// `made_data`), for a closure runtime code holds when `held` (see
+    /// `closure_data_fns`).
+    fn cap_shapes(&self, s: &State, fid: usize, captured: &[Abs], held: bool) -> Vec<ArgShape> {
         captured
             .iter()
             .map(|c| match c {
                 Abs::Ref(a) if self.boundary_data(s, *a) => ArgShape::Data(*a),
-                Abs::Ref(a) => match self.made_data(s, fid, *a) {
+                Abs::Ref(a) => match self.made_data(s, fid, *a, held) {
                     Some(m) => ArgShape::Made(m),
                     None => ArgShape::Runtime,
                 },
@@ -7830,19 +7655,40 @@ impl Js {
 
     /// The object at `a` as a tree of static data `main` made (see
     /// `ArgShape::Made`, `static_tree`), when it is one: the tree, or the
-    /// final cell of a variable holding it. Only where `main`'s objects
-    /// are watched (see `made_held_note`), and for a function not refused
-    /// (`made_refused`). `PE_NO_MADE_DATA`: none.
-    fn made_data(&self, s: &State, fid: usize, a: usize) -> Option<std::rc::Rc<MadeData>> {
-        if env_flag!("PE_NO_MADE_DATA") || env_flag!("PE_NO_MADE_PROGRAM_LISTS") || self.made_refused.borrow().contains(&fid) || !ENTRY_WATCH.with(|w| w.borrow().is_some()) {
+    /// final cell of a variable holding it. Or the final cell of a
+    /// function `main` made that holds that function itself, `fid` (a
+    /// local recursive function's own name: `function matches(p, t) {
+    /// ... matches(p, t.slice(1)) }` inside `main`), its other captures
+    /// static primitives or the load code's unchanged data: the function
+    /// specialized knows its calls through the cell as calls of itself,
+    /// not of a runtime value (`PE_NO_SELF_CELLS`: not these). For a
+    /// function not refused (`made_refused`). For a closure runtime code
+    /// holds (`held`, see `closure_data_fns`), only where `main`'s objects
+    /// are watched (see `made_held_note`): `main` may change them after
+    /// giving it the closure. A residual function's own call is watched
+    /// as it is built (see `make_arg_variant`), the cell's function as
+    /// well where nothing watches `main` (a whole script). `PE_NO_MADE_DATA`:
+    /// none.
+    fn made_data(&self, s: &State, fid: usize, a: usize, held: bool) -> Option<std::rc::Rc<MadeData>> {
+        if env_flag!("PE_NO_MADE_DATA") || env_flag!("PE_NO_MADE_PROGRAM_LISTS") || self.made_refused.borrow().contains(&fid) {
             return None;
         }
+        let watched = ENTRY_WATCH.with(|w| w.borrow().is_some());
         let tree = match Js::final_cell_value(&s.heap, &Abs::Ref(a)) {
             Some(Abs::Ref(t)) if !s.escaped.contains(&a) => t,
             Some(_) => return None,
             None => a,
         };
-        if !self.static_tree(s, tree) {
+        let self_cell = tree != a
+            && !env_flag!("PE_NO_SELF_CELLS")
+            && !s.escaped.contains(&tree)
+            && matches!(s.heap.get(&tree), Some(HeapObj::Closure { fid: f, captured, .. }) if *f == fid
+                && captured.iter().all(|c| match c {
+                    Abs::Ref(r) => *r == a || self.boundary_data(s, *r),
+                    Abs::Dyn(_) => false,
+                    _ => true,
+                }));
+        if !(self_cell && (watched || !held)) && !(watched && self.static_tree(s, tree)) {
             return None;
         }
         let mut reach = std::collections::HashSet::new();
@@ -8019,24 +7865,14 @@ impl Js {
 
     /// The residual function of `fid` (captures as `forms`) specialized for
     /// arguments of `shapes` (see `arg_shapes`), made from the caller's
-    /// state `s` if not made yet; `None` past `ARG_VARIANTS` of them.
-    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], captured: &[Abs], args: &[Abs], this: &Abs) -> Option<usize> {
-        let caps = self.cap_shapes(s, fid, captured);
-        // (Its receiver, when that is the load code's unchanged data: an
-        // interpreter's own object, its methods called on it. Known to
-        // the function, not passed (see `make_arg_variant`,
-        // `data_receivers`). `PE_NO_DATA_RECEIVER`: a runtime value.)
-        let receiver = match this {
-            Abs::Ref(a)
-                if !env_flag!("PE_NO_DATA_RECEIVER")
-                    && matches!(self.fn_kinds[fid], FnKind::Normal | FnKind::Method)
-                    && matches!(s.heap.get(a), Some(HeapObj::Object { class: ObjClass::Ordinary, .. }))
-                    && self.boundary_data(s, *a) =>
-            {
-                ArgShape::Data(*a)
-            }
-            _ => ArgShape::Runtime,
-        };
+    /// state `s` if not made yet; `None` past `ARG_VARIANTS` of them. Its
+    /// receiver `this` of `receiver` (see `arg_shapes`): known to the
+    /// function as the load code's object or a record, and then not passed
+    /// (see `data_receivers`, `record_receivers`).
+    #[allow(clippy::too_many_arguments)]
+    fn residual_fn_for_args(&self, s: &State, fid: usize, forms: &[CapForm], shapes: &[ArgShape], receiver: &ArgShape, captured: &[Abs], args: &[Abs], this: &Abs) -> Option<usize> {
+        let caps = self.cap_shapes(s, fid, captured, self.closure_data_depth.get() > 0);
+        let receiver = receiver.clone();
         let mut key_shapes = shapes.to_vec();
         key_shapes.extend(caps.iter().cloned());
         key_shapes.push(receiver.clone());
@@ -8049,10 +7885,16 @@ impl Js {
         }
         let rfid = self.residual_fns.borrow().len();
         self.arg_variant_memo.borrow_mut().insert(key, rfid);
-        if let ArgShape::Data(a) = receiver {
-            self.data_receivers.borrow_mut().insert(rfid, a);
+        match &receiver {
+            ArgShape::Data(a) => {
+                self.data_receivers.borrow_mut().insert(rfid, *a);
+            }
+            ArgShape::Record(..) => {
+                self.record_receivers.borrow_mut().insert(rfid);
+            }
+            _ => {}
         }
-        self.make_arg_variant(s, fid, rfid, forms, shapes, &caps, args);
+        self.make_arg_variant(s, fid, rfid, forms, shapes, &receiver, &caps, args, this);
         Some(rfid)
     }
 
@@ -8063,18 +7905,20 @@ impl Js {
     /// objects as `main` is (see `EntryWatch`): what it changes of them, or
     /// makes runtime values, is `main`'s doing.
     ///
-    /// A record argument (`ArgShape::Record`) is made anew in the body, of
-    /// its shape, its leaves the parameters: the body's own copy, which
+    /// The records (`ArgShape::Record`: arguments, the receiver) are made
+    /// anew in the body, one graph of their shape, its leaves the
+    /// parameters after the runtime arguments: the body's own copy, which
     /// stands for the caller's record only while the body neither writes it
     /// nor makes it a runtime value (the caller's would not be written, and
     /// is another object). A body that does either is refused: this call's
     /// record shapes are runtime values from the next pass on
     /// (`record_refused`), as are those of the record-shaped functions being
     /// built around it, which called it so.
-    fn make_arg_variant(&self, s: &State, fid: usize, rfid: usize, forms: &[CapForm], shapes: &[ArgShape], cap_shapes: &[ArgShape], args: &[Abs]) {
+    #[allow(clippy::too_many_arguments)]
+    fn make_arg_variant(&self, s: &State, fid: usize, rfid: usize, forms: &[CapForm], shapes: &[ArgShape], receiver: &ArgShape, cap_shapes: &[ArgShape], args: &[Abs], this: &Abs) {
         let ncap = self.ncaptured[fid];
-        // (The first parameter of each argument passed: a runtime argument
-        // is one, a record its leaves.)
+        // (The parameter of each runtime argument passed, and the first of
+        // the records' leaves, after them.)
         let mut first_param: Vec<Option<usize>> = Vec::with_capacity(shapes.len());
         let mut nparams = 0usize;
         for sh in shapes {
@@ -8083,23 +7927,24 @@ impl Js {
                     first_param.push(Some(nparams));
                     nparams += 1;
                 }
-                ArgShape::Record(r) => {
-                    first_param.push(Some(nparams));
-                    nparams += r.leaves;
-                }
                 _ => first_param.push(None),
             }
         }
-        let has_records = shapes.iter().any(|sh| matches!(sh, ArgShape::Record(_)));
+        let group: Option<std::rc::Rc<RecordShape>> = shapes.iter().chain(std::iter::once(receiver)).find_map(|sh| match sh {
+            ArgShape::Record(g, _) => Some(g.clone()),
+            _ => None,
+        });
+        let first_leaf = nparams;
+        nparams += group.as_ref().map_or(0, |g| g.leaves);
+        let has_records = group.is_some();
         {
             let mut slots: Vec<Option<usize>> = Vec::with_capacity(nparams);
             for (j, sh) in shapes.iter().enumerate() {
-                match sh {
-                    ArgShape::Runtime => slots.push(Some(ncap + j)),
-                    ArgShape::Record(r) => slots.extend(std::iter::repeat(None).take(r.leaves)),
-                    _ => {}
+                if let ArgShape::Runtime = sh {
+                    slots.push(Some(ncap + j));
                 }
             }
+            slots.extend(std::iter::repeat(None).take(nparams - first_leaf));
             self.param_slots.borrow_mut().insert(rfid, slots);
         }
         let ntake = ncap + Js::import_paths(forms).len();
@@ -8129,19 +7974,20 @@ impl Js {
         // caller's.)
         let mut heap = Heap::new();
         let mut work: Vec<usize> = shapes.iter().chain(cap_shapes).filter_map(|sh| if let ArgShape::Data(a) = sh { Some(*a) } else { None }).collect();
-        // (And those a record links to.)
-        for sh in shapes {
-            if let ArgShape::Record(r) = sh {
-                for n in &r.nodes {
-                    n.for_each_child_ref(&mut |c| work.push(c));
-                }
+        // (And those the records link to.)
+        if let Some(g) = &group {
+            for n in &g.nodes {
+                n.for_each_child_ref(&mut |c| work.push(c));
             }
         }
         // (And the trees `main` made, likewise: the body's own copies,
         // which stand for the caller's while it neither writes one nor
         // makes one a runtime value, as a record's do.)
-        let receiver = self.data_receivers.borrow().get(&rfid).copied();
-        work.extend(receiver);
+        let data_receiver = match receiver {
+            ArgShape::Data(a) => Some(*a),
+            _ => None,
+        };
+        work.extend(data_receiver);
         let mut made_addrs: Vec<usize> = Vec::new();
         for sh in shapes.iter().chain(cap_shapes) {
             if let ArgShape::Made(m) = sh {
@@ -8180,48 +8026,46 @@ impl Js {
             }
             start.frames[0].locals[i] = v;
         }
+        // (The records' objects made here, each named as the caller's is
+        // (made where that one was: an iteration's object stands for it at
+        // a loop, see `pair_fresh`). At addresses of their own, which no
+        // path's allocations reach: where an object was made is kept by
+        // address (`creation_pc`), for every path at once.)
+        let base = RECORD_ADDRS + rfid * RECORD_SPAN;
         let mut record_addrs: Vec<usize> = Vec::new();
+        if let Some(g) = &group {
+            assert!(g.nodes.len() < RECORD_SPAN, "internal: a record of more objects than its addresses");
+            let roots = self.record_roots(shapes, receiver, args, this);
+            let theirs = self.record_group(s, &roots).map(|(_, addrs, _)| addrs).unwrap_or_default();
+            let mut next_leaf = first_leaf;
+            for (k, n) in g.nodes.iter().enumerate() {
+                let mut o = n.clone();
+                for c in o.children_mut() {
+                    let v = match &*c {
+                        Abs::Dyn(RExpr::Var(v)) if *v == REC_LEAF_VAR => {
+                            next_leaf += 1;
+                            Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, next_leaf - 1)))
+                        }
+                        Abs::Num(n) => Abs::Ref(base + n.as_index().expect("a record object's index")),
+                        other => other.clone(),
+                    };
+                    *c = v;
+                }
+                let made = base + k;
+                start.heap.insert(made, o);
+                if let Some(site) = theirs.get(k).and_then(|a| self.site_of(s, *a)) {
+                    start.sites.insert(made, site);
+                }
+                record_addrs.push(made);
+            }
+        }
         for (j, sh) in shapes.iter().enumerate() {
             start.frames[0].locals[ncap + j] = match sh {
                 ArgShape::Runtime => Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, first_param[j].expect("a runtime argument")))),
                 ArgShape::Static(v) => v.clone(),
                 ArgShape::Data(a) => Abs::Ref(*a),
                 ArgShape::Made(m) => Abs::Ref(m.root),
-                ArgShape::Record(r) => {
-                    // (Its objects made here, each named as the caller's is
-                    // (made where that one was: an iteration's object stands
-                    // for it at a loop, see `pair_fresh`).)
-                    let theirs = match args.get(j) {
-                        Some(Abs::Ref(a)) => self.record_shape(s, *a).map(|(_, addrs, _)| addrs).unwrap_or_default(),
-                        _ => Vec::new(),
-                    };
-                    // (At addresses of their own, which no path's allocations
-                    // reach: where an object was made is kept by address
-                    // (`creation_pc`), for every path at once.)
-                    let base = RECORD_ADDRS + (rfid * self.nparams[fid].max(1) + j) * (REC_NODES + 1);
-                    let mut next_leaf = first_param[j].expect("a record argument");
-                    for (k, n) in r.nodes.iter().enumerate() {
-                        let mut o = n.clone();
-                        for c in o.children_mut() {
-                            let v = match &*c {
-                                Abs::Dyn(RExpr::Var(v)) if *v == REC_LEAF_VAR => {
-                                    next_leaf += 1;
-                                    Abs::Dyn(RExpr::Var(self.residual_param_var(rfid, next_leaf - 1)))
-                                }
-                                Abs::Num(n) => Abs::Ref(base + n.as_index().expect("a record object's index")),
-                                other => other.clone(),
-                            };
-                            *c = v;
-                        }
-                        let made = base + k;
-                        start.heap.insert(made, o);
-                        if let Some(site) = theirs.get(k).and_then(|a| self.site_of(s, *a)) {
-                            start.sites.insert(made, site);
-                        }
-                        record_addrs.push(made);
-                    }
-                    Abs::Ref(base)
-                }
+                ArgShape::Record(_, k) => Abs::Ref(base + k),
             };
         }
         // (The arrays the model alone holds, as a residual function has
@@ -8233,12 +8077,17 @@ impl Js {
         }
         // (Its static context, which its own calls of itself are compared
         // with: see `do_call`.)
-        if let Some(a) = receiver {
+        let known_this = match receiver {
+            ArgShape::Data(a) => Some(*a),
+            ArgShape::Record(_, k) => Some(base + k),
+            _ => None,
+        };
+        if let Some(a) = known_this {
             start.frames[0].this = Abs::Ref(a);
         }
         let mut context: Vec<Abs> = start.frames[0].locals[ncap..ncap + shapes.len()].iter().chain(start.frames[0].locals[..ncap].iter()).cloned().collect();
         if !env_flag!("PE_NO_THIS_CONTEXT") {
-            context.push(match receiver {
+            context.push(match known_this {
                 Some(a) => Abs::Ref(a),
                 None => Abs::Dyn(RExpr::This),
             });
@@ -8246,7 +8095,7 @@ impl Js {
         start.frames[0].entry_skel = self.context_skeleton(&start, &context).into();
         let has_made = !made_addrs.is_empty();
         if has_records {
-            self.record_building.borrow_mut().push((fid, Js::without_records(shapes)));
+            self.record_building.borrow_mut().push((fid, Js::without_records(shapes), matches!(receiver, ArgShape::Record(..))));
         }
         if has_records || has_made {
             record_addrs.extend(made_addrs);
@@ -8268,7 +8117,7 @@ impl Js {
                 // it: each passed this one its record's leaves, where it now
                 // passes the record.)
                 if env_flag!("ARGVAR_DEBUG") {
-                    eprintln!("[ARGVAR] {} rf{rfid}: record shapes refused ({} around it): {:?}", self.names[fid], self.record_building.borrow().len() - 1, Js::without_records(shapes));
+                    eprintln!("[ARGVAR] {} rf{rfid}: record shapes refused ({} around it): {:?}, receiver {:?}", self.names[fid], self.record_building.borrow().len() - 1, Js::without_records(shapes), receiver);
                 }
                 let mut refused = self.record_refused.borrow_mut();
                 for k in self.record_building.borrow().iter() {
@@ -10467,6 +10316,7 @@ impl Js {
     fn reset_for_respecialization(&self) {
         self.residual_fns.borrow_mut().clear();
         self.data_receivers.borrow_mut().clear();
+        self.record_receivers.borrow_mut().clear();
         self.unseen_relied.borrow_mut().clear();
         self.caught.borrow_mut().clear();
         self.pass_made.borrow_mut().clear();
@@ -13646,7 +13496,7 @@ impl Js {
     /// with `differ`, that the two differ).
     /// Where in the program it interprets an activation is (`point`'s
     /// part for it): the static values of its dispatch slots (an
-    /// interpreter's program counter, see `drives_dispatch`) that index a
+    /// interpreter's program counter, see `SlotRoles::dispatch`) that index a
     /// static array the activation holds (in a local, or a property of an
     /// object in one: a VM's `this.code`), hashed; `None` when no such slot
     /// has one. Two states at one instruction of the interpreter but at
@@ -13717,7 +13567,10 @@ impl Js {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for &slot in &slots {
             match &f.locals[slot] {
-                Abs::Num(n) => (slot, n.0 as usize).hash(&mut h),
+                // (`-0` is another value than `0` at the same place: the
+                // whistle would merge the two to a runtime value. See
+                // `trick_store`.)
+                Abs::Num(n) => (slot, n.0 as usize, n.0.is_sign_negative()).hash(&mut h),
                 Abs::Str(st) => (slot, st).hash(&mut h),
                 // (A node pointer's node, by address.)
                 Abs::Ref(a) => (slot, usize::MAX, *a).hash(&mut h),
@@ -13872,8 +13725,9 @@ impl Js {
         if env_flag!("PE_NO_DISPATCH_POINTS") {
             return Vec::new();
         }
-        let Some(dispatch) = self.dispatch_program.get(f.func) else { return Vec::new() };
-        let nodes: &[bool] = if env_flag!("PE_NO_NODE_POINTS") { &[] } else { self.dispatch_nodes.get(f.func).map(Vec::as_slice).unwrap_or(&[]) };
+        let Some(roles) = self.places.get(f.func) else { return Vec::new() };
+        let dispatch = roles.program.as_slice();
+        let nodes: &[bool] = if env_flag!("PE_NO_NODE_POINTS") { &[] } else { roles.node.as_slice() };
         if !dispatch.iter().any(|d| *d) && !nodes.iter().any(|d| *d) {
             return Vec::new();
         }
@@ -14010,8 +13864,8 @@ impl Js {
                     && match v {
                         Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0 => {
                             let at = n.0 as usize;
-                            let jumps = self.dispatch_jumps.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false);
-                            let in_program = self.dispatch_program.get(f.func).and_then(|j| j.get(*slot)).copied().unwrap_or(false);
+                            let jumps = roles.pc(*slot);
+                            let in_program = roles.program(*slot);
                             // (Its end too: the place after its last part,
                             // where the loop over it is left.)
                             (jumps && at < longest) || (in_program && !env_flag!("PE_NO_STATEMENT_LISTS") && list > 0 && at <= list)
@@ -14071,6 +13925,7 @@ impl Js {
             }
         }
         let fired = (differ || seen != cand) && (yielded || facts.dynamic || self.loop_diverges_with(seen, cand, Some(&facts.guard_fields)) || self.join_mergeable(seen, cand));
+
         if fired && env_flag!("FACTS_DEBUG") {
             eprintln!("[FACTS] pc={} same_but_facts={} seen={:?}\n        cand={:?}", cand.top().pc, same_but_facts(seen, cand), seen.facts, cand.facts);
         }
@@ -14446,8 +14301,7 @@ impl Js {
                 // value.)
                 if !env_flag!("PE_NO_DISPATCH_CHOICE") && !env_flag!("PE_NO_DISPATCH_POINTS") && !self.probing.get() {
                     let func = s.top().func;
-                    let is_place = self.dispatch_jumps.get(func).and_then(|d| d.get(*slot)).copied().unwrap_or(false)
-                        || self.dispatch_program.get(func).and_then(|d| d.get(*slot)).copied().unwrap_or(false);
+                    let is_place = self.places.get(func).is_some_and(|r| r.pc(*slot) || r.program(*slot));
                     if is_place {
                         if let Some(Abs::Dyn(RExpr::Opaque(o, xs))) = s.top().ostack.last() {
                             if o == "?:" && xs.len() == 3 {
@@ -14470,6 +14324,9 @@ impl Js {
                             }
                         }
                     }
+                }
+                if let Some(step) = self.trick_store(s, *slot, pc, out) {
+                    return step;
                 }
                 let v = s.top_mut().ostack.pop().unwrap();
                 // Two reasons to commit a top-frame store as a residual assignment
@@ -14530,6 +14387,7 @@ impl Js {
                         return self.advance(s);
                     }
                     self.freeze_refs_to(s, &[id], &[(fi, *slot)], &[], pc, out);
+                    self.note_binding(id, &expr);
                     out.push(Op::Assign { var: id, expr });
                     // (A static primitive written for a residual `try`'s sake
                     // stays known: the variable holds it from here, as the
@@ -14819,6 +14677,9 @@ impl Js {
                 let base = s.top().ostack.len() - n;
                 let vals: Vec<Abs> = s.top_mut().ostack.split_off(base);
                 let vals = self.emit_maythrow_elems(s, pc, vals, out);
+                for (k, v) in keys.iter().zip(vals.iter()) {
+                    self.note_prop_number(k, v);
+                }
                 // A repeated key keeps its first position with the last value.
                 let mut props: Vec<Prop> = Vec::with_capacity(n);
                 for (k, v) in keys.iter().cloned().zip(vals) {
@@ -15279,7 +15140,9 @@ impl Js {
                     other => {
                         let arr_r = other.to_rexpr();
                         self.forbid_residual_in_try(s, "an array push");
+                        let before = self.keep_hoisted_on.replace(true);
                         let r = self.operand_rexpr(s, &v, &mut std::collections::HashSet::new(), out);
+                        self.keep_hoisted_on.set(before);
                         let a = arr_r.clone();
                         self.freeze_readers(s, pc, out, &|e| reads_array(e, &a));
                         out.push(Op::PushOp { arr: arr_r, val: r });
@@ -15514,6 +15377,9 @@ impl Js {
                 let v = s.top_mut().ostack.pop().unwrap();
                 let key = s.top_mut().ostack.pop().unwrap();
                 let obj = s.top().ostack.last().cloned().unwrap();
+                if let Abs::Str(k) = &key {
+                    self.note_prop_number(k, &v);
+                }
                 let v = self.emit_if_maythrow(s, pc, 0, v, out);
                 if let (Abs::Ref(a), Some(k)) = (&obj, self.prop_key(s, &key)) {
                     if s.heap[a].props().is_some()
@@ -17865,7 +17731,7 @@ impl Js {
             }
             // (A static value of a slot that drives dispatch stays split, as
             // at an `if`'s join: merged it would leave the dispatch dynamic.)
-            if self.drives_dispatch[fa.func].get(slot).copied().unwrap_or(false) && (!va.is_dynamic() || !vb.is_dynamic()) {
+            if self.places[fa.func].dispatch(slot) && (!va.is_dynamic() || !vb.is_dynamic()) {
                 return Err("a static dispatch value stays split");
             }
             if choosable(va, vb) && !self.choices_off {
@@ -18400,6 +18266,135 @@ impl Js {
         s.top_mut().pc += 1;
         s.top_mut().ostack.push(answer);
         Some(Step::Continue)
+    }
+
+    /// A runtime value stored into an interpreter's program counter (see
+    /// `SlotRoles::pc`: a return address its call stack gives back, `({pc,
+    /// fp} = frames.pop())`, the call stack a runtime value), the program it
+    /// indexes the load code's unchanged data of at most `TRICK_KEYS`
+    /// elements: "The Trick" at the store, a case on the value over the
+    /// program's indices, each case going on with the counter static at
+    /// that place, as a jump would leave it; on no index, the runtime
+    /// value as before (there the program's reads are the runtime's). So
+    /// the counter is never a runtime value where it is one of the
+    /// program's places, and the interpreted program stays compiled across
+    /// its returns. A case's arm learns the value is that index and stores
+    /// it; for 0, the value may be `-0` (`-0 === 0`): a test of which, each
+    /// arm storing its own. `PE_NO_STORE_TRICK`: the runtime value.
+    fn trick_store(&self, s: &mut State, slot: usize, pc: usize, out: &mut Vec<Op>) -> Option<Step<Js>> {
+        if self.facts_off || env_flag!("PE_NO_LEARN") || env_flag!("PE_NO_TRICK") || env_flag!("PE_NO_STORE_TRICK") {
+            return None;
+        }
+        let func = s.top().func;
+        let Some(roles) = self.places.get(func).filter(|r| r.pc(slot)) else { return None };
+        let Some(Abs::Dyn(e)) = s.top().ostack.last().cloned() else { return None };
+        if env_flag!("TRICK_DEBUG") {
+            eprintln!(
+                "[TRICK] store pc={pc} slot {slot} in {}: {e:?}, bases {:?} ({:?})",
+                self.names[func],
+                roles.bases(slot),
+                roles.bases(slot).map(|bs| bs.iter().map(|b| s.top().locals.get(*b).map(|v| match v {
+                    Abs::Ref(a) => format!("@{a} data {} len {:?}", self.boundary_data(s, *a), match s.heap.get(a) { Some(HeapObj::Array(arr)) => Some(arr.len()), _ => None }),
+                    other => format!("{other:?}"),
+                })).collect::<Vec<_>>())
+            );
+        }
+        // (The program: every array the counter indexes, static.)
+        let Some(bases) = roles.bases(slot) else { return None };
+        let mut n = 0usize;
+        for b in bases {
+            let Some(Abs::Ref(a)) = s.top().locals.get(*b) else { return None };
+            let Some(HeapObj::Array(arr)) = s.heap.get(a) else { return None };
+            if !self.boundary_data(s, *a) || !arr.holes.is_empty() {
+                return None;
+            }
+            n = n.max(arr.len());
+        }
+        if n == 0 || !self.pristine("Object") {
+            return None;
+        }
+        // (The places it may be: read from a property, the indices the
+        // program has written to properties of that name (a frame's
+        // return address, written at the call). Another value than these
+        // is the runtime's, as no index. A value read from anywhere else
+        // (the program's own code at a runtime place) is no case: casing
+        // it on every index of the program would compile the program again
+        // at each such read.)
+        let read_of = |e: &RExpr| -> Option<String> {
+            match e {
+                RExpr::Get(_, k) => Some(k.clone()),
+                RExpr::Var(v) => match self.declared_types.borrow().get(v) {
+                    Some((RExpr::Get(_, k), _)) => Some(k.clone()),
+                    _ => self.prop_read_vars.borrow().get(v).cloned(),
+                },
+                _ => None,
+            }
+        };
+        let places: Vec<usize> = match read_of(&e).and_then(|k| self.prop_numbers.borrow().get(&k).cloned()) {
+            Some(set) => set.into_iter().filter(|k| *k < n).collect(),
+            None => return None,
+        };
+        if places.is_empty() || places.len() > TRICK_KEYS {
+            return None;
+        }
+        // (The value in a variable of its own, which the facts can speak of.)
+        let v = match &e {
+            RExpr::Var(v) => *v,
+            other => {
+                let t = self.aux_var(143, pc, 0);
+                let lookup = |v: usize| s.facts.get(&v).cloned();
+                let info = Js::identity_info(crate::facts::info_of(other, &lookup, self.typed_intrinsics()));
+                self.emit_temp(s, t, other.clone(), pc, out);
+                *s.top_mut().ostack.last_mut().expect("the value stored") = Abs::Dyn(RExpr::Var(t));
+                self.pending_info.borrow_mut().insert(t, info);
+                t
+            }
+        };
+        let info = self.pending_info.borrow().get(&v).cloned().or_else(|| s.facts.get(&v).cloned());
+        let arm = |s: &State| {
+            let mut a = s.clone();
+            a.top_mut().dyn_ctl = true;
+            a.top_mut().branched = true;
+            a.branched_since_head = true;
+            a.dyn_branches += 1;
+            a
+        };
+        let set_top = |st: &mut State, x: Abs| *st.top_mut().ostack.last_mut().expect("the value stored") = x;
+        // (Learned to be 0 on this path: `+0` or `-0`, as `Object.is` tells.)
+        if info.as_ref().and_then(|i| i.eq.clone()) == Some(RExpr::Num(JsNum::int(0))) {
+            let is = RExpr::Call(Box::new(RExpr::Get(Box::new(RExpr::Global("Object".into())), "is".into())), vec![RExpr::Var(v), RExpr::Num(JsNum::int(0))]);
+            let (mut neg, mut pos) = (arm(s), arm(s));
+            set_top(&mut pos, Abs::Num(JsNum::int(0)));
+            set_top(&mut neg, Abs::Num(JsNum(-0.0)));
+            return Some(Step::Branch { cond: Cond::Falsy(is), t: neg, f: pos });
+        }
+        if let Some(c) = info.as_ref().and_then(|i| i.eq.clone()).and_then(|c| Abs::from_const_rexpr(&c)) {
+            set_top(s, c);
+            return None;
+        }
+        let ne = info.as_ref().map(|i| i.ne.clone()).unwrap_or_default();
+        let within = |k: usize| -> bool {
+            let Some(info) = info.as_ref() else { return true };
+            let x = k as f64;
+            info.types & crate::facts::T_NUM != 0
+                && info.lo.is_none_or(|b| if b.incl { x >= b.v.f() } else { x > b.v.f() })
+                && info.hi.is_none_or(|b| if b.incl { x <= b.v.f() } else { x < b.v.f() })
+        };
+        let k = places.into_iter().find(|k| !ne.contains(&RExpr::Num(JsNum::int(*k as i64))) && within(*k))?;
+        {
+            let mut bc = self.branched_contexts.borrow_mut();
+            for f in s.frames.iter().skip(1) {
+                bc.insert((f.func, f.entry_skel.clone()));
+            }
+        }
+        let cond = RExpr::Bin(Bop::Eq, Box::new(RExpr::Var(v)), Box::new(RExpr::Num(JsNum::int(k as i64))));
+        let other = arm(s);
+        let mut hit = arm(s);
+        // (`v === k` for a `k` but 0: `v` is that number.)
+        if k != 0 {
+            set_top(&mut hit, Abs::Num(JsNum::int(k as i64)));
+        }
+        Some(Step::Branch { cond: Cond::Falsy(cond), t: other, f: hit })
     }
 
     /// `list[i]` of a short list of the program's own values the runtime
@@ -20017,6 +20012,56 @@ impl Js {
         differs && seen.globals == cand.globals && seen.heap == cand.heap
     }
 
+    /// Two visits of a loop head, on a path that took a dynamic branch in
+    /// the iteration, whose static differences fold nothing: the loop's
+    /// counters (a fuel bound, `while (steps++ < 1e6)`), and slots that only
+    /// index arrays that are runtime values here (`code[pc++]`, a VM's
+    /// program counter into a program it is given at runtime), the rest
+    /// runtime values on both sides, no object in the heap moving between
+    /// static values. Unrolled, each iteration would be the same residual
+    /// code but for constants in it, as many times as the bound allows (a
+    /// counter's bound is no bound on the code), so the loop runs at
+    /// runtime: generalized, as `counter_only_loop`, which asks the heap be
+    /// the same. An index into static data (a table, a program) is a place,
+    /// and stays one. `PE_NO_NONFOLDING_LOOPS`: none of these.
+    fn nonfolding_loop(&self, seen: &State, cand: &State) -> bool {
+        if env_flag!("PE_NO_NONFOLDING_LOOPS") || !cand.branched_since_head || seen.frames.len() != cand.frames.len() {
+            return false;
+        }
+        let fi = cand.frames.len() - 1;
+        let (sf, cf) = (&seen.frames[fi], &cand.frames[fi]);
+        if sf.pc != cf.pc || seen.frames[..fi] != cand.frames[..fi] || sf.locals.len() != cf.locals.len() || sf.ostack != cf.ostack {
+            return false;
+        }
+        let counters = self.loop_counters.get(cf.pc).map(Vec::as_slice).unwrap_or(&[]);
+        let mut moved = false;
+        for slot in 0..cf.locals.len() {
+            let (a, b) = (&sf.locals[slot], &cf.locals[slot]);
+            if a == b || (a.is_dynamic() && b.is_dynamic()) {
+                continue;
+            }
+            let prims = !matches!(a, Abs::Ref(_)) && !matches!(b, Abs::Ref(_));
+            if prims && (counters.contains(&slot) || self.runtime_index(cand, cf, slot)) {
+                moved = true;
+                continue;
+            }
+            return false;
+        }
+        moved && seen.globals == cand.globals && !self.heap_static_progress(&seen.heap, &cand.heap)
+    }
+
+    /// Does `slot` of frame `f` (in state `s`) index only arrays that are
+    /// runtime values here (see `SlotRoles::bases`): a runtime value, or an
+    /// array of nothing but runtime values?
+    fn runtime_index(&self, s: &State, f: &Frame, slot: usize) -> bool {
+        let Some(bases) = self.places.get(f.func).and_then(|r| r.bases(slot)) else { return false };
+        bases.iter().all(|b| match f.locals.get(*b) {
+                Some(Abs::Dyn(_)) => true,
+                Some(Abs::Ref(a)) => matches!(s.heap.get(a), Some(HeapObj::Array(arr)) if arr.holes.is_empty() && arr.iter().all(|e| e.is_dynamic())),
+                _ => false,
+            })
+    }
+
     fn loop_diverges(&self, seen: &State, cand: &State) -> bool {
         self.loop_diverges_with(seen, cand, None)
     }
@@ -20034,11 +20079,11 @@ impl Js {
         if sf.pc != cf.pc || sf.locals.len() != cf.locals.len() || sf.ostack != cf.ostack {
             return false;
         }
-        if self.counter_only_loop(seen, cand) {
+        if self.counter_only_loop(seen, cand) || self.nonfolding_loop(seen, cand) {
             return true;
         }
         let guards = self.loop_guards.get(cf.pc).map(Vec::as_slice).unwrap_or(&[]);
-        let dispatch = self.drives_dispatch.get(cf.func).map(Vec::as_slice).unwrap_or(&[]);
+        let roles = self.places.get(cf.func);
         let mut grew = false;
         // A local that changed to or from a static value: static progress.
         let mut static_change = false;
@@ -20087,7 +20132,7 @@ impl Js {
             // distinguishes real structure. Only a changed PRIMITIVE that is neither
             // a guard nor a dispatch index is an accumulator (`sum`), tolerated and
             // generalized along with the loop.
-            let is_dispatch = slot < dispatch.len() && dispatch[slot];
+            let is_dispatch = roles.is_some_and(|r| r.dispatch(slot));
             if guards.contains(&slot)
                 || is_dispatch
                 || matches!(s, Abs::Ref(_))
@@ -24292,7 +24337,7 @@ impl Js {
         // (The activations this call is under: in a `try`'s probe, those
         // outside the region too (see `try_folds`), so the probe decides as
         // the run will, under all of them.)
-        let outer = self.probe_outer.borrow().clone();
+        let outer = self.region_outer.borrow().clone();
         let chain: Vec<&Frame> = outer.iter().chain(s.frames.iter()).collect();
         let recursive = self.is_recursive[fid] || chain.iter().any(|f| f.func == fid);
         // (And its receiver, when that is a modeled object: a method walking
@@ -24318,9 +24363,7 @@ impl Js {
                 // (Or one `arg_shapes` knows as a place: which of a
                 // module's functions `callFunction(funcIdx, args)` runs.
                 // `PE_NO_PROGRAM_INDEX_SKELETONS`: not those.)
-                let place = self.dispatch_jumps.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false)
-                    || self.drives_dispatch.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false)
-                    || (!env_flag!("PE_NO_PROGRAM_INDEX_SKELETONS") && self.dispatch_program.get(fid).and_then(|d| d.get(ncap + j)).copied().unwrap_or(false));
+                let place = self.places.get(fid).is_some_and(|r| r.pc(ncap + j) || r.dispatch(ncap + j) || (!env_flag!("PE_NO_PROGRAM_INDEX_SKELETONS") && r.program(ncap + j)));
                 if place && matches!(a, Abs::Num(n) if n.0 >= 0.0 && n.0.fract() == 0.0) && matches!(now.get(j), Some(Skel::Num)) {
                     now[j] = Skel::Prim(a.clone());
                 }
@@ -24358,13 +24401,13 @@ impl Js {
         }
         // (A call at a leaf of the syntax tree its function walks, a name
         // or a constant in a node pointer's parameter (see
-        // `dispatch_nodes`): the walk ends there, it is no place a
+        // `SlotRoles::node`): the walk ends there, it is no place a
         // recursion passes again. Unfolded. `PE_NO_INDEX_NODES`: weighed
         // as any call.)
         let leaf_call = !env_flag!("PE_NO_INDEX_NODES")
-            && self.dispatch_nodes.get(fid).is_some_and(|nodes| {
+            && self.places.get(fid).is_some_and(|roles| {
                 let ncap = self.ncaptured[fid];
-                args.iter().enumerate().any(|(j, a)| nodes.get(ncap + j).copied().unwrap_or(false) && matches!(a, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null))
+                args.iter().enumerate().any(|(j, a)| roles.node(ncap + j) && matches!(a, Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null))
             });
         // (Nor is a self-hosted array method over a short static list of
         // the program's parts (see `static_program_list`: an interpreter's
@@ -24377,7 +24420,7 @@ impl Js {
             && self.array_prelude.values().any(|f| *f == fid);
         // (Nor the function such a method calls per part, its callback,
         // while the recursion passes through an activation of another
-        // function that walks a syntax tree (see `dispatch_nodes`) since
+        // function that walks a syntax tree (see `SlotRoles::node`) since
         // the callback's earlier activation: that function's next call is
         // weighed against this one, and it is the one specialized to a
         // place in the program. The callback closes over the interpreter's
@@ -24387,7 +24430,7 @@ impl Js {
             let top = s.top();
             self.array_prelude.values().any(|f| *f == top.func) && matches!(&top.this, Abs::Ref(a) if self.static_program_list(s, *a))
         };
-        let walker = |g: &Frame| g.func != fid && self.dispatch_nodes.get(g.func).is_some_and(|nodes| nodes.iter().any(|n| *n));
+        let walker = |g: &Frame| g.func != fid && self.places.get(g.func).is_some_and(|r| r.any_node());
         let dynamic_recursion = recursive
             && !leaf_call
             && !program_list_call
@@ -24499,6 +24542,16 @@ impl Js {
             // deeper, or never: either way the runtime does what the original
             // does) continues as a runtime call.
             || s.frames.len() >= MAX_DEPTH;
+        // (The arguments a static primitive the same as the activation this
+        // call repeats was given: what the recursion stalls at, see
+        // `arg_shapes`.)
+        let invariant: Vec<bool> = (0..args.len())
+            .map(|j| {
+                !env_flag!("PE_NO_INVARIANT_STATICS")
+                    && matches!(now.get(j), Some(Skel::Prim(_)))
+                    && chain.iter().any(|f| f.func == fid && !skel_progress(&f.entry_skel, &now) && f.entry_skel.get(j) == now.get(j))
+            })
+            .collect();
         if !dynamic_recursion && env_flag!("RECUR_DEBUG") && chain.iter().any(|f| f.func == fid) {
             let active: Vec<String> = chain
                 .iter()
@@ -24601,7 +24654,7 @@ impl Js {
             // partly static: the residual function specialized for those,
             // see `arg_shapes`.)
             let shapes = if dynamic_recursion && !try_stays && !matches!(ret, RetMode::Construct | RetMode::SuperConstruct) && self.react.is_none() {
-                self.arg_shapes(s, fid, &args, &captured, &this)
+                self.arg_shapes(s, fid, &args, &captured, &this, &invariant)
             } else {
                 None
             };
@@ -24662,7 +24715,7 @@ impl Js {
             }
             let variant = shapes.as_ref().and_then(|sh| {
                 let forms = forms_once.clone().unwrap_or_else(|| vec![CapForm::PASSED; self.ncaptured[fid]]);
-                self.residual_fn_for_args(s, fid, &forms, sh, &captured, &args, &this).map(|r| (r, forms))
+                self.residual_fn_for_args(s, fid, &forms, &sh.args, &sh.receiver, &captured, &args, &this).map(|r| (r, forms))
             });
             if env_flag!("ARGVAR_DEBUG") {
                 if env_flag!("ARGVAR_FRAMES") && matches!(args.first(), Some(Abs::Undef)) {
@@ -24676,12 +24729,12 @@ impl Js {
                     self.current_body.get(),
                     s.frames.len(),
                     format!("{args:?}").chars().take(160).collect::<String>(),
-                    shapes.as_ref().map(|sh| sh.iter().map(|x| match x {
+                    shapes.as_ref().map(|sh| sh.args.iter().chain(std::iter::once(&sh.receiver)).map(|x| match x {
                         ArgShape::Runtime => "R".to_string(),
                         ArgShape::Static(v) => format!("{v:?}"),
                         ArgShape::Data(a) => format!("@{a}"),
                         ArgShape::Made(m) => format!("made[@{}, {} objects]", m.root, m.nodes.len()),
-                        ArgShape::Record(r) => format!("record[{} objects, {} leaves]", r.nodes.len(), r.leaves),
+                        ArgShape::Record(r, k) => format!("record #{k} [{} objects, {} leaves]", r.nodes.len(), r.leaves),
                     }).collect::<Vec<_>>()),
                     variant.as_ref().map(|v| v.0)
                 );
@@ -24713,7 +24766,9 @@ impl Js {
                 && !self.is_async[fid]
                 && !self.reads_this(fid)
                 && !env_flag!("PE_NO_UNREAD_THIS");
-            let data_receiver = self.data_receivers.borrow().contains_key(&rfid);
+            let data_receiver = self.data_receivers.borrow().contains_key(&rfid) || self.record_receivers.borrow().contains(&rfid);
+            // (A receiver that is a record: what its leaves are passed from.)
+            let this_known = this.clone();
             let this_r = match &this {
                 _ if self.fn_kinds[fid] == FnKind::Arrow || construct || unread_this || data_receiver => None,
                 Abs::Undef => None,
@@ -24722,21 +24777,24 @@ impl Js {
             let this = this_r.clone().map_or(this, Abs::Dyn);
             // (A residual function specialized for the arguments takes the
             // runtime ones.)
-            // (And a record's leaves, see `ArgShape::Record`.)
+            // (And the records' leaves, after them: see `ArgShape::Record`.)
             let arg_rs: Vec<RExpr> = match &shapes {
-                Some(sh) => {
+                Some(CallShapes { args: sh, receiver: recv }) => {
                     let mut passed: Vec<Abs> = Vec::new();
                     for (j, a) in args.iter().enumerate() {
-                        match sh.get(j) {
-                            Some(ArgShape::Runtime) => passed.push(a.clone()),
-                            Some(ArgShape::Record(r)) => {
-                                let Abs::Ref(addr) = a else { unreachable!("a record argument is an object") };
-                                let (shape, _, leaves) = self.record_shape(s, *addr).expect("internal: a record argument lost its shape before the call");
-                                assert!(shape == **r, "internal: a record argument changed shape before the call");
-                                passed.extend(leaves);
-                            }
-                            _ => {}
+                        if let Some(ArgShape::Runtime) = sh.get(j) {
+                            passed.push(a.clone());
                         }
+                    }
+                    let group = sh.iter().chain(std::iter::once(recv)).find_map(|x| match x {
+                        ArgShape::Record(g, _) => Some(g.clone()),
+                        _ => None,
+                    });
+                    if let Some(g) = group {
+                        let roots = self.record_roots(sh, recv, &args, &this_known);
+                        let (shape, _, leaves) = self.record_group(s, &roots).expect("internal: a record lost its shape before the call");
+                        assert!(shape == *g, "internal: a record changed shape before the call");
+                        passed.extend(leaves);
                     }
                     passed.iter().map(|a| self.operand_rexpr(s, a, &mut escaped, out)).collect()
                 }
@@ -26885,7 +26943,20 @@ impl Js {
 
     /// `o.k = v` (the object and the value on the stack): `SetPropOp`,
     /// and `o["k"] = v` with a key known now (see `SetIndexOp`).
+    /// `v` written to a property named `k`: a static index, noted (see
+    /// `prop_numbers`).
+    fn note_prop_number(&self, k: &str, v: &Abs) {
+        if let Abs::Num(n) = v {
+            if n.0 >= 0.0 && n.0.fract() == 0.0 && n.0 < (1u64 << 32) as f64 && !n.0.is_sign_negative() {
+                self.prop_numbers.borrow_mut().entry(k.to_string()).or_default().insert(n.0 as usize);
+            }
+        }
+    }
+
     fn set_prop_step(&self, s: &mut State, k: &String, pc: usize, out: &mut Vec<Op>) -> Step<Self> {
+        if let Some(v) = s.top().ostack.last() {
+            self.note_prop_number(k, v);
+        }
         // A choice of objects: each written, as it is the one.
         if let Some(c) = Js::choice_at(s, 1) {
             let v = s.top().ostack.last().unwrap().clone();
@@ -31362,7 +31433,7 @@ impl Js {
                 continue;
             }
             // (A capture that is a variable's cell holds the data.)
-            let caps = self.cap_shapes(s, fid, &captured);
+            let caps = self.cap_shapes(s, fid, &captured, true);
             let data = captured.iter().zip(&caps).any(|(c, sh)| {
                 matches!(sh, ArgShape::Made(_))
                     || matches!(sh, ArgShape::Data(_))
@@ -31392,7 +31463,7 @@ impl Js {
                 self.closure_data_steps.set(0);
             }
             self.closure_data_depth.set(outer + 1);
-            let made = self.residual_fn_for_args(s, fid, &forms, &shapes, &captured, &[], &Abs::Undef);
+            let made = self.residual_fn_for_args(s, fid, &forms, &shapes, &ArgShape::Runtime, &captured, &[], &Abs::Undef);
             self.closure_data_depth.set(outer);
             if self.closure_data_over.get() {
                 self.closure_data_refused.borrow_mut().insert(fid);
@@ -31659,7 +31730,41 @@ impl Js {
         // its `value`, which was written for the last time), though what it
         // holds may be reached.
         let final_cell = |a: &usize| matches!(heap.get(a), Some(HeapObj::Object { class: ObjClass::FinalCell { .. }, .. }));
-        let reach: std::collections::HashSet<usize> = made.keys().copied().filter(|a| !final_cell(a)).collect();
+        // (Nor, where a value is handed to runtime code that holds it (see
+        // `keep_hoisted_on`), does an object of the load code's that
+        // runtime code has as the load code made it (see
+        // `EntryWatch::hoisted`), unchanged, all it reaches such too: no code changes it (one that would makes it
+        // runtime state from the boundary on in the next pass, see
+        // `EntrySplit`), so the model's copy is the runtime object's. A
+        // function's record a call frame holds, `{pc, fp, f}` pushed on a
+        // runtime stack, stays the program's. `PE_NO_KEEP_HOISTED`: made
+        // runtime.)
+        let kept: std::collections::HashSet<usize> = if env_flag!("PE_NO_KEEP_HOISTED") || !self.keep_hoisted_on.get() {
+            std::collections::HashSet::new()
+        } else {
+            let mut kept: std::collections::HashSet<usize> = made.keys().copied().filter(|a| entry_is_hoisted(*a) && entry_unchanged(*a, heap.get(a))).collect();
+            loop {
+                let drop: Vec<usize> = kept
+                    .iter()
+                    .copied()
+                    .filter(|a| {
+                        let mut ok = true;
+                        if let Some(o) = heap.get(a) {
+                            o.for_each_child_ref(&mut |c| ok &= kept.contains(&c) || (entry_boundary_object(c) && entry_unchanged(c, heap.get(&c)) && !made.contains_key(&c)));
+                            o.for_each_child(&mut |c| ok &= !matches!(c, Abs::Dyn(_)));
+                        }
+                        !ok
+                    })
+                    .collect();
+                if drop.is_empty() {
+                    break kept;
+                }
+                for a in drop {
+                    kept.remove(&a);
+                }
+            }
+        };
+        let reach: std::collections::HashSet<usize> = made.keys().copied().filter(|a| !final_cell(a) && !kept.contains(a)).collect();
         for f in &mut s.frames {
             for v in f.values_mut() {
                 invalidate_abs(self, v, &reach);
@@ -31748,7 +31853,7 @@ impl Js {
                 *made = Some(*var);
             }
         }
-        s.escaped.extend(made.keys().copied());
+        s.escaped.extend(made.keys().copied().filter(|a| !kept.contains(a)));
         escaped.extend(made.keys().copied());
         // (The load code's objects made runtime ones this pass, and those
         // among them a test relied on runtime code not having: see
@@ -32384,7 +32489,21 @@ impl Js {
     /// snapshot). The same pc can run more than once on one path (a function
     /// inlined twice), so any value still reading the previous `dst` is frozen
     /// first.
+    /// `var` bound to `expr`: the property it reads, if it reads one (see
+    /// `prop_read_vars`).
+    fn note_binding(&self, var: usize, expr: &RExpr) {
+        match expr {
+            RExpr::Get(_, k) => {
+                self.prop_read_vars.borrow_mut().insert(var, k.clone());
+            }
+            _ => {
+                self.prop_read_vars.borrow_mut().remove(&var);
+            }
+        }
+    }
+
     fn emit_temp(&self, s: &mut State, dst: usize, expr: RExpr, pc: usize, out: &mut Vec<Op>) {
+        self.note_binding(dst, &expr);
         self.freeze_refs_to(s, &[dst], &[], &[], pc, out);
         if makes_object(&expr) {
             self.object_temps.borrow_mut().insert(dst);
@@ -32966,7 +33085,7 @@ impl Js {
                     // structure: the interpreter's place in its syntax tree,
                     // see `dispatch_slots`.)
                     let node = !env_flag!("PE_NO_NODE_POINTS")
-                        && self.dispatch_nodes[func].get(slot).copied().unwrap_or(false)
+                        && self.places[func].node(slot)
                         && (matches!(&ns.frames[fi].locals[slot], Abs::Ref(a) if !ns.escaped.contains(a) && matches!(ns.heap.get(a), Some(HeapObj::Object { .. } | HeapObj::Array(_))))
                             || (matches!(&ns.frames[fi].locals[slot], Abs::Str(_) | Abs::Num(_) | Abs::Bool(_) | Abs::Null) && !env_flag!("PE_NO_INDEX_NODES")));
                     // (So too a list of the program's parts the arms chose
@@ -33004,8 +33123,7 @@ impl Js {
                     !(node
                         || list
                         || handler_number
-                        || slot < self.drives_dispatch[func].len()
-                            && self.drives_dispatch[func][slot]
+                        || self.places[func].dispatch(slot)
                             && !ns.frames[fi].locals[slot].is_dynamic())
                 })
                 .collect();
@@ -34473,12 +34591,12 @@ impl Js {
         let counts = (self.structured_inlined.borrow().clone(), self.trick_splits.borrow().clone(), self.branched_contexts.borrow().clone());
         // (The probe runs the region alone; the activations outside it it
         // still runs under, for the calls it makes, see `do_call`.)
-        let outer_before = self.probe_outer.borrow().clone();
-        self.probe_outer.borrow_mut().extend(s.frames[..s.frames.len() - 1].iter().cloned());
+        let outer_before = self.region_outer.borrow().clone();
+        self.region_outer.borrow_mut().extend(s.frames[..s.frames.len() - 1].iter().cloned());
         self.halt_at.borrow_mut().push(end);
         let _ = self.specialize_nested(probe);
         self.halt_at.borrow_mut().pop();
-        *self.probe_outer.borrow_mut() = outer_before;
+        *self.region_outer.borrow_mut() = outer_before;
         *self.structured_inlined.borrow_mut() = counts.0;
         *self.trick_splits.borrow_mut() = counts.1;
         *self.branched_contexts.borrow_mut() = counts.2;
@@ -34487,6 +34605,25 @@ impl Js {
         self.try_taint.set(saved_taint);
         self.probe_transparent.set(saved_transparent);
         folds
+    }
+
+    /// Run `f`, a `try`'s region specialized alone from the top frame of `s`
+    /// (a nested program of that frame only), under the activations outside
+    /// it (`region_outer`): its calls decide whether they recurse as they
+    /// would in place, an interpreter's recursion through its own `try`
+    /// (`try { this.exec(body) } catch (r) { ... }`) met again inside the
+    /// region rather than unfolded once more there, without end. As the
+    /// probe runs it (see `try_folds`). `PE_NO_REGION_OUTER`: the region's
+    /// own activation alone.
+    fn under_region_outer<T>(&self, s: &State, f: impl FnOnce() -> T) -> T {
+        if env_flag!("PE_NO_REGION_OUTER") {
+            return f();
+        }
+        let before = self.region_outer.borrow().clone();
+        self.region_outer.borrow_mut().extend(s.frames[..s.frames.len() - 1].iter().cloned());
+        let r = f();
+        *self.region_outer.borrow_mut() = before;
+        r
     }
 
     /// Emit a residual `try`/`catch` for a body that can't fully fold. Everything
@@ -34597,7 +34734,7 @@ impl Js {
             }
             self.halt_at.borrow_mut().push(body_end);
             self.halt_locals.borrow_mut().push((body_end, None));
-            let body = self.specialize_nested(body_state);
+            let body = self.under_region_outer(s, || self.specialize_nested(body_state));
             let (_, mut after) = self.halt_locals.borrow_mut().pop().unwrap();
             self.halt_at.borrow_mut().pop();
             // Catch: the exception is a runtime value bound to a residual variable.
@@ -34614,7 +34751,7 @@ impl Js {
             }
             self.halt_at.borrow_mut().push(end);
             self.halt_locals.borrow_mut().push((end, None));
-            let catch_body = self.specialize_nested(catch_state);
+            let catch_body = self.under_region_outer(s, || self.specialize_nested(catch_state));
             let (_, after_catch) = self.halt_locals.borrow_mut().pop().unwrap();
             self.halt_at.borrow_mut().pop();
             self.eager_stores.set(prev_eager);
@@ -34695,11 +34832,11 @@ impl Js {
         let body_pc = s.top().pc + 1;
         let body_state = self.sole_frame_state(s, body_pc);
         self.halt_at.borrow_mut().push(body_end);
-        let body = self.specialize_nested(body_state);
+        let body = self.under_region_outer(s, || self.specialize_nested(body_state));
         self.halt_at.borrow_mut().pop();
         let fin_state = self.sole_frame_state(s, body_end);
         self.halt_at.borrow_mut().push(end);
-        let finally_body = self.specialize_nested(fin_state);
+        let finally_body = self.under_region_outer(s, || self.specialize_nested(fin_state));
         self.halt_at.borrow_mut().pop();
         self.region_limits.borrow_mut().pop();
         self.eager_stores.set(prev_eager);
@@ -35867,18 +36004,31 @@ enum ArgShape {
     Made(std::rc::Rc<MadeData>),
     /// A record the caller made and no runtime code holds (an interpreter's
     /// environment: a frame of slots, a map of variables, linked to the
-    /// frames around it), known by its shape: the objects it is made of and
-    /// what of them is static; its runtime values and numbers (its leaves)
-    /// are passed in, one parameter each. See `Js::record_shape`.
-    Record(std::rc::Rc<RecordShape>),
+    /// frames around it; the interpreter's own object, its receiver), known
+    /// by its shape: the objects it is made of and what of them is static;
+    /// its runtime values and numbers (its leaves) are passed in, one
+    /// parameter each. The call's records are one graph, which they may
+    /// share objects of (an environment linked to the globals the
+    /// interpreter's object holds): its shape, and which of its objects
+    /// this one is. See `Js::record_group`.
+    Record(std::rc::Rc<RecordShape>, usize),
 }
 
-/// The shape of a record argument (see `ArgShape::Record`): its objects in
-/// the order a walk from the argument finds them (the argument first), each
-/// with its values replaced: a runtime value or a number by the leaf mark
-/// (`REC_LEAF_VAR`: passed in, in this order), another of its objects by
-/// that object's index (a number), the load code's unchanged object by its
-/// address, any other static primitive kept. And how many leaves it has.
+/// What a residual function specialized for a call knows of it (see
+/// `Js::arg_shapes`): its arguments and its receiver.
+#[derive(Clone, Debug)]
+struct CallShapes {
+    args: Vec<ArgShape>,
+    receiver: ArgShape,
+}
+
+/// The shape of a call's records (see `ArgShape::Record`): their objects in
+/// the order a walk from the records finds them (the records first, the
+/// arguments in order and then the receiver), each with its values
+/// replaced: a runtime value or a number by the leaf mark (`REC_LEAF_VAR`:
+/// passed in, in this order), another of its objects by that object's
+/// index (a number), the load code's unchanged object by its address, any
+/// other static primitive kept. And how many leaves it has.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct RecordShape {
     nodes: Vec<HeapObj>,
@@ -35942,12 +36092,16 @@ fn made_since(base: usize, a: usize) -> bool {
 /// The variable that marks a leaf in a `RecordShape`.
 const REC_LEAF_VAR: usize = usize::MAX - 1;
 
-/// How many objects, and how many leaves, a record argument may have (see
-/// `Js::record_shape`): a larger one is passed as a runtime value.
+/// How many objects, and how many leaves, a record may have, each of a
+/// call's records counted (see `Js::record_group`): a larger one is passed
+/// as a runtime value.
 const REC_NODES: usize = 12;
 /// Where the record arguments of residual functions are held (see
 /// `Js::make_arg_variant`): past any address a path allocates.
 const RECORD_ADDRS: usize = 1 << 40;
+/// How many addresses each residual function holds its records' objects
+/// at, from `RECORD_ADDRS` on (see `Js::make_arg_variant`).
+const RECORD_SPAN: usize = 1 << 16;
 const REC_LEAVES: usize = 24;
 
 thread_local! {

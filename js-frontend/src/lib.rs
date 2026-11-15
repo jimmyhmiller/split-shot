@@ -83,6 +83,9 @@ pub fn to_js_why(
     if let Some(names) = &opts.host_globals {
         vm.set_host_globals(names.clone());
     }
+    if let Some(b) = opts.spec_budget {
+        vm.set_spec_budget(b);
+    }
     let t = phase("engine setup", t);
     let mut prog = vm.specialize_program();
     let t = phase("specialize", t);
@@ -2847,5 +2850,383 @@ mod tests {
         let js = to_js(src).unwrap();
         // x and y fold to constants (5 and 25); the global write residualizes.
         assert!(js.contains("globalThis.__r = 25") || js.contains("= 25;"), "got:\n{js}");
+    }
+
+    /// Specialize the ES module `src` (exporting `main`) as a program of
+    /// modules is, under a small weight budget (a regression blows it at
+    /// once instead of running into gigabytes), require the residual to
+    /// agree with the original in Node on `inputs`, and give it back.
+    fn module_small_budget_node_equiv(name: &str, src: &str, inputs: &[i64]) -> String {
+        use std::process::Command;
+        let dir = std::env::temp_dir().join(format!("pe-test-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.mjs");
+        std::fs::write(&path, src).unwrap();
+        let linked = link::link(&path, &link::LinkOptions { entry: "main".into(), ..Default::default() }).unwrap();
+        let opts = LowerOpts { closed_script: true, module_output: true, spec_budget: Some(5_000_000), ..LowerOpts::default() };
+        let js = to_js_with(&linked, "main", false, false, &opts).unwrap();
+        if Command::new("node").arg("--version").output().is_ok() {
+            let run = |code: &str, i: i64| {
+                let harness = format!("{code}\nprocess.stdout.write(JSON.stringify(main({i})));");
+                let o = Command::new("node").args(["--input-type=module", "-e", &harness]).output().expect("spawn node");
+                assert!(o.status.success(), "node failed: {}\n--- program ---\n{code}", String::from_utf8_lossy(&o.stderr));
+                String::from_utf8_lossy(&o.stdout).to_string()
+            };
+            for &i in inputs {
+                assert_eq!(run(src, i), run(&js, i), "residual diverged at input={i}\n--- residual ---\n{js}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        js
+    }
+
+    /// An interpreter whose own object `main` makes (`new Interp()`, its
+    /// globals an environment holding the interpreted functions) and whose
+    /// methods call each other on it: the residual functions of its
+    /// recursion know the receiver as a record (`ArgShape::Record`), one
+    /// graph with the environment records that share its globals, so
+    /// `this.ev(...)` in them is the method, not an unknown call that would
+    /// hand the interpreter and the program to runtime code. The program is
+    /// compiled away (no node tags left) wherever the interpreter is made.
+    #[test]
+    fn interpreter_receiver_made_in_main_is_a_record() {
+        let src = r#"
+            class Env {
+              constructor(parent) { this.parent = parent; this.vars = new Map(); }
+              define(n, v) { this.vars.set(n, v); }
+              lookup(n) { let e = this; while (e) { if (e.vars.has(n)) return e.vars.get(n); e = e.parent; } throw new Error("unbound " + n); }
+            }
+            class Interp {
+              constructor() { this.globals = new Env(null); }
+              ev(e, env) {
+                switch (e[0]) {
+                  case "num": return e[1];
+                  case "var": return env.lookup(e[1]);
+                  case "-": return this.ev(e[1], env) - this.ev(e[2], env);
+                  case "+": return this.ev(e[1], env) + this.ev(e[2], env);
+                  case "<": return this.ev(e[1], env) < this.ev(e[2], env);
+                  case "if": return this.ev(e[1], env) ? this.ev(e[2], env) : this.ev(e[3], env);
+                  case "call": {
+                    const f = env.lookup(e[1]);
+                    const a = this.ev(e[2], env);
+                    const env2 = new Env(f.closure);
+                    env2.define(f.param, a);
+                    return this.ev(f.body, env2);
+                  }
+                }
+                throw new Error("bad " + e[0]);
+              }
+            }
+            const FIB = ["if", ["<", ["var", "n"], ["num", 2]], ["var", "n"],
+              ["+", ["call", "fib", ["-", ["var", "n"], ["num", 1]]], ["call", "fib", ["-", ["var", "n"], ["num", 2]]]]];
+            export function main(input) {
+              const it = new Interp();
+              it.globals.define("k", input);
+              it.globals.define("fib", { param: "n", body: FIB, closure: it.globals });
+              return it.ev(["call", "fib", ["var", "k"]], it.globals);
+            }
+        "#;
+        let js = module_small_budget_node_equiv("receiver-record", src, &[0, 1, 2, 7, 12]);
+        assert!(!js.contains("\"call\"") && !js.contains("\"if\"") && !js.contains(".ev("), "the interpreted program should compile away:\n{js}");
+    }
+
+    /// An interpreter that returns from an interpreted function by throwing
+    /// (`throw new Return(v)`, caught where the call is interpreted), its
+    /// recursion through that `try`: the runtime `try`'s body and handler
+    /// are specialized under the activations outside it (`region_outer`),
+    /// as its probe is, so the interpreted recursion met again inside the
+    /// region is a call of the residual function, not unfolded once more
+    /// there without end (it ran into the weight budget).
+    #[test]
+    fn interpreter_return_by_throw_recursion_ends() {
+        let src = r#"
+            class Env {
+              constructor(parent) { this.parent = parent; this.vars = new Map(); }
+              define(n, v) { this.vars.set(n, v); }
+              lookup(n) { let e = this; while (e) { if (e.vars.has(n)) return e.vars.get(n); e = e.parent; } throw new Error("unbound " + n); }
+            }
+            class Ret { constructor(v) { this.value = v; } }
+            class Interp {
+              exec(s, env) {
+                switch (s[0]) {
+                  case "return": throw new Ret(this.ev(s[1], env));
+                  case "if": if (this.ev(s[1], env)) this.exec(s[2], env); break;
+                  case "seq": for (const x of s.slice(1)) this.exec(x, env); break;
+                }
+              }
+              ev(e, env) {
+                switch (e[0]) {
+                  case "num": return e[1];
+                  case "var": return env.lookup(e[1]);
+                  case "-": return this.ev(e[1], env) - this.ev(e[2], env);
+                  case "+": return this.ev(e[1], env) + this.ev(e[2], env);
+                  case "<": return this.ev(e[1], env) < this.ev(e[2], env);
+                  case "call": {
+                    const f = env.lookup(e[1]);
+                    const a = this.ev(e[2], env);
+                    const env2 = new Env(f.closure);
+                    env2.define(f.param, a);
+                    try { this.exec(f.body, env2); } catch (sig) { if (sig instanceof Ret) return sig.value; throw sig; }
+                    return null;
+                  }
+                }
+                throw new Error("bad " + e[0]);
+              }
+            }
+            const FIB = ["seq", ["if", ["<", ["var", "n"], ["num", 2]], ["return", ["var", "n"]]],
+              ["return", ["+", ["call", "fib", ["-", ["var", "n"], ["num", 1]]], ["call", "fib", ["-", ["var", "n"], ["num", 2]]]]]];
+            const IT = new Interp();
+            const G = new Env(null);
+            G.define("fib", { param: "n", body: FIB, closure: G });
+            export function main(input) {
+              return IT.ev(["call", "fib", ["num", input]], G);
+            }
+        "#;
+        let js = module_small_budget_node_equiv("return-by-throw", src, &[0, 1, 2, 7, 12]);
+        assert!(!js.contains("\"seq\"") && !js.contains("\"call\""), "the interpreted program should compile away:\n{js}");
+    }
+
+    /// A recursive matcher defined inside `main`, its pattern static and
+    /// its text a runtime value: one residual function per state of the
+    /// pattern. The pattern each recursion keeps (`matches(pattern,
+    /// text.slice(1))`) is what its residual function is specialized to
+    /// (`arg_shapes`' invariant statics), and the function's own name, a
+    /// cell `main` made holding it, is known to it (`made_data`'s self
+    /// cell), so it calls itself rather than a runtime value.
+    #[test]
+    fn local_recursive_matcher_specializes_to_its_pattern() {
+        let src = r#"
+            function main(text) {
+              function matches(pattern, text) {
+                if (pattern.length === 0) {
+                  return text.length === 0;
+                }
+                const firstCharacterMatches = text.length > 0 && pattern[0] === text[0];
+                if (pattern[1] === "*") {
+                  if (matches(pattern.slice(2), text)) {
+                    return true;
+                  }
+                  if (!firstCharacterMatches) {
+                    return false;
+                  }
+                  return matches(pattern, text.slice(1));
+                }
+                if (!firstCharacterMatches) {
+                  return false;
+                }
+                return matches(pattern.slice(1), text.slice(1));
+              }
+              return matches("a*b*c", text);
+            }
+        "#;
+        let js = to_js(src).unwrap();
+        assert_valid_js(&js);
+        assert!(!js.contains("*") && !js.contains(".value") && js.matches("function __rf").count() == 2, "expected one function per starred state:\n{js}");
+        use std::process::Command;
+        if Command::new("node").arg("--version").output().is_err() {
+            return;
+        }
+        let run = |code: &str| {
+            let harness = format!("{code}\nconst out = [];\nconst go = (s) => {{ out.push(main(s)); if (s.length < 6) for (const c of 'abcx') go(s + c); }};\ngo('');\nprocess.stdout.write(out.join());");
+            let o = Command::new("node").arg("-e").arg(&harness).output().expect("spawn node");
+            assert!(o.status.success(), "node failed: {}", String::from_utf8_lossy(&o.stderr));
+            String::from_utf8_lossy(&o.stdout).to_string()
+        };
+        assert_eq!(run(src), run(&js), "residual diverged\n--- residual ---\n{js}");
+    }
+
+    /// A VM with a step limit (`while (steps++ < 1e6)`) running a program
+    /// it is given at runtime: the iterations, which differ only in the
+    /// counter and in a program counter that indexes only runtime data,
+    /// are one runtime loop (`nonfolding_loop`), not unrolled up to the
+    /// unroll bound (it took a minute and 2 GB, and ran 40x slower).
+    #[test]
+    fn fuel_counter_over_runtime_program_is_a_loop() {
+        let src = r#"
+            function run(code, arg) {
+              const st = [arg];
+              let pc = 0, steps = 0;
+              while (steps++ < 1e6) {
+                const op = code[pc++];
+                switch (op) {
+                  case 0: st.push(code[pc++]); break;
+                  case 1: st.push(st.pop() + st.pop()); break;
+                  case 5: { const t = code[pc++]; if (st[st.length - 1] !== 0) pc = t; break; }
+                  case 6: st[st.length - 1]--; break;
+                  case 8: return st[st.length - 1] * 10 + st.length;
+                  default: throw new Error("bad op " + op);
+                }
+              }
+              throw new Error("step limit");
+            }
+            export function main(n) {
+              const code = n > 2 ? [6, 5, 0, 8] : [0, 1, 1, 8];
+              return run(code, n);
+            }
+        "#;
+        let js = module_small_budget_node_equiv("fuel", src, &[0, 1, 2, 3, 9]);
+        assert!(js.lines().count() < 300, "a runtime loop, not an unrolled one:\n{js}");
+    }
+
+    /// A stack VM with call frames (`frames.push({pc, fp})`, a return
+    /// popping one) over a static program: the return address read back
+    /// is a case over the places the program wrote as one (`trick_store`),
+    /// each going on compiled; the data stack pointer is no place
+    /// (`dispatch_program`: an index only its writes and copies use).
+    #[test]
+    fn vm_with_call_frames_compiles_its_returns() {
+        let src = r#"
+            const CODE = [1, 0, 0, 2, 6, 8, 10, 1, 0, 10,
+              1, 0, 0, 1, 4, 9, 0, 1, 0, 0, 2, 4, 9, 0, 3, 10];
+            function execute(code, arg) {
+              const stack = new Array(64);
+              let sp = 0, fp = 0, pc = 0;
+              const frames = [];
+              stack[sp++] = arg;
+              for (;;) {
+                const op = code[pc++];
+                switch (op) {
+                  case 0: stack[sp++] = code[pc++]; break;
+                  case 1: stack[sp++] = stack[fp + code[pc++]]; break;
+                  case 3: { const b = stack[--sp]; stack[sp - 1] = stack[sp - 1] + b; break; }
+                  case 4: { const b = stack[--sp]; stack[sp - 1] = stack[sp - 1] - b; break; }
+                  case 6: { const b = stack[--sp]; stack[sp - 1] = stack[sp - 1] < b ? 1 : 0; break; }
+                  case 8: { const t = code[pc++]; if (stack[--sp] === 0) pc = t; break; }
+                  case 9: { const target = code[pc++]; frames.push({ pc, fp }); fp = sp - 1; pc = target; break; }
+                  case 10: {
+                    const v = stack[--sp];
+                    if (frames.length === 0) return v;
+                    sp = fp;
+                    ({ pc, fp } = frames.pop());
+                    stack[sp++] = v;
+                    break;
+                  }
+                  default: throw new Error("bad op " + op);
+                }
+              }
+            }
+            export function main(n) { return execute(CODE, n); }
+        "#;
+        let js = module_small_budget_node_equiv("vm-frames", src, &[0, 1, 2, 7, 12]);
+        assert!(js.contains(" === 17"), "the return address cased over the places the program pushed (17, after the first call):\n{js}");
+    }
+
+    /// A Brainfuck interpreter matching brackets by scanning its source a
+    /// character at a time: its counter, stepped both ways over a program
+    /// it holds and does not change, is a program counter
+    /// (`places::SlotRoles::pc`), though it never jumps, and the program
+    /// compiles away.
+    #[test]
+    fn scanning_brainfuck_compiles() {
+        let src = r#"
+            const SRC = "++++++++[>++++++++<-]>+.>,[>,]<[.<]";
+            function bf(src, input) {
+              const tape = new Uint8Array(64);
+              let ptr = 0, ip = 0, inp = 0, out = "";
+              while (ip < src.length) {
+                const c = src[ip];
+                if (c === ">") ptr++;
+                else if (c === "<") ptr--;
+                else if (c === "+") tape[ptr]++;
+                else if (c === "-") tape[ptr]--;
+                else if (c === ".") out += String.fromCharCode(tape[ptr]);
+                else if (c === ",") tape[ptr] = inp < input.length ? input.charCodeAt(inp++) : 0;
+                else if (c === "[" && tape[ptr] === 0) { let d = 1; while (d) { ip++; if (src[ip] === "[") d++; else if (src[ip] === "]") d--; } }
+                else if (c === "]" && tape[ptr] !== 0) { let d = 1; while (d) { ip--; if (src[ip] === "]") d++; else if (src[ip] === "[") d--; } }
+                ip++;
+              }
+              return out;
+            }
+            export function main(n) { return bf(SRC, "abcdefg".slice(0, n)); }
+        "#;
+        let js = module_small_budget_node_equiv("bf-scan", src, &[0, 1, 3, 7]);
+        assert!(!js.contains("[>,]"), "the source compiled away:\n{js}");
+    }
+
+    /// A Scheme subset whose environments are prototype chains
+    /// (`Object.create(env)`), the caller's input bound in one: the
+    /// evaluator's node pointer may hold `null` (`let picked = null`, a
+    /// `cond` with no case taken yet) and is still its place in the
+    /// program, so its tail-call loop is met again as a loop of the
+    /// interpreted program (it ran without end): a tail-recursive count
+    /// compiles to a loop, a recursive factorial to a recursive function.
+    #[test]
+    fn scheme_with_prototype_environments_compiles() {
+        let src = r#"
+            function read(src) {
+              const toks = src.replace(/\(/g, " ( ").replace(/\)/g, " ) ").trim().split(/\s+/);
+              let i = 0;
+              function form() {
+                const t = toks[i++];
+                if (t === "(") { const xs = []; while (toks[i] !== ")") xs.push(form()); i++; return xs; }
+                const n = Number(t);
+                return Number.isNaN(n) ? t : n;
+              }
+              const out = [];
+              while (i < toks.length) out.push(form());
+              return out;
+            }
+            const PRIMS = { "+": (a, b) => a + b, "-": (a, b) => a - b, "*": (a, b) => a * b, "<": (a, b) => a < b };
+            function evaluate(x, env) {
+              for (;;) {
+                if (typeof x === "string") { if (!(x in env)) throw new Error("unbound " + x); return env[x]; }
+                if (!Array.isArray(x)) return x;
+                switch (x[0]) {
+                  case "if": x = evaluate(x[1], env) !== false ? x[2] : x[3]; continue;
+                  case "define": env[x[1]] = evaluate(x[2], env); return undefined;
+                  case "lambda": return { params: x[1], body: x[2], env };
+                  case "let": {
+                    const e2 = Object.create(env);
+                    for (const [n, v] of x[1]) e2[n] = evaluate(v, env);
+                    env = e2; x = x[2]; continue;
+                  }
+                  case "cond": {
+                    let picked = null;
+                    for (const [test, body] of x.slice(1)) { if (test === "else" || evaluate(test, env) !== false) { picked = body; break; } }
+                    if (picked === null) return undefined;
+                    x = picked; continue;
+                  }
+                  default: {
+                    const f = evaluate(x[0], env);
+                    const args = x.slice(1).map((a) => evaluate(a, env));
+                    if (typeof f === "function") return f(...args);
+                    const e2 = Object.create(f.env);
+                    f.params.forEach((p, i) => { e2[p] = args[i]; });
+                    env = e2; x = f.body; continue;
+                  }
+                }
+              }
+            }
+            const GLOBAL = Object.create(null);
+            Object.assign(GLOBAL, PRIMS);
+            for (const f of read("(define count-down (lambda (n acc) (let ((k (- n 1))) (if (< n 1) acc (count-down k (+ acc n)))))) (define fact (lambda (n) (if (< n 1) 1 (* n (fact (- n 1))))))")) evaluate(f, GLOBAL);
+            export function main(n) {
+              const env = Object.create(GLOBAL);
+              env["input-n"] = n;
+              return [evaluate(["count-down", "input-n", 0], env), evaluate(["fact", "input-n"], env)];
+            }
+        "#;
+        let js = module_small_budget_node_equiv("scheme-proto", src, &[0, 1, 5, 40]);
+        assert!(!js.contains("count-down") && !js.contains("lambda") && !js.contains("\"fact\""), "the program compiled away:\n{js}");
+    }
+
+    /// A load-time record handed to runtime code (pushed on an array the
+    /// residual holds, as a VM's call frame holds its callee's record)
+    /// stays known: the runtime object is the one the load code made
+    /// (hoisted), unchanged, and nothing writes it, so the escape leaves
+    /// the model's copy as it is (`escape_all`'s kept objects). Its field
+    /// folds after the push.
+    #[test]
+    fn hoisted_record_stays_known_after_escape() {
+        let src = r#"
+            const REC = { k: 7, name: "fib" };
+            export function main(n) {
+              const st = [];
+              for (let i = 0; i < n; i++) st.push(REC);
+              return REC.k * 10 + st.length + (st.length ? st[0].k : 0);
+            }
+        "#;
+        let js = module_small_budget_node_equiv("hoisted-record", src, &[0, 1, 3]);
+        assert!(js.contains("return 70 +"), "the record's field should fold:\n{js}");
     }
 }

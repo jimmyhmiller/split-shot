@@ -102,6 +102,10 @@ pub struct LowerOpts {
     /// allows (see `codegen::program_to_js_as`): the program is one of
     /// modules.
     pub module_output: bool,
+    /// The specialization weight budget, when not the default (see the
+    /// engine's `Js::set_spec_budget`): what a test bounds a program's
+    /// specialization by.
+    pub spec_budget: Option<u64>,
 }
 
 /// `compile_full`, with the lowering options.

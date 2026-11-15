@@ -23,6 +23,76 @@ deeper lessons; this doc is the up-to-date status and the concrete next steps.
 - Tests: **99 frontend + 12 engine, all green**. simple.js still specializes
   correctly (the fixes fold to no-ops on its inputs).
 
+## Update (2026-11-15): interpreters, first projection
+
+The interpreter suite (`tools/wild/interp/`, report `docs/INTERP.md`) grew by ten
+cases, each a shape that crashed, ran without end or did not compile before. All of
+them run correctly now, and most compile. Every mechanism below has a `PE_NO_*` flag,
+for comparing with and without it, and a regression test in `js-frontend/src/lib.rs`
+that fails with the flag set.
+
+**Where an interpreter's slots stand: `src/js/places.rs`.** The per-slot analysis of
+what each local indexes moved out of `Js::new` into its own module. It produces one
+`SlotRoles` per function: dispatch indices, places of a program, program counters,
+node pointers, and the arrays each slot indexes. Every consumer
+(joins, the whistle, dispatch points, call contexts, the Trick at a store) reads
+these predicates instead of six parallel tables. The move itself changed nothing: the
+residuals of the corpus and of both suites were byte-identical before and after it. The
+removals listed below then changed only the cases they name.
+
+Mechanisms added:
+
+- **Receivers as records** (`record_arg_shapes`, `record_group`). An interpreter
+  object made inside `main` is a record of the residual functions of its recursion.
+  It forms one graph with the argument records that share its objects.
+  `PE_NO_RECEIVER_RECORDS`. Tree-walker built per call: 1.2× → 50×.
+- **A residual `try` runs under the activations outside it** (`under_region_outer`),
+  as its probe already did. Return-by-throw interpreters no longer unfold their
+  recursion without end. `PE_NO_REGION_OUTER`.
+- **Invariant statics and self cells.** A static primitive that a stalled recursion
+  keeps is specialized to (a matcher's pattern, `PE_NO_INVARIANT_STATICS`). A local
+  function's own cell is known to it (`PE_NO_SELF_CELLS`).
+- **Non-folding loops** (`nonfolding_loop`). A runtime-branching iteration whose
+  static differences are loop counters and indices into runtime data runs at
+  runtime: a step limit no longer unrolls to the backstop. `PE_NO_NONFOLDING_LOOPS`.
+- **Program slots, not data slots.** A pointer into a data stack is no program
+  counter: copies seed program places only through lookup keys, not through any slot
+  that inherited "drives dispatch" (`PE_COPY_INDEX_PLACES`).
+- **Two-way program counters.** A counter stepping both ways over a program the
+  function holds and does not change is a program counter, though it never jumps: a
+  bracket-scanning Brainfuck interpreter compiles to structured loops (5.3×).
+  `PE_NO_TWO_WAY_PLACES`.
+- **The Trick at a store** (`trick_store`). A return address read back from a runtime
+  frame is cased over the values the program wrote to that property (`prop_numbers`,
+  through `prop_read_vars`). `-0` gets a place of its own. `PE_NO_STORE_TRICK`.
+- **Kept hoisted records** (`escape_all`, `keep_hoisted_on`). A load-time record
+  pushed onto a runtime array stays known when hoisted, unchanged and closed over
+  such objects. Only for pushes: from reads and joins it bloats table-driven
+  interpreters. `PE_NO_KEEP_HOISTED`.
+- **Null node pointers.** `let picked = null` does not disqualify a node pointer.
+  `PE_NO_NULL_NODES`.
+
+Tried and removed (once the rules above landed, no corpus program, suite case or
+test was changed by them, or they made the residual worse): records of captured
+cells; `slice` on program lists; static strings as programs; the whistle keeping
+apart only program indices; forgetting a loop's places at its exit; writes through
+copies marking an array written.
+
+Still open:
+
+- **The global environment stays runtime once escaped.** Higher-order interpreted
+  code (`scheme-proto-env-higher-order`, `foldl` over a primitive) escapes the global
+  environment while generalizing a tail-call loop. The generic residual evaluator
+  then makes the boundary judge that environment changeable, and later passes
+  inherit the verdict.
+- **Uncompiled styles.** CPS and trampoline evaluators, parser combinators, visitors
+  and term rewriting.
+- **Older suite failures.** `cps-trampoline-callcc` and `sql-volcano-query` time out;
+  `mathjs-compile` and `js-yaml-load` exceed the budget; `liyad-lisp` uses a direct
+  `eval` in a module.
+
+See the `split-shot-bugs` pad, rounds 1–3 of 2026-11-14, for the investigation notes.
+
 ## Update (2026-06-04): effect #4 fixed + a method-call ordering bug fixed
 
 Two fixes landed since the TL;DR above (both fuzz- and Node-verified, regression-tested):
