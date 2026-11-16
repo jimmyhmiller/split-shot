@@ -40,14 +40,18 @@ import subsetParse from "../../../experiments/general-jsmix/subset-parse.js?raw"
 
 const one = (src) => [{ name: "program.js", src }];
 const module = (src) => [{ name: "program.mjs", src }];
-const withJsmix = (main, interpreterName, interpreter) => [
-  { name: "main.mjs", src: main },
-  { name: interpreterName, src: interpreter },
-  { name: "jsmix.js", src: jsmix },
-  { name: "binding-times.js", src: bindingTimes },
-  { name: "subset-parse.js", src: subsetParse },
-];
-export const GROUPS = [
+// A compiler example's main.mjs holds its interpreter, just above the line
+// that parses it: the interpreter's text (kept where its checks test it) goes
+// in before `const INT`.
+const withJsmix = (main, interpreter) => {
+  if (!/^const INT /m.test(main)) throw new Error("a compiler example's main.mjs has no `const INT` line");
+  return [
+    { name: "main.mjs", src: main.replace(/^const INT /m, () => interpreter.trimEnd() + "\n\nconst INT ") },
+    { name: "jsmix.js", src: jsmix },
+    { name: "binding-times.js", src: bindingTimes },
+    { name: "subset-parse.js", src: subsetParse },
+  ];
+};export const GROUPS = [
   { label: "Programs", examples: [
     { id: "power", title: "Power", files: one(power) },
     { id: "regex", title: "Regex matcher", files: one(regex) },
@@ -72,9 +76,9 @@ export const GROUPS = [
     { id: "peg-recognizer-assignments", title: "PEG recognizer", files: module(interp9) },
   ] },
   { label: "Deriving a compiler", examples: [
-    { id: "compiler-brainfuck", title: "Brainfuck compiler", files: withJsmix(mainBrainfuck, "brainfuck.js", intBrainfuck) },
-    { id: "compiler-expressions", title: "Expression compiler", files: withJsmix(mainExpressions, "expressions.js", intExpressions) },
-    { id: "compiler-prompt-print", title: "prompt / print compiler", files: withJsmix(mainPromptPrint, "prompt-print.js", intPromptPrint) },
+    { id: "compiler-brainfuck", title: "Brainfuck compiler", files: withJsmix(mainBrainfuck, intBrainfuck) },
+    { id: "compiler-expressions", title: "Expression compiler", files: withJsmix(mainExpressions, intExpressions) },
+    { id: "compiler-prompt-print", title: "prompt / print compiler", files: withJsmix(mainPromptPrint, intPromptPrint) },
   ] },
   { label: "A compiler generator", examples: [
     { id: "all-three-projections", title: "All three projections", files: [{ name: "all-three.js", src: lambdaAllThree }, { name: "specializer.js", src: lambdaSpecializer }] },

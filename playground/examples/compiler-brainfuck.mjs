@@ -8,7 +8,7 @@
 // codegen.* helpers (experiments/general-jsmix/codegen.cjs) that are not part
 // of this program, so the calls to them stay in the compiler.
 
-// The interpreter (brainfuck.js) reads the program as text. Its loops run while
+// The interpreter below reads the program as text. Its loops run while
 // the current cell is not zero, which is only known when the target runs, so
 // each becomes a loop in the target: the compiler recurses on the brackets.
 

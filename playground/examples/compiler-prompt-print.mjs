@@ -8,7 +8,7 @@
 // codegen.* helpers (experiments/general-jsmix/codegen.cjs) that are not part
 // of this program, so the calls to them stay in the compiler.
 
-// The interpreter (prompt-print.js) is a loop over a list of instructions.
+// The interpreter below is a loop over a list of instructions.
 
 const INT = analyze(parseProgram(interp.toString()), "interp");
 

@@ -8,7 +8,7 @@
 // codegen.* helpers (experiments/general-jsmix/codegen.cjs) that are not part
 // of this program, so the calls to them stay in the compiler.
 
-// The interpreter (expressions.js) walks a tree; the compiler recurses on it,
+// The interpreter below walks a tree; the compiler recurses on it,
 // and a conditional on a runtime value becomes a conditional in the target.
 
 const INT = analyze(parseProgram(interp.toString() + "\n" + ev.toString()), "interp");
