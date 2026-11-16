@@ -59,14 +59,39 @@ pub fn to_js_why(
     opts: &LowerOpts,
     why: bool,
 ) -> Result<(String, Option<partial::js::WhyReport>), String> {
-    // (`PE_TIMINGS`: each phase's time, on stderr.)
+    specialize_full(src, entry, short_names, prepack_intrinsics, opts, why).map(|s| (s.js, s.report))
+}
+
+/// What one specialization made: the residual as JavaScript, the engine
+/// and its residual program (for the IR dump and the counters), and the
+/// `why` report when asked for.
+pub struct Specialized {
+    pub js: String,
+    pub report: Option<partial::js::WhyReport>,
+    pub vm: Js,
+    pub prog: Program<Op, Cond>,
+}
+
+/// The CLI's pipeline: parse + lower + specialize `entry` of `src`, clean
+/// up, and emit the residual as JavaScript.
+pub fn specialize_full(
+    src: &str,
+    entry: &str,
+    short_names: bool,
+    prepack_intrinsics: bool,
+    opts: &LowerOpts,
+    why: bool,
+) -> Result<Specialized, String> {
+    // (`PE_TIMINGS`: each phase's time, on stderr. No clock is read without
+    // it: a wasm host has none.)
     let timings = std::env::var_os("PE_TIMINGS").is_some();
-    let t = std::time::Instant::now();
-    let phase = |name: &str, since: std::time::Instant| {
-        if timings {
+    let now = || timings.then(std::time::Instant::now);
+    let t = now();
+    let phase = |name: &str, since: Option<std::time::Instant>| {
+        if let Some(since) = since {
             eprintln!("[time] {name}: {:.3} ms", since.elapsed().as_secs_f64() * 1e3);
         }
-        std::time::Instant::now()
+        now()
     };
     let (funcs, sources) = lower::compile_full_opts(src, entry, opts)?;
     let t = phase("lower", t);
@@ -110,7 +135,7 @@ pub fn to_js_why(
     let js = codegen::program_to_js_as(&vm, &prog, vm.input_var(), short_names, &sources, opts.module_output);
     codegen::set_source_names(false);
     phase("codegen", t);
-    Ok((js, report))
+    Ok(Specialized { js, report, vm, prog })
 }
 
 /// A `why` report as JSON: `{summary, sections, causes, units}`.

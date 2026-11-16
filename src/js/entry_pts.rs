@@ -2347,13 +2347,14 @@ impl Js {
                 pta.unreferred.insert(r);
             }
         }
-        let t0 = std::time::Instant::now();
+        // (Only read under ENTRY_DEBUG: a wasm host has no clock.)
+        let t0 = env_flag!("ENTRY_DEBUG").then(std::time::Instant::now);
         for round in 0..10_000 {
             pta.changed = false;
             pta.walk(&progs);
             pta.settle();
             if env_flag!("ENTRY_DEBUG") {
-                eprintln!("[ENTRY]   points-to round {round}: {} locations, {} escaped, {} written, {:?}", pta.locs.len(), pta.esc.len(), pta.written.len(), t0.elapsed());
+                eprintln!("[ENTRY]   points-to round {round}: {} locations, {} escaped, {} written, {:?}", pta.locs.len(), pta.esc.len(), pta.written.len(), t0.map(|t| t.elapsed()));
                 if round > 20 {
                     let sz = |m: &HashMap<usize, Pts>| m.values().map(|s| s.len()).sum::<usize>();
                     eprintln!(

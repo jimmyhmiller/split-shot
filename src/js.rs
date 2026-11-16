@@ -8031,7 +8031,11 @@ impl Js {
         // a loop, see `pair_fresh`). At addresses of their own, which no
         // path's allocations reach: where an object was made is kept by
         // address (`creation_pc`), for every path at once.)
-        let base = RECORD_ADDRS + rfid * RECORD_SPAN;
+        let base = rfid
+            .checked_mul(RECORD_SPAN)
+            .and_then(|o| RECORD_ADDRS.checked_add(o))
+            .filter(|b| b.checked_add(RECORD_SPAN).is_some())
+            .expect("internal: more residual functions with records than record addresses");
         let mut record_addrs: Vec<usize> = Vec::new();
         if let Some(g) = &group {
             assert!(g.nodes.len() < RECORD_SPAN, "internal: a record of more objects than its addresses");
@@ -11212,16 +11216,27 @@ const ENGINE_GLOBALS: &[&str] = &[
 
 const STANDARD_ERRORS: &[&str] = &["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError", "URIError"];
 
-/// (`MEM_DEBUG`: the process's peak resident size, from `getrusage`.)
-#[repr(C)]
-struct libc_rusage {
-    ru_utime: [i64; 2],
-    ru_stime: [i64; 2],
-    ru_maxrss: i64,
-    rest: [i64; 13],
+/// (`MEM_DEBUG`: the process's peak resident size, from `getrusage`:
+/// bytes on macOS, KiB on Linux. None where there is no such call, as in
+/// the wasm playground.)
+#[cfg(unix)]
+fn peak_rss() -> Option<i64> {
+    #[repr(C)]
+    struct LibcRusage {
+        ru_utime: [i64; 2],
+        ru_stime: [i64; 2],
+        ru_maxrss: i64,
+        rest: [i64; 13],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut LibcRusage) -> i32;
+    }
+    let mut ru: LibcRusage = unsafe { std::mem::zeroed() };
+    (unsafe { getrusage(0, &mut ru) } == 0).then_some(ru.ru_maxrss)
 }
-unsafe extern "C" {
-    fn getrusage(who: i32, usage: *mut libc_rusage) -> i32;
+#[cfg(not(unix))]
+fn peak_rss() -> Option<i64> {
+    None
 }
 
 /// A modeled proxy (`new Proxy(target, handler)`): `HeapObj::Builtin` of
@@ -13959,15 +13974,13 @@ impl Js {
         if at_entry {
             self.spec_blocks.set(self.spec_blocks.get() + 1);
             if env_flag!("MEM_DEBUG") && self.spec_blocks.get() % 250 == 0 {
-                let mut ru: libc_rusage = unsafe { std::mem::zeroed() };
-                unsafe { getrusage(0, &mut ru) };
                 let slots: usize = s.frames.iter().map(|f| f.locals.len() + f.ostack.len()).sum();
                 let props: usize = s.heap.iter().map(|(_, o)| o.children().len()).sum();
                 eprintln!(
                     "[MEM] blocks={} weight={} maxrss={} (bytes on macOS, KiB on Linux) heap={} children={} frames={} slots={} facts={} escaped={} globals={}",
                     self.spec_blocks.get(),
                     self.spec_weight.get(),
-                    ru.ru_maxrss,
+                    peak_rss().map_or("?".to_string(), |r| r.to_string()),
                     s.heap.len(),
                     props,
                     s.frames.len(),
@@ -36097,8 +36110,13 @@ const REC_LEAF_VAR: usize = usize::MAX - 1;
 /// as a runtime value.
 const REC_NODES: usize = 12;
 /// Where the record arguments of residual functions are held (see
-/// `Js::make_arg_variant`): past any address a path allocates.
+/// `Js::make_arg_variant`): past any address a path allocates. (Where an
+/// address is 32 bits, as in the wasm playground, a quarter of the space:
+/// such a host has memory for far fewer objects than that.)
+#[cfg(target_pointer_width = "64")]
 const RECORD_ADDRS: usize = 1 << 40;
+#[cfg(not(target_pointer_width = "64"))]
+const RECORD_ADDRS: usize = 1 << 30;
 /// How many addresses each residual function holds its records' objects
 /// at, from `RECORD_ADDRS` on (see `Js::make_arg_variant`).
 const RECORD_SPAN: usize = 1 << 16;

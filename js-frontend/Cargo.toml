@@ -12,7 +12,11 @@ swc_ecma_ast = "25.0.0"
 swc_ecma_parser = { version = "41.0.0", features = ["unstable"] }
 swc_ecma_visit = "25"
 swc_ecma_codegen = "=28.0.0"
-mimalloc = { version = "0.1.52", default-features = false }
 memchr = "2.8.1"
 swc_ecma_transforms_base = "=44.0.1"
 serde_json = { version = "=1.0.149", features = ["preserve_order"] }
+
+# The CLI's allocator (see main.rs). Not for wasm: the playground builds the
+# library for wasm32-unknown-unknown, which has no C library to build it with.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = { version = "0.1.52", default-features = false }
