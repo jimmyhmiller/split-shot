@@ -2329,6 +2329,25 @@ mod tests {
         assert_node_equiv(src, &[0, 5, -3]);
     }
 
+    /// An entry module held in memory links as the same module read from
+    /// its file does; module syntax is what makes a source a module.
+    #[test]
+    fn link_source_links_as_link_does() {
+        let src = "const K = [1, 2];\nfunction f(x) { return x + K[1]; }\nexport function main(x) { return f(x); }\nexport const inputs = [0, 1];\n";
+        let dir = std::env::temp_dir().join(format!("split-shot-link-source-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("program.mjs");
+        std::fs::write(&path, src).unwrap();
+        let path = std::fs::canonicalize(&path).unwrap();
+        let opts = link::LinkOptions { conditions: vec![], entry: "main".into() };
+        let from_file = link::link(&path, &opts).unwrap();
+        let from_source = link::link_source(path.to_str().unwrap(), src, &opts).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(from_file, from_source);
+        assert!(link::is_module_source(src));
+        assert!(!link::is_module_source("function main(x) { return x; }"));
+    }
+
     /// `f.toString()` of a function of known code is its source text, as a
     /// conversion of it (`"" + f`) is: the call folds, and so does what is
     /// computed from the text. A function's own `toString` is its own call.

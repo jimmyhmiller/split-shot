@@ -132,6 +132,40 @@ pub fn link(path: &Path, opts: &LinkOptions) -> Result<String, String> {
     })
 }
 
+/// Whether `src` is an ES module by its syntax (`import`/`export`
+/// declarations or `import.meta`), as Node decides of a file of no declared
+/// format.
+pub fn is_module_source(src: &str) -> bool {
+    GLOBALS.set(&Globals::new(), || {
+        let cm: Lrc<SourceMap> = Default::default();
+        matches!(detect(&cm, Path::new("program.mjs"), src, false), Detected::Esm)
+    })
+}
+
+/// `link`, for a program whose entry ES module is `src`, held in memory
+/// (`name` is its file name in messages; it is no file). The modules it
+/// imports are found and read as `link` finds and reads them.
+pub fn link_source(name: &str, src: &str, opts: &LinkOptions) -> Result<String, String> {
+    GLOBALS.set(&Globals::new(), || {
+        let mut l = Linker {
+            resolver: NodeResolver::new(&opts.conditions),
+            cm: Default::default(),
+            modules: Vec::new(),
+            by_key: HashMap::new(),
+            queue: Vec::new(),
+        };
+        let file = PathBuf::from(name);
+        let entry = l.modules.len();
+        l.modules.push(Module { kind: Kind::Esm, ts: is_ts(&file), file: file.clone(), source: src.to_string(), esm: None, cjs: None });
+        l.by_key.insert((file, Kind::Esm), entry);
+        l.queue.push(entry);
+        while let Some(id) = l.queue.pop() {
+            l.prepare(id)?;
+        }
+        l.emit(entry, &opts.entry)
+    })
+}
+
 type Id = (Atom, SyntaxContext);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

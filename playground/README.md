@@ -20,6 +20,14 @@ function main(text) {
 - `web/`: the Vite page. split-shot runs in a Web Worker, which is restarted
   after a Rust panic (a panic leaves the wasm instance unusable) and after a
   timeout.
+- A program with module syntax (`import`/`export`) is an ES module, linked as the
+  CLI links a `.mjs` file (`js_frontend::link::link_source`, the entry module
+  held in memory), and its exported `main` is specialized. Otherwise it is a
+  plain script. (In a script, top-level functions are globals another script
+  could replace; once there is top-level code, split-shot keeps calls through
+  them. A module's bindings are its own.)
+- The Interpreters examples are cases of the interpreter suite, imported from
+  `tools/wild/interp` (see `docs/INTERP.md`).
 - `examples/`: the example programs. An example may be several files (shown as
   tabs, specialized as one script in order): the compiler examples are an
   interpreter and its `main`, with `jsmix.js`, `binding-times.js` and

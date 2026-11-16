@@ -75,15 +75,28 @@ impl SpecResult {
 /// dynamic input) with the CLI's pipeline. `budget` is the specialization
 /// weight budget (0 = engine default); `source_names` names residual
 /// variables as the source does; `why` also returns the account of what
-/// the residual holds and for what cause.
+/// the residual holds and for what cause. A source with module syntax is an
+/// ES module, linked as the CLI links a `.mjs` file (`entry` is the export
+/// to call); otherwise it is a plain script.
 #[wasm_bindgen]
 pub fn specialize(src: &str, entry: &str, budget: f64, source_names: bool, why: bool) -> Result<SpecResult, JsError> {
+    let module = js_frontend::link::is_module_source(src);
+    let (program, entry) = if module {
+        let opts = js_frontend::link::LinkOptions { conditions: vec![], entry: entry.to_string() };
+        (js_frontend::link::link_source("/program.mjs", src, &opts).map_err(|e| JsError::new(&e))?, "main".to_string())
+    } else {
+        (src.to_string(), entry.to_string())
+    };
     let opts = js_frontend::LowerOpts {
         source_names,
+        // (A linked program's top-level names are the linker's own: no
+        // other script reads them.)
+        closed_script: module,
+        module_output: module,
         spec_budget: (budget > 0.0).then_some(budget as u64),
         ..js_frontend::LowerOpts::default()
     };
-    let s = js_frontend::specialize_full(src, entry, true, false, &opts, why).map_err(|e| JsError::new(&e))?;
+    let s = js_frontend::specialize_full(&program, &entry, true, false, &opts, why).map_err(|e| JsError::new(&e))?;
     Ok(SpecResult {
         ir: s.vm.dump(&s.prog),
         why: s.report.as_ref().map(|r| js_frontend::why_json(r).to_string()).unwrap_or_default(),
