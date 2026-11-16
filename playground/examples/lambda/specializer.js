@@ -1,12 +1,6 @@
-// The third Futamura projection, mix(mix, mix) = cogen.
-//
-// mix is Mogensen's five-case specializer for the lambda calculus, written
-// below as a lambda term (PA) with every application and abstraction marked
-// static (done now) or dynamic (left in the output). main applies the
-// specializer to itself and runs the result on the interpreter, which
-// split-shot leaves dynamic. What comes out is a compiler generator: give it
-// an annotated interpreter and it returns a compiler for that interpreter's
-// language.
+// Mogensen's five-case specializer for the lambda calculus, written as a
+// lambda term (PA) with every application and abstraction marked static (done
+// now) or dynamic (left in the output), and the kernel it runs on.
 //
 // A term is a function of five handlers, one per case (higher-order abstract
 // syntax): a variable, a static or dynamic application, a static or dynamic
@@ -53,10 +47,4 @@ function evaluate(term) {
   return term((x) => x)
     ((f) => (x) => evaluate(f)(evaluate(x)))
     ((body) => (x) => evaluate(body(x)));
-}
-
-function main(interpreter) {
-  var P = PA();
-  var generator = mix(P)(P);
-  return evaluate(generator)(interpreter);
 }

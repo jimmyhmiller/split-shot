@@ -1,4 +1,4 @@
-// The third projection as a plain program (playground/examples/cogen-lambda.js):
+// The third projection as a plain program (playground/examples/lambda):
 // split-shot specializes its main, and what comes out must be a compiler
 // generator. Its compilers are checked against the specializer applied to each
 // interpreter directly, their targets against the first projection, and the
@@ -6,12 +6,16 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict'),{execFileSync}=require('node:child_process');
 const M=require('../../demos/mogensen/engine.js');
 const ROOT=path.join(__dirname,'../..');
-const program=path.join(ROOT,'playground/examples/cogen-lambda.js');
+const LAMBDA=path.join(ROOT,'playground/examples/lambda');
+const specializer=fs.readFileSync(path.join(LAMBDA,'specializer.js'),'utf8');
 // (Outside any package.json, so the file is a plain script.)
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'cogen-'));
-fs.copyFileSync(program,path.join(dir,'cogen.js'));
-const out=execFileSync(path.join(ROOT,'target/release/js-frontend'),['--js',path.join(dir,'cogen.js')],{encoding:'utf8',maxBuffer:1<<26});
-const residual=out.slice(out.indexOf('\n')+1);
+function specialize(name,source){
+ fs.writeFileSync(path.join(dir,name),source);
+ const out=execFileSync(path.join(ROOT,'target/release/js-frontend'),['--js',path.join(dir,name)],{encoding:'utf8',maxBuffer:1<<26});
+ return out.slice(out.indexOf('\n')+1);
+}
+const residual=specialize('cogen.js',specializer+fs.readFileSync(path.join(LAMBDA,'cogen.js'),'utf8'));
 assert.ok(!/\bPA\b|\bLS\b|\bLD\b|\bV\(|name:|tag:/.test(residual),"the specializer term is left in the residual");
 const cogen=Function(residual+'\nreturn main;')();
 const examples=[
@@ -39,4 +43,18 @@ for(const [name,interpreter] of Object.entries(M.interpreters)){
   }
  }
 }
+// All three projections in a row (all-three.js): what is left is the compiled
+// program, which gives the square, and is what the first projection (the
+// interpreter specialized to the program) and the second (a compiler made by
+// specializing the specializer to the interpreter) leave of the same program.
+const allThree=fs.readFileSync(path.join(LAMBDA,'all-three.js'),'utf8');
+const targetCode=specialize('all-three.js',specializer+allThree);
+const square=Function(targetCode+'\nreturn main;')();
+let squares=0;
+for(let k=0;k<=9;k++){assert.equal(square(k),k*k,'square of '+k);squares++;}
+assert.ok(!/\bmix\b|\bevaluate\b|\bPA\b|=>/.test(targetCode),'the projections are left in the target: '+targetCode);
+const mainOf=(body)=>allThree.replace(/function main\(k\) \{[\s\S]*$/,'function main(k) {\n'+body+'\n}\n');
+assert.equal(specialize('p1.js',specializer+mainOf('  return count(evaluate(mix(EA())(square()))(church(k)));')),targetCode,'differs from the first projection');
+assert.equal(specialize('p2.js',specializer+mainOf('  var compiler = evaluate(mix(PA())(EA()));\n  return count(evaluate(compiler(square()))(church(k)));')),targetCode,'differs from the second projection');
+console.log(`all three projections: the target squares k for k = 0..9 (${squares} checks), and is byte for byte what the first and second projections give`);
 console.log(`residual ${residual.length} bytes; ${compilers} compilers equal mix(mix, interpreter); ${targets} targets equal mix(interpreter, program); ${numbers} results right`);

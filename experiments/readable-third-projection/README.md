@@ -11,17 +11,28 @@ handlers), not JavaScript source strings.
 
 ## As a plain program
 
-`playground/examples/cogen-lambda.js` is the same third projection written as an
-ordinary program: the annotated specializer PA in higher-order abstract syntax
-(five constructors; a binder is a JavaScript function of its variable), the
-kernel, and `main(interpreter) { return evaluate(mix(PA())(PA()))(interpreter); }`
-with PA built once. There is no quoting step and no generated literal. split-shot
-specializes it in about 0.2 s to a 6.3 KB compiler generator with nothing of the
-specializer term left (the generated literal of `lambda.input.js` gives 30 KB).
-`node experiments/readable-third-projection/check-plain.cjs` checks it: the
-compilers it makes equal mix(mix, interpreter) for both interpreters, their
-targets equal mix(interpreter, program), and the targets compute the right
-Church numerals.
+`playground/examples/lambda/specializer.js` is the specializer written as
+ordinary code: the annotated specializer PA in higher-order abstract syntax
+(five constructors; a binder is a JavaScript function of its variable) and the
+kernel. There is no quoting step and no generated literal.
+
+- `lambda/cogen.js`: `main(interpreter)` returns
+  `evaluate(mix(PA())(PA()))(interpreter)`. split-shot specializes it in about
+  0.2 s to a 6.3 KB compiler generator with nothing of the specializer term left
+  (the generated literal of `lambda.input.js` gives 30 KB).
+- `lambda/all-three.js`: `main(k)` runs all three projections in a row, then the
+  program: the cogen, the compiler it makes for the lambda calculus (EA), the
+  square of a Church numeral compiled with that, applied to `k` as a numeral and
+  read back as a number. Every stage is known, so split-shot runs them all and
+  leaves only the compiled program: two nested loops. (Returning the compiled
+  term itself, a function, leaves the evaluator in: an escaping closure is
+  emitted generically. A first-order interface lets everything fold.)
+
+`node experiments/readable-third-projection/check-plain.cjs` checks both: the
+cogen's compilers equal mix(mix, interpreter) for both interpreters, their
+targets equal mix(interpreter, program) and compute the right Church numerals;
+and the all-three target squares k for k = 0..9 and is byte for byte what the
+first and the second projection give for the same program.
 
 ## Reproduce
 

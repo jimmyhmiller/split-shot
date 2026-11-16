@@ -11,7 +11,9 @@ import interp from "../../examples/interp.js?raw";
 import vm from "../../examples/vm.js?raw";
 import brainfuck from "../../examples/brainfuck.js?raw";
 import jsfuck from "../../examples/jsfuck.js?raw";
-import cogenLambda from "../../examples/cogen-lambda.js?raw";
+import lambdaSpecializer from "../../examples/lambda/specializer.js?raw";
+import lambdaCogen from "../../examples/lambda/cogen.js?raw";
+import lambdaAllThree from "../../examples/lambda/all-three.js?raw";
 // Interpreters from the interpreter suite (tools/wild/interp), each an ES
 // module with a fixed program and an exported main.
 import interp0 from "../../../tools/wild/interp/wasm-structured-vm.mjs?raw";
@@ -75,7 +77,8 @@ export const GROUPS = [
     { id: "compiler-prompt-print", title: "prompt / print compiler", files: withJsmix(mainPromptPrint, "prompt-print.js", intPromptPrint) },
   ] },
   { label: "A compiler generator", examples: [
-    { id: "cogen-lambda", title: "Lambda calculus", files: one(cogenLambda) },
+    { id: "all-three-projections", title: "All three projections", files: [{ name: "all-three.js", src: lambdaAllThree }, { name: "specializer.js", src: lambdaSpecializer }] },
+    { id: "cogen-lambda", title: "The cogen itself", files: [{ name: "cogen.js", src: lambdaCogen }, { name: "specializer.js", src: lambdaSpecializer }] },
   ] },
 ];
 
