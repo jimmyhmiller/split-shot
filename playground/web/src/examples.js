@@ -15,6 +15,7 @@ import promptPrint from "../../examples/compiler-prompt-print.js?raw";
 import calculator from "../../examples/compiler-calculator.js?raw";
 import helpers from "../../examples/compiler-helpers.js?raw";
 import password from "../../examples/compiler-password.js?raw";
+import cogenLambda from "../../examples/cogen-lambda.js?raw";
 // The second projection's specializer, from experiments/general-jsmix.
 import jsmix from "../../../experiments/general-jsmix/jsmix.js?raw";
 import bindingTimes from "../../../experiments/general-jsmix/binding-times.js?raw";
@@ -45,6 +46,9 @@ export const GROUPS = [
     { id: "compiler-calculator", title: "Calculator", files: withJsmix(calculator) },
     { id: "compiler-helpers", title: "Helper functions", files: withJsmix(helpers) },
     { id: "compiler-password", title: "Password check", files: withJsmix(password) },
+  ] },
+  { label: "A compiler generator", examples: [
+    { id: "cogen-lambda", title: "Lambda calculus", files: one(cogenLambda) },
   ] },
 ];
 

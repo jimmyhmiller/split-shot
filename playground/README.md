@@ -20,7 +20,11 @@ function main(text) {
 - `web/`: the Vite page. split-shot runs in a Web Worker, which is restarted
   after a Rust panic (a panic leaves the wasm instance unusable) and after a
   timeout.
-- `examples/`: the example programs.
+- `examples/`: the example programs. An example may be several files (shown as
+  tabs, specialized as one script in order): the compiler examples are an
+  interpreter and its `main`, with `jsmix.js`, `binding-times.js` and
+  `subset-parse.js` from `experiments/general-jsmix`. `cogen-lambda.js` is the
+  third projection (see `experiments/readable-third-projection`).
 
 Routes: `#/<example>`, and `#/?s=…` for a shared program (deflated JSON in the
 URL).
