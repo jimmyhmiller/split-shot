@@ -33740,6 +33740,26 @@ impl Js {
         }
     }
 
+    /// `G.prototype.m` (as `(G, m)`): the method `f` names, read as a
+    /// runtime value or as the modeled intrinsic.
+    fn intrinsic_method_named(&self, s: &State, f: &Abs) -> Option<(String, String)> {
+        match f {
+            Abs::Dyn(RExpr::Get(p, m)) => {
+                let RExpr::Get(c, proto) = &**p else { return None };
+                let RExpr::Global(g) = &**c else { return None };
+                (proto == "prototype").then(|| (g.clone(), m.clone()))
+            }
+            Abs::Ref(a) => match s.heap.get(a) {
+                Some(HeapObj::Builtin { kind, .. }) => {
+                    let (g, m) = kind.split_once(".prototype.")?;
+                    Some((g.to_string(), m.to_string()))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// A standard introspection of a standard function `recv` (see
     /// `standard_function`), by the standard method `m` (`f` read as
     /// `Object.prototype.toString`, ...) called on it with `args`:
@@ -33747,27 +33767,19 @@ impl Js {
     /// `Function.prototype.toString` its native source, and
     /// `Object.prototype.hasOwnProperty` of a symbol whether it is its own.
     fn standard_fn_introspection(&self, s: &State, f: &Abs, recv: &Abs, args: &[Abs]) -> Option<Abs> {
+        // (Of a function of known code, `Function.prototype.toString` gives
+        // its source text, as `f.toString()` does.)
+        if let Abs::Ref(r) = recv {
+            if let HeapObj::Closure { fid, known: true, .. } = &s.heap[r] {
+                let text = self.fn_source_text[*fid].as_deref()?;
+                return (self.intrinsic_method_named(s, f).as_ref().is_some_and(|(g, m)| g == "Function" && m == "toString") && self.pristine("Function"))
+                    .then(|| Abs::Str(text.into()));
+            }
+        }
         let target = self.standard_function_in(Some(&s.heap), recv)?;
         // (The method read as a runtime value, `Object.prototype.toString`,
         // or the modeled intrinsic.)
-        let (g, m): (String, String) = match f {
-            Abs::Dyn(RExpr::Get(p, m)) => {
-                let RExpr::Get(c, proto) = &**p else { return None };
-                let RExpr::Global(g) = &**c else { return None };
-                if proto != "prototype" {
-                    return None;
-                }
-                (g.clone(), m.clone())
-            }
-            Abs::Ref(a) => match s.heap.get(a) {
-                Some(HeapObj::Builtin { kind, .. }) => {
-                    let (g, m) = kind.split_once(".prototype.")?;
-                    (g.to_string(), m.to_string())
-                }
-                _ => return None,
-            },
-            _ => return None,
-        };
+        let (g, m) = self.intrinsic_method_named(s, f)?;
         if !self.pristine(&g) {
             return None;
         }

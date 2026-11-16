@@ -2344,6 +2344,19 @@ mod tests {
             function main(x) { f.toString = function () { return \"own\" + x; }; return f.toString(); }",
             &[0, 5],
         );
+        // The intrinsic called on it with `call`, read inline or kept in a variable.
+        for call in ["Function.prototype.toString.call(f)", "fts.call(f)"] {
+            let src = format!("function f(a) {{ return a + 1; }}
+                function main(x) {{ var fts = Function.prototype.toString; var s = {call}; return [s.length, x]; }}");
+            let js = to_js(&src).unwrap();
+            assert!(!js.contains("toString"), "{call}: got:\n{js}");
+            assert_node_equiv(&src, &[0, 5]);
+        }
+        // An `apply` whose list is not array-like throws.
+        assert_node_equiv_outcome(
+            "function f(a) { return a; } function main(x) { return Function.prototype.toString.apply(f, 5 + x); }",
+            &[0, 5],
+        );
     }
 
     /// A method inherited from `Object.prototype` (`toString`, `hasOwnProperty`,
