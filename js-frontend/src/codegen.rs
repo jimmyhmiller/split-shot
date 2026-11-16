@@ -744,7 +744,11 @@ fn inline_fn_expr(rf: &ResidualFn, short_names: bool) -> Option<String> {
     SHORT.with(|n| *n.borrow_mut() = saved_short);
     STRICT.with(|c| c.set(saved_strict));
     let ps = param_list.join(", ");
-    Some(if is_method {
+    Some(if matches!(rf.kind, FnKind::Arrow) && name.is_empty() {
+        // (An anonymous arrow: an arrow, named by no binding or property
+        // it is put in, as the comma makes it.)
+        format!("(0, {asy}({ps}) => {{\n{body}}})")
+    } else if is_method {
         let (key, access) = method_key(name);
         format!("{{{asy}{star}{key}({ps}) {{\n{body}}}}}{access}")
     } else {
