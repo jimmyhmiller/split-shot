@@ -221,9 +221,10 @@ var BUILTINS = {
     });
     return points;
   },
-  // A state's label ("S" and its index in `seen`), and `seen` with it.
+  // A state's label ("S" and its index in `seen`), and `seen` with it. (Only
+  // the states at the same block are compared.)
   intern: function (state, seen) {
-    for (var i = 0; i < seen.length; i++) if (sameData(seen[i], state)) return ["S" + i, seen];
+    for (var i = 0; i < seen.length; i++) if (seen[i][0] === state[0] && sameData(seen[i][1], state[1])) return ["S" + i, seen];
     return ["S" + seen.length, seen.concat([state])];
   },
   // Whether an expression uses only the static variables `names`.
@@ -240,10 +241,16 @@ var BUILTINS = {
 // Equal as data (arrays element by element, the rest by ===). The same object
 // is equal at once: states share their large static values, such as a whole
 // program.
+// (A loop over pairs, not a recursion over the data's depth.)
 function sameData(a, b) {
-  if (a === b) return true;
-  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-  for (var i = 0; i < a.length; i++) if (!sameData(a[i], b[i])) return false;
+  var pairs = [[a, b]];
+  while (pairs.length > 0) {
+    var pair = pairs.pop();
+    var x = pair[0], y = pair[1];
+    if (x === y) continue;
+    if (!Array.isArray(x) || !Array.isArray(y) || x.length !== y.length) return false;
+    for (var i = 0; i < x.length; i++) pairs.push([x[i], y[i]]);
+  }
   return true;
 }
 
