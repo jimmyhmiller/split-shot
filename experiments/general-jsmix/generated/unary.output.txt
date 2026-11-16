@@ -1,0 +1,9 @@
+--- residual as JavaScript (1 block(s)) ---
+function main(c) {
+  let b, a;
+  b = codegen.buffer();
+  a = codegen.reference("io");
+  a = codegen.call(b, a, "prompt", []);
+  a = codegen.unary("-", a);
+  return codegen.finish(b, a);
+}

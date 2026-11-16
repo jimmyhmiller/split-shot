@@ -1,0 +1,67 @@
+--- residual as JavaScript (22 block(s)) ---
+function __rf0(a) {
+  if (a === null) {
+    return "null";
+  }
+  if (typeof a === "number") {
+    return "" + a;
+  }
+  return a;
+}
+
+function main(e) {
+  let c, b, a, d;
+  c = [];
+  b = {program: {value: e}, io: {value: "x"}, value: {value: null}, instruction: {value: void 0}};
+  while ((b["program"]).value.length > 0) {
+    a: {
+      a = (b["program"]).value[0];
+      (b["instruction"]).value = a;
+      if ((b["instruction"]).value === "prompt") {
+        a = (b["io"]).value;
+        if (a === null) {
+          a = "v" + c.length;
+          c.push("var " + a + " = null.prompt();\n");
+          (b["value"]).value = a;
+          break a;
+        }
+        b: {
+          if (typeof a === "number") {
+            d = "" + a + ".prompt(";
+            break b;
+          }
+          d = a + ".prompt(";
+        }
+        a = "v" + c.length;
+        c.push("var " + a + " = " + d + ");\n");
+        (b["value"]).value = a;
+        break a;
+      }
+      a = (b["io"]).value;
+      d = __rf0(a) + ".print(";
+      d += __rf0((b["value"]).value);
+      a = "v" + c.length;
+      c.push("var " + a + " = " + d + ");\n");
+    }
+    a = (b["program"]).value;
+    a = a.slice(1);
+    (b["program"]).value = a;
+  }
+  b = (b["value"]).value;
+  if (b === null) {
+    if (c.length === 0) {
+      return "null";
+    }
+    return "(function(){\n" + c.join("") + "return null;\n})()";
+  }
+  if (typeof b === "number") {
+    if (c.length === 0) {
+      return "" + b;
+    }
+    return "(function(){\n" + c.join("") + "return " + ("" + b) + ";\n})()";
+  }
+  if (c.length === 0) {
+    return b;
+  }
+  return "(function(){\n" + c.join("") + "return " + b + ";\n})()";
+}

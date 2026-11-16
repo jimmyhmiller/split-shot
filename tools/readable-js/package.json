@@ -1,0 +1,14 @@
+{
+  "name": "split-shot-readable-js",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test": "node test.cjs && node test-bindings.cjs"
+  },
+  "dependencies": {
+    "acorn": "8.15.0",
+    "astring": "1.9.0",
+    "eslint-scope": "8.4.0"
+  },
+  "main": "index.cjs"
+}

@@ -1,0 +1,867 @@
+--- residual as JavaScript (138 block(s)) ---
+function __rf0(f, g, d, i) {
+  let a, c, b, e, h, n, j, o, l, k, p, m;
+  a = g[0];
+  if (a === "lit") {
+    return g[1];
+  }
+  if (a === "var") {
+    a = g[1];
+    if (d[0][0] === a) {
+      return d[0][1];
+    }
+    if (d[1][0] === a) {
+      return d[1][1];
+    }
+    if (d[2][0] === a) {
+      return d[2][1];
+    }
+    if (d[3][0] === a) {
+      return d[3][1];
+    }
+    if (d[4][0] === a) {
+      return d[4][1];
+    }
+    if (d[5][0] === a) {
+      return d[5][1];
+    }
+    if (d[6][0] === a) {
+      return d[6][1];
+    }
+    if (d[7][0] === a) {
+      return d[7][1];
+    }
+    return 0;
+  }
+  if (a === "arr") {
+    a = g[1];
+    c = [];
+    b = 0;
+    while (b < a.length) {
+      c.push;
+      e = __rf0(f, a[b], d, i);
+      c.push(e);
+      b += 1;
+    }
+    return c;
+  }
+  if (a === "idx") {
+    return __rf0(f, g[1], d, i)[__rf0(f, g[2], d, i)];
+  }
+  if (a === "dot") {
+    a = __rf0(f, g[1], d, i);
+    if (g[2] === "length") {
+      return a.length;
+    }
+    return 0;
+  }
+  if (a === "bin") {
+    a = g[1];
+    c = a === "+" ? a === "+" : a === "-";
+    c = c ? c : a === "*";
+    if (c) {
+      c = __rf0(f, g[2], d, i);
+      b = __rf0(f, g[3], d, i);
+      if (typeof c === "number" ? typeof b === "number" : typeof c === "number") {
+        if (a === "+") {
+          return c + b;
+        }
+        if (a === "-") {
+          return c - b;
+        }
+        return c * b;
+      }
+      c = __rf1(c);
+      b = __rf1(b);
+      if (a === "+") {
+        return "(" + c + " + " + b + ")";
+      }
+      if (a === "-") {
+        return "(" + c + " - " + b + ")";
+      }
+      return "(" + c + " * " + b + ")";
+    }
+    c = __rf0(f, g[2], d, i);
+    b = __rf0(f, g[3], d, i);
+    e = a === "===" ? a === "===" : a === "==";
+    if (e) {
+      return c === b;
+    }
+    e = a === "!==" ? a === "!==" : a === "!=";
+    if (e) {
+      return c !== b;
+    }
+    if (a === "<") {
+      return c < b;
+    }
+    if (a === ">") {
+      return c > b;
+    }
+    if (a === "<=") {
+      return c <= b;
+    }
+    return c >= b;
+  }
+  if (a === "cond") {
+    if (__rf0(f, g[1], d, i)) {
+      return __rf0(f, g[2], d, i);
+    }
+    return __rf0(f, g[3], d, i);
+  }
+  c = i;
+  if (a === "call") {
+    a = g[1];
+    b = g[2];
+    e = a[0] === "dot";
+    e = e ? a[2] === "reduce" : e;
+    if (e) {
+      a = __rf0(f, a[1], d, c);
+      e = b[0];
+      b = __rf1(__rf0(f, b[1], d, c));
+      h = e[1][0];
+      n = e[1][1];
+      a: while (a.length > 0) {
+        j = [];
+        if (d[0][0] === "") {
+          j.push;
+          o = [h, b];
+          p = e[2];
+          j.push(o);
+          l = 1;
+          k = 0;
+          while (true) {
+            k += 1;
+            if (k < 8) {
+              m = l === 0;
+              m = m ? d[k][0] === "" : l === 0;
+              if (m) {
+                j.push;
+                j.push([h, b]);
+                l = 1;
+                continue;
+              }
+              j.push(d[k]);
+              continue;
+            }
+            b = __rf3(f, p, __rf2(j, n, a[0]), c)[1];
+            a = a.slice(1);
+            continue a;
+          }
+        }
+        o = e[2];
+        j.push(d[0]);
+        l = 0;
+        k = 0;
+        while (true) {
+          k += 1;
+          if (k < 8) {
+            m = l === 0;
+            m = m ? d[k][0] === "" : l === 0;
+            if (m) {
+              j.push;
+              j.push([h, b]);
+              l = 1;
+              continue;
+            }
+            j.push(d[k]);
+            continue;
+          }
+          b = __rf3(f, o, __rf2(j, n, a[0]), c)[1];
+          a = a.slice(1);
+          continue a;
+        }
+      }
+      return b;
+    }
+    e = a[0] === "dot";
+    e = e ? a[2] === "slice" : e;
+    if (e) {
+      a = __rf0(f, a[1], d, c);
+      e = a.slice;
+      c = __rf0(f, b[0], d, c);
+      return e.call(a, c);
+    }
+    if (a[0] === "dot") {
+      a = __rf1(__rf0(f, a[1], d, c)) + "." + a[2] + "(";
+      e = 0;
+      while (e < b.length) {
+        if (e > 0) {
+          a += ", ";
+        }
+        a += __rf1(__rf0(f, b[e], d, c));
+        e += 1;
+      }
+      b = "v" + c.length;
+      c.push("var " + b + " = " + a + ");\n");
+      return b;
+    }
+    e = [];
+    h = 0;
+    while (h < b.length) {
+      e.push;
+      n = __rf0(f, b[h], d, c);
+      e.push(n);
+      h += 1;
+    }
+    a = a[1];
+    b = 0;
+    while (true) {
+      b: {
+        if (b < f.length) {
+          if (f[b][1] === a) {
+            a = f[b];
+            b = [["", 0], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0]];
+            h = 0;
+            break b;
+          }
+          b += 1;
+          continue;
+        }
+        a = f[0];
+        b = [["", 0], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0]];
+        h = 0;
+      }
+      while (h < (a[2]).length) {
+        b = __rf2(b, a[2][h], e[h]);
+        h += 1;
+      }
+      return __rf3(f, a[3], b, c)[1];
+    }
+  }
+  return 0;
+}
+
+function __rf1(a) {
+  if (a === null) {
+    return "null";
+  }
+  if (typeof a === "number") {
+    return "" + a;
+  }
+  return a;
+}
+
+function __rf2(d, e, f) {
+  let b, c, a;
+  a: {
+    b = [];
+    if (d[0][0] === "") {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break a;
+    }
+    b.push(d[0]);
+    c = 0;
+  }
+  b: {
+    a = c === 0;
+    a = a ? d[1][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break b;
+    }
+    b.push(d[1]);
+  }
+  c: {
+    a = c === 0;
+    a = a ? d[2][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break c;
+    }
+    b.push(d[2]);
+  }
+  d: {
+    a = c === 0;
+    a = a ? d[3][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break d;
+    }
+    b.push(d[3]);
+  }
+  e: {
+    a = c === 0;
+    a = a ? d[4][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break e;
+    }
+    b.push(d[4]);
+  }
+  f: {
+    a = c === 0;
+    a = a ? d[5][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break f;
+    }
+    b.push(d[5]);
+  }
+  g: {
+    a = c === 0;
+    a = a ? d[6][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      c = 1;
+      break g;
+    }
+    b.push(d[6]);
+  }
+  h: {
+    a = c === 0;
+    a = a ? d[7][0] === "" : c === 0;
+    if (a) {
+      b.push;
+      b.push([e, f]);
+      break h;
+    }
+    b.push(d[7]);
+  }
+  return b;
+}
+
+function __rf3(d, g, i, e) {
+  let a, f, c, b, h;
+  a = i;
+  f = 0;
+  while (f < g.length) {
+    c = g[f];
+    b = c[0];
+    if (b === "return") {
+      return [true, __rf0(d, c[1], a, e), a];
+    }
+    a: {
+      h = b === "var" ? b === "var" : b === "assign";
+      if (h) {
+        b = c[1];
+        c = __rf0(d, c[2], a, e);
+        a = __rf4(a, b, c);
+        break a;
+      }
+      if (b === "expr") {
+        __rf0(d, c[1], a, e);
+        break a;
+      }
+      if (b === "if") {
+        b = c[3];
+        if (__rf0(d, c[1], a, e)) {
+          b = c[2];
+        }
+        if (b) {
+          a = __rf3(d, [b], a, e);
+          if (a[0]) {
+            return a;
+          }
+          a = a[2];
+          break a;
+        }
+        break a;
+      }
+      if (b === "block") {
+        a = __rf3(d, c[1], a, e);
+        if (a[0]) {
+          return a;
+        }
+        a = a[2];
+        break a;
+      }
+      if (b === "while") {
+        while (__rf0(d, c[1], a, e)) {
+          a = __rf3(d, [c[2]], a, e);
+          if (a[0]) {
+            return a;
+          }
+          a = a[2];
+        }
+      }
+    }
+    f += 1;
+  }
+  return [false, null, a];
+}
+
+function __rf4(b, c, e) {
+  let a, d;
+  a: {
+    a = [];
+    if (b[0][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break a;
+    }
+    a.push(b[0]);
+    d = false;
+  }
+  b: {
+    if (b[1][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break b;
+    }
+    a.push(b[1]);
+  }
+  c: {
+    if (b[2][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break c;
+    }
+    a.push(b[2]);
+  }
+  d: {
+    if (b[3][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break d;
+    }
+    a.push(b[3]);
+  }
+  e: {
+    if (b[4][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break e;
+    }
+    a.push(b[4]);
+  }
+  f: {
+    if (b[5][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break f;
+    }
+    a.push(b[5]);
+  }
+  g: {
+    if (b[6][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break g;
+    }
+    a.push(b[6]);
+  }
+  h: {
+    if (b[7][0] === c) {
+      a.push;
+      a.push([c, e]);
+      d = true;
+      break h;
+    }
+    a.push(b[7]);
+  }
+  if (d) {
+    return a;
+  }
+  return __rf2(b, c, e);
+}
+
+function main(l) {
+  let b, a, h, e, g, f, i, d, c, j, k;
+  b = ["if", ["bin", "===", ["var", "instruction"], ["lit", "prompt"]], ["block", [["assign", "value", ["call", ["dot", ["var", "io"], "prompt"], []]]]], ["block", [["expr", ["call", ["dot", ["var", "io"], "print"], [["var", "value"]]]]]]];
+  a = [["program", l], ["io", "x"], ["value", null], ["", 0], ["", 0], ["", 0], ["", 0], ["", 0]];
+  h = ["var", "program"];
+  h = ["dot", h, "length"];
+  e = ["lit", 0];
+  h = ["bin", ">", h, e];
+  e = ["var", "program"];
+  g = ["lit", 0];
+  e = ["idx", e, g];
+  e = ["var", "instruction", e];
+  g = ["var", "program"];
+  g = ["dot", g, "slice"];
+  f = ["lit", 1];
+  f = [f];
+  g = ["call", g, f];
+  g = ["assign", "program", g];
+  b = [e, b, g];
+  b = ["block", b];
+  b = ["while", h, b];
+  h = [["var", "value", ["lit", null]], b, ["return", ["var", "value"]]];
+  e = [["fundecl", "interp", ["program", "io"], h, ["program", "io", "value", "instruction"]]];
+  g = [];
+  a: while (true) {
+    b: {
+      c: {
+        d: {
+          e: {
+            f: {
+              if (__rf0(e, b[1], a, g)) {
+                f = 0;
+                i = [b[2]];
+                while (f < i.length) {
+                  d = i[f];
+                  c = d[0];
+                  if (c === "return") {
+                    b = __rf0(e, d[1], a, g);
+                    if (b === null) {
+                      break e;
+                    }
+                    break f;
+                  }
+                  g: {
+                    if (c === "var" ? c === "var" : c === "assign") {
+                      a = __rf4(a, d[1], __rf0(e, d[2], a, g));
+                      break g;
+                    }
+                    if (c === "expr") {
+                      __rf0(e, d[1], a, g);
+                      break g;
+                    }
+                    if (c === "if") {
+                      c = d[3];
+                      if (__rf0(e, d[1], a, g)) {
+                        c = d[2];
+                      }
+                      if (c) {
+                        a = __rf3(e, [c], a, g);
+                        if (a[0]) {
+                          if (a[0]) {
+                            b = a[1];
+                            if (b === null) {
+                              break e;
+                            }
+                            break d;
+                          }
+                          a = a[2];
+                          continue a;
+                        }
+                        a = a[2];
+                        break g;
+                      }
+                      break g;
+                    }
+                    if (c === "block") {
+                      a = __rf3(e, d[1], a, g);
+                      if (a[0]) {
+                        if (a[0]) {
+                          b = a[1];
+                          if (b === null) {
+                            break e;
+                          }
+                          break d;
+                        }
+                        a = a[2];
+                        continue a;
+                      }
+                      a = a[2];
+                      break g;
+                    }
+                    if (c === "while") {
+                      while (__rf0(e, d[1], a, g)) {
+                        a = __rf3(e, [d[2]], a, g);
+                        if (a[0]) {
+                          if (a[0]) {
+                            b = a[1];
+                            if (b === null) {
+                              break e;
+                            }
+                            break d;
+                          }
+                          a = a[2];
+                          continue a;
+                        }
+                        a = a[2];
+                      }
+                      break g;
+                    }
+                    f += 1;
+                    continue;
+                  }
+                  f += 1;
+                }
+                continue;
+              }
+              b = e;
+              e = g;
+              f = 1;
+              h: while (true) {
+                f += 1;
+                while (f < h.length) {
+                  d = h[f];
+                  c = d[0];
+                  if (c === "return") {
+                    b = __rf0(b, d[1], a, e);
+                    if (b === null) {
+                      break e;
+                    }
+                    break f;
+                  }
+                  if (c === "var" ? c === "var" : c === "assign") {
+                    a = __rf4(a, d[1], __rf0(b, d[2], a, e));
+                    continue h;
+                  }
+                  if (c === "expr") {
+                    __rf0(b, d[1], a, e);
+                    continue h;
+                  }
+                  if (c === "if") {
+                    c = d[3];
+                    if (__rf0(b, d[1], a, e)) {
+                      c = d[2];
+                    }
+                    if (c) {
+                      i: {
+                        j = f;
+                        f = 0;
+                        i = [c];
+                        if (f < i.length) {
+                          d = i[f];
+                          c = d[0];
+                          if (c === "return") {
+                            b = __rf0(b, d[1], a, e);
+                            if (b === null) {
+                              break e;
+                            }
+                            break f;
+                          }
+                          j: {
+                            k: {
+                              l: {
+                                if (c === "var" ? c === "var" : c === "assign") {
+                                  a = __rf4(a, d[1], __rf0(b, d[2], a, e));
+                                  break l;
+                                }
+                                if (c === "expr") {
+                                  __rf0(b, d[1], a, e);
+                                  break l;
+                                }
+                                if (c === "if") {
+                                  c = d[3];
+                                  if (__rf0(b, d[1], a, e)) {
+                                    c = d[2];
+                                  }
+                                  if (c) {
+                                    a = __rf3(b, [c], a, e);
+                                    if (a[0]) {
+                                      if (a[0]) {
+                                        break j;
+                                      }
+                                      a = a[2];
+                                      break i;
+                                    }
+                                    a = a[2];
+                                    break l;
+                                  }
+                                  break l;
+                                }
+                                if (c === "block") {
+                                  a = __rf3(b, d[1], a, e);
+                                  if (a[0]) {
+                                    if (a[0]) {
+                                      b = a[1];
+                                      if (b === null) {
+                                        break e;
+                                      }
+                                      break d;
+                                    }
+                                    a = a[2];
+                                    break i;
+                                  }
+                                  a = a[2];
+                                  break l;
+                                }
+                                if (c === "while") {
+                                  while (__rf0(b, d[1], a, e)) {
+                                    a = __rf3(b, [d[2]], a, e);
+                                    if (a[0]) {
+                                      if (a[0]) {
+                                        b = a[1];
+                                        if (b === null) {
+                                          break e;
+                                        }
+                                        break d;
+                                      }
+                                      a = a[2];
+                                      break i;
+                                    }
+                                    a = a[2];
+                                  }
+                                }
+                                f += 1;
+                                k = h;
+                                h = i;
+                                break k;
+                              }
+                              f += 1;
+                              k = h;
+                              h = i;
+                            }
+                            m: {
+                              while (f < h.length) {
+                                d = h[f];
+                                c = d[0];
+                                if (c === "return") {
+                                  b = __rf0(b, d[1], a, e);
+                                  if (b === null) {
+                                    break e;
+                                  }
+                                  break f;
+                                }
+                                n: {
+                                  if (c === "var" ? c === "var" : c === "assign") {
+                                    a = __rf4(a, d[1], __rf0(b, d[2], a, e));
+                                    break n;
+                                  }
+                                  if (c === "expr") {
+                                    __rf0(b, d[1], a, e);
+                                    break n;
+                                  }
+                                  if (c === "if") {
+                                    c = d[3];
+                                    if (__rf0(b, d[1], a, e)) {
+                                      c = d[2];
+                                    }
+                                    if (c) {
+                                      a = __rf3(b, [c], a, e);
+                                      if (a[0]) {
+                                        if (a[0]) {
+                                          break j;
+                                        }
+                                        a = a[2];
+                                        break m;
+                                      }
+                                      a = a[2];
+                                      break n;
+                                    }
+                                    break n;
+                                  }
+                                  if (c === "block") {
+                                    a = __rf3(b, d[1], a, e);
+                                    if (a[0]) {
+                                      if (a[0]) {
+                                        b = a[1];
+                                        if (b === null) {
+                                          break e;
+                                        }
+                                        break d;
+                                      }
+                                      a = a[2];
+                                      break m;
+                                    }
+                                    a = a[2];
+                                    break n;
+                                  }
+                                  if (c === "while") {
+                                    while (__rf0(b, d[1], a, e)) {
+                                      a = __rf3(b, [d[2]], a, e);
+                                      if (a[0]) {
+                                        if (a[0]) {
+                                          b = a[1];
+                                          if (b === null) {
+                                            break e;
+                                          }
+                                          break d;
+                                        }
+                                        a = a[2];
+                                        break m;
+                                      }
+                                      a = a[2];
+                                    }
+                                  }
+                                  f += 1;
+                                  continue;
+                                }
+                                f += 1;
+                              }
+                            }
+                            h = k;
+                            f = j;
+                            continue h;
+                          }
+                          b = a[1];
+                          if (b === null) {
+                            break e;
+                          }
+                          break d;
+                        }
+                      }
+                      f = j;
+                      continue h;
+                    }
+                    continue h;
+                  }
+                  if (c === "block") {
+                    a = __rf3(b, d[1], a, e);
+                    if (a[0]) {
+                      b = a[1];
+                      if (b === null) {
+                        break e;
+                      }
+                      break d;
+                    }
+                    a = a[2];
+                    continue h;
+                  }
+                  if (c === "while") {
+                    while (__rf0(b, d[1], a, e)) {
+                      a = __rf3(b, [d[2]], a, e);
+                      if (a[0]) {
+                        b = a[1];
+                        if (b === null) {
+                          break e;
+                        }
+                        break d;
+                      }
+                      a = a[2];
+                    }
+                  }
+                  f += 1;
+                }
+                if (g.length === 0) {
+                  break c;
+                }
+                break b;
+              }
+            }
+            if (typeof b === "number") {
+              if (g.length === 0) {
+                return "" + b;
+              }
+              return "(function(){\n" + g.join("") + "return " + ("" + b) + ";\n})()";
+            }
+            if (g.length === 0) {
+              return b;
+            }
+            return "(function(){\n" + g.join("") + "return " + b + ";\n})()";
+          }
+          if (g.length === 0) {
+            break c;
+          }
+          break b;
+        }
+        if (typeof b === "number") {
+          if (g.length === 0) {
+            return "" + b;
+          }
+          return "(function(){\n" + g.join("") + "return " + ("" + b) + ";\n})()";
+        }
+        if (g.length === 0) {
+          return b;
+        }
+        return "(function(){\n" + g.join("") + "return " + b + ";\n})()";
+      }
+      return "null";
+    }
+    return "(function(){\n" + g.join("") + "return null;\n})()";
+  }
+}

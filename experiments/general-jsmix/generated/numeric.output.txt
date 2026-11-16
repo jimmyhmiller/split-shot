@@ -1,0 +1,9 @@
+--- residual as JavaScript (1 block(s)) ---
+function main(b) {
+  let c, a, d;
+  c = codegen.buffer();
+  a = codegen.reference("io");
+  d = b[0];
+  a = codegen.binary("+", a, d);
+  return codegen.finish(c, a);
+}

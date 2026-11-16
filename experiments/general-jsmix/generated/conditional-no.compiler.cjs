@@ -1,0 +1,30 @@
+function compile(g) {
+  let a, b, h, i, j, k, l, m, c, d, e, f, p;
+  a = codegen.buffer();
+  b = codegen.reference("io");
+  h = codegen.call(a, b, "prompt", []);
+  i = g[0];
+  j = codegen.binary("===", h, i);
+  k = codegen.fork(a);
+  l = a;
+  m = j;
+  c = k;
+  d = codegen.fork(a);
+  try {
+    b = codegen.reference("io");
+    e = codegen.call(c, b, "prompt", []);
+  } catch (n) {
+    e = codegen.caught(c, n)[1];
+  }
+  try {
+    b = codegen.reference("io");
+    f = codegen.call(d, b, "prompt", []);
+  } catch (o) {
+    f = codegen.caught(d, o)[1];
+  }
+  p = codegen.conditional(l, m, c, e, d, f);
+  return codegen.finish(a, p);
+}
+
+const codegen = require("../codegen.cjs");
+module.exports={compile,run:function(program,io){return Function("return ("+compile(program)+");")()(io);}};

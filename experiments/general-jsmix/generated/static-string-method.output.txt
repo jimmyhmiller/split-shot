@@ -1,0 +1,11 @@
+--- residual as JavaScript (1 block(s)) ---
+function main(e) {
+  let b, a, c, d;
+  b = codegen.buffer();
+  a = codegen.call(b, "hello", "toUpperCase", []).source;
+  c = codegen.reference("io");
+  d = [codegen.reference(a)];
+  codegen.call(b, c, "print", d);
+  a = codegen.reference(a);
+  return codegen.finish(b, a);
+}

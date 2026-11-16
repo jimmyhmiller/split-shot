@@ -1,0 +1,10 @@
+{
+  "compile": {
+    "f": "program",
+    "c": "remaining",
+    "a": "value",
+    "d": "lines",
+    "b": "text",
+    "e": "name"
+  }
+}

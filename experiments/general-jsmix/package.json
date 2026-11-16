@@ -1,0 +1,13 @@
+{
+  "name": "split-shot-general-jsmix",
+  "private": true,
+  "scripts": {
+    "build": "node derive.cjs",
+    "test": "node check-codegen.cjs && node check.cjs",
+    "clean": "node clean-bindings.cjs",
+    "test:bindings": "node clean-bindings.cjs && node check-bindings.cjs"
+  },
+  "dependencies": {
+    "acorn": "8.15.0"
+  }
+}

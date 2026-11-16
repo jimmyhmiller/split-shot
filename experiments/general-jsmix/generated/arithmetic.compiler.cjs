@@ -1,0 +1,36 @@
+function compile(e) {
+  let c, a, b, d, f;
+  c = codegen.buffer();
+  a = codegen.literal(0).source;
+  b = e;
+  while (b["length"] > 0) {
+    a: {
+      if (b[0][0] === "get") {
+        a = codegen.reference("io");
+        a = codegen.call(c, a, "fetch", []).source;
+        break a;
+      }
+      if (b[0][0] === "scale") {
+        a = codegen.reference(a);
+        d = b[0][1];
+        a = codegen.binary("*", a, d);
+        a = codegen.bindExpression(c, a).source;
+        break a;
+      }
+      if (b[0][0] === "literal") {
+        a = b[0][1];
+        a = codegen.literal(a).source;
+        break a;
+      }
+      d = codegen.reference("io");
+      f = [codegen.reference(a)];
+      codegen.call(c, d, "send", f);
+    }
+    b = b.slice(1);
+  }
+  a = codegen.reference(a);
+  return codegen.finish(c, a);
+}
+
+const codegen = require("../codegen.cjs");
+module.exports={compile,run:function(program,io){return Function("return ("+compile(program)+");")()(io);}};

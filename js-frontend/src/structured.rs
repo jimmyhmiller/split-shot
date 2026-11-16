@@ -15,6 +15,10 @@
 //!   code is placed inline;
 //! - a back edge is a `continue` of the loop it closes.
 //!
+//! Small copy-only forwarding blocks are first folded onto unconditional
+//! incoming edges with bounded duplication: join copies must not introduce
+//! extra loop entries or nested loops merely to assign a variable.
+//!
 //! A cleanup pass then removes jumps that only restate fall-through, unneeded
 //! `else` arms, blocks and labels, and turns a loop that starts with an exit test
 //! into a `while (cond)` loop. An irreducible graph, or one that would nest more
@@ -813,16 +817,60 @@ fn print(stmts: &[Stmt], ind: &str, loops: &mut Vec<String>, need: &HashSet<Stri
     }
 }
 
+/// Fold small copy-only forwarding blocks onto unconditional incoming edges.
+/// A copy introduced when loop states join can otherwise give a loop two
+/// entries (before and after the copy), forcing the dispatcher fallback. Each
+/// incoming edge executes exactly the same copies in the same order. No copy
+/// is moved across a conditional edge, and a total budget bounds code growth.
+fn fold_edge_copies(prog: &Program<Op, Cond>) -> std::borrow::Cow<'_, Program<Op, Cond>> {
+    let mut result = std::borrow::Cow::Borrowed(prog);
+    let mut budget = 128usize;
+    loop {
+        let mut incoming = vec![Vec::new(); result.blocks.len()];
+        for (i, block) in result.blocks.iter().enumerate() {
+            match block.term {
+                Terminator::Br(to) => incoming[to.0].push((i, true)),
+                Terminator::Cond { t, f, .. } => {
+                    incoming[t.0].push((i, false));
+                    incoming[f.0].push((i, false));
+                }
+                _ => {}
+            }
+        }
+        let candidate = result.blocks.iter().enumerate().find_map(|(i, block)| {
+            let Terminator::Br(to) = block.term else { return None };
+            let preds = &incoming[i];
+            (i != result.entry.0 && to.0 != i && !block.ops.is_empty()
+                && block.ops.len() <= 4 && preds.len() >= 2
+                && preds.iter().all(|(p, unconditional)| *p != i && *unconditional)
+                && block.ops.len() * (preds.len() - 1) <= budget
+                && block.ops.iter().all(|op| matches!(op, Op::Eval { expr: RExpr::Var(_), .. } | Op::Assign { expr: RExpr::Var(_), .. })))
+                .then_some((i, to, preds.clone()))
+        });
+        let Some((from, to, preds)) = candidate else { break };
+        let result = result.to_mut();
+        let copies = result.blocks[from].ops.clone();
+        budget -= copies.len() * (preds.len() - 1);
+        for (pred, _) in preds {
+            result.blocks[pred].ops.extend(copies.iter().cloned());
+            result.blocks[pred].term = Terminator::Br(to);
+        }
+        partial::residual::simplify(result);
+    }
+    result
+}
+
 /// Render `prog` as structured statements at indentation `ind`, or `None` if
 /// its graph is irreducible. `halt_return` is the statement for a block that
 /// completes normally (`Halt` without a `return`) in a function body; inside a
 /// `try`/`catch` sub-program (`in_try`) normal completion instead ends the
 /// sub-program, which is a `break` out of a block wrapping it.
 pub(crate) fn render_structured(prog: &Program<Op, Cond>, ind: &str, in_try: bool, tag: usize) -> Option<String> {
-    let g = Graph::new(prog, tag)?;
+    let normalized = fold_edge_copies(prog);
+    let g = Graph::new(normalized.as_ref(), tag)?;
     let wrap = format!("T{tag}");
     let halt = if in_try { Stmt::Break(wrap.clone()) } else { Stmt::Exit("return undefined;".into()) };
-    let mut stmts = g.do_tree(prog.entry.0, &halt);
+    let mut stmts = g.do_tree(g.prog.entry.0, &halt);
     if in_try {
         stmts = vec![Stmt::Block { label: wrap, body: stmts }];
     } else {
@@ -871,4 +919,98 @@ pub(crate) fn render_structured(prog: &Program<Op, Cond>, ind: &str, in_try: boo
     let mut out = String::new();
     print(&stmts, ind, &mut Vec::new(), &need, &mut out);
     Some(out)
+}
+
+#[cfg(test)]
+mod edge_copy_tests {
+    use super::*;
+    use partial::jsnum::JsNum;
+    use partial::residual::{Block, BlockId};
+
+    fn copy(dst: usize, src: usize) -> Op {
+        Op::Assign { var: dst, expr: RExpr::Var(src) }
+    }
+    fn num(value: i64) -> RExpr { RExpr::Num(JsNum::int(value)) }
+    fn program() -> Program<Op, Cond> {
+        let block = |ops, term| Block { ops, term };
+        Program { entry: BlockId(0), blocks: vec![
+            block(vec![], Terminator::Cond { cond: Cond::Falsy(RExpr::Var(3)), t: BlockId(2), f: BlockId(1) }),
+            block(vec![Op::Assign { var: 1, expr: num(10) }], Terminator::Br(BlockId(3))),
+            block(vec![Op::Assign { var: 2, expr: num(20) }], Terminator::Br(BlockId(4))),
+            block(vec![copy(2, 1)], Terminator::Br(BlockId(4))),
+            block(vec![], Terminator::Cond { cond: Cond::Falsy(RExpr::Var(0)), t: BlockId(6), f: BlockId(5) }),
+            block(vec![
+                Op::Effect(RExpr::Str("tick".into())),
+                Op::Assign { var: 1, expr: RExpr::Bin(Bop::Sub, Box::new(RExpr::Var(2)), Box::new(num(1))) },
+                Op::Assign { var: 0, expr: RExpr::Bin(Bop::Sub, Box::new(RExpr::Var(0)), Box::new(num(1))) },
+            ], Terminator::Br(BlockId(3))),
+            block(vec![Op::Return(RExpr::Var(2))], Terminator::Halt),
+        ] }
+    }
+    fn eval(expr: &RExpr, vars: &[i64; 4]) -> i64 {
+        match expr {
+            RExpr::Var(v) => vars[*v],
+            RExpr::Num(n) => n.f() as i64,
+            RExpr::Bin(Bop::Sub, a, b) => eval(a, vars) - eval(b, vars),
+            _ => panic!("unexpected test expression: {expr:?}"),
+        }
+    }
+    fn run(prog: &Program<Op, Cond>, count: i64, choose: i64) -> (i64, Vec<String>) {
+        let mut vars = [count, 0, 0, choose];
+        let mut events = Vec::new();
+        let mut pc = prog.entry;
+        for _ in 0..1000 {
+            let block = &prog.blocks[pc.0];
+            for op in &block.ops {
+                match op {
+                    Op::Assign { var, expr } | Op::Eval { dst: var, expr } => vars[*var] = eval(expr, &vars),
+                    Op::Effect(RExpr::Str(s)) => events.push(s.clone()),
+                    Op::Return(e) => return (eval(e, &vars), events),
+                    _ => panic!("unexpected test op: {op:?}"),
+                }
+            }
+            pc = match &block.term {
+                Terminator::Br(t) => *t,
+                Terminator::Cond { cond: Cond::Falsy(e), t, f } => if eval(e, &vars) == 0 { *t } else { *f },
+                _ => panic!("unexpected test terminator"),
+            };
+        }
+        panic!("test program did not terminate");
+    }
+    #[test]
+    fn copy_forwarder_becomes_a_single_entry_loop_without_changing_effects() {
+        let original = program();
+        assert!(Graph::new(&original, 0).is_none());
+        let folded = fold_edge_copies(&original);
+        assert!(matches!(folded, std::borrow::Cow::Owned(_)));
+        assert!(Graph::new(&folded, 0).is_some());
+        assert!(render_structured(&original, "", false, 0).is_some());
+        for count in 0..20 { for choose in 0..2 {
+            assert_eq!(run(&original, count, choose), run(&folded, count, choose));
+        } }
+    }
+    #[test]
+    fn ordered_copies_with_overlapping_sources_keep_their_order() {
+        let mut original = program();
+        original.blocks[3].ops = vec![copy(2, 1), copy(1, 2)];
+        let folded = fold_edge_copies(&original);
+        for count in 0..20 { for choose in 0..2 {
+            assert_eq!(run(&original, count, choose), run(&folded, count, choose));
+        } }
+        assert!(folded.op_count() <= original.op_count() + 128);
+    }
+    #[test]
+    fn effectful_and_conditional_incoming_blocks_are_not_duplicated() {
+        let mut effectful = program();
+        effectful.blocks[3].ops.push(Op::Effect(RExpr::Str("not a copy".into())));
+        assert!(matches!(fold_edge_copies(&effectful), std::borrow::Cow::Borrowed(_)));
+        let mut conditional = program();
+        conditional.blocks[1].term = Terminator::Cond { cond: Cond::Falsy(RExpr::Var(3)), t: BlockId(3), f: BlockId(6) };
+        assert!(matches!(fold_edge_copies(&conditional), std::borrow::Cow::Borrowed(_)));
+    }
+    #[test]
+    fn entry_and_self_loop_copy_blocks_are_kept() {
+        let looped = Program { entry: BlockId(0), blocks: vec![Block { ops: vec![copy(0, 1)], term: Terminator::Br(BlockId(0)) }] };
+        assert!(matches!(fold_edge_copies(&looped), std::borrow::Cow::Borrowed(_)));
+    }
 }

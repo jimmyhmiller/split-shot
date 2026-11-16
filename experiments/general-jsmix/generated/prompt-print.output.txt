@@ -1,0 +1,29 @@
+--- residual as JavaScript (9 block(s)) ---
+function main(e) {
+  let c, a, b, d, f;
+  c = codegen.buffer();
+  a = codegen.literal(null).source;
+  b = e;
+  d = a;
+  while (b["length"] > 0) {
+    a = b[0];
+    if (a === "prompt") {
+      a = codegen.reference("io");
+      a = codegen.call(c, a, "prompt", []).source;
+      b = b.slice(1);
+      d = a;
+      continue;
+    }
+    if (a === "print") {
+      a = codegen.reference("io");
+      f = [codegen.reference(d)];
+      codegen.call(c, a, "print", f);
+      b = b.slice(1);
+      continue;
+    }
+    c = "Unknown instruction: " + a;
+    throw new Error(c);
+  }
+  a = codegen.reference(d);
+  return codegen.finish(c, a);
+}

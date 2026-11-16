@@ -1,0 +1,55 @@
+--- residual program (15 block(s)) ---
+b0: (entry)
+    v1 := codegen.literal(null).source
+    if !(v0["length"] > 0) -> b14 else b1
+b1:
+    v2 := v1
+    v1 := v0[0]
+    if !(v1 === "prompt") -> b11 else b2
+b2:
+    v3 := []
+    v1 := codegen.call(v3, {"dynamic": true, "source": "io"}, "prompt", []).source
+    v4 := v0.slice(1)
+    v5 := v3
+    br b3
+b3:
+    v2 := v1
+    br b4
+b4:
+    if !(v4["length"] > 0) -> b10 else b5
+b5:
+    v1 := v4[0]
+    if !(v1 === "prompt") -> b7 else b6
+b6:
+    v1 := codegen.call(v5, {"dynamic": true, "source": "io"}, "prompt", []).source
+    v4 := v4.slice(1)
+    br b3
+b7:
+    if !(v1 === "print") -> b9 else b8
+b8:
+    codegen.call(v5, {"dynamic": true, "source": "io"}, "print", [{"dynamic": true, "source": v2}])
+    v4 := v4.slice(1)
+    br b4
+b9:
+    v1 := [("Unknown instruction: " + v1)]
+    throw codegen.construct("Error", v1)
+    halt
+b10:
+    return codegen.finish(v3, {"dynamic": true, "source": v2})
+    halt
+b11:
+    if !(v1 === "print") -> b13 else b12
+b12:
+    v3 := []
+    codegen.call(v3, {"dynamic": true, "source": "io"}, "print", [{"dynamic": true, "source": v2}])
+    v4 := v0.slice(1)
+    v5 := v3
+    br b4
+b13:
+    v1 := [("Unknown instruction: " + v1)]
+    throw codegen.construct("Error", v1)
+    halt
+b14:
+    v3 := []
+    return codegen.finish(v3, {"dynamic": true, "source": v1})
+    halt

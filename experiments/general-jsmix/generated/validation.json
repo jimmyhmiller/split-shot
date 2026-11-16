@@ -1,0 +1,12 @@
+{
+  "semanticComparisons": 1916,
+  "sourceHashes": {
+    "jsmix.js": "274471b9dc0a8a7e6525b47f27626ccefbec164351e80c21a3f4ad20fa1bca96",
+    "codegen.cjs": "c9176893bed471a0bcd20c24b2979c6d34b2fef21a22171de84653ebf1da86c0",
+    "parse.cjs": "7b7edd7d6f414d3893e7f61fef1dbfe80002f2152ca06c77dc01fe99d918f027",
+    "binding-times.cjs": "b6c5bed9ce675fe2cd88df4900aef0aa3d9ebb693336d5b7732282b6296c5e23",
+    "../../js-frontend/src/structured.rs": "412e8d91503fab233b9d8386810d73a6aa93a054622d13668265f1e0999bbbf5"
+  },
+  "primaryResidualHash": "a209b04d48559dd76dadcb17bfdccb100d21fb822bb90cefa6ea296f5b5c1695",
+  "diagnosticEnvironment": {}
+}

@@ -1,0 +1,64 @@
+function compile(e) {
+  let c, a, h, b, p, q, r, s, t, i, j, k, l, v, w, m, n, d, y, z, f, A, g, B, o, C, D;
+  c = codegen.buffer();
+  a = codegen.reference("io");
+  h = codegen.call(c, a, "prompt", []);
+  b = h.source;
+  a = codegen.reference(b);
+  p = e[0];
+  q = codegen.binary("===", a, p);
+  r = codegen.fork(c);
+  l = {value: b};
+  s = c;
+  t = q;
+  i = r;
+  j = codegen.fork(c);
+  v = b;
+  w = b;
+  try {
+    a = codegen.reference("io");
+    h = codegen.call(i, a, "print", ["yes"]);
+    b = codegen.literal("accepted").source;
+    l.value = b;
+    k = [false, void 0];
+  } catch (u) {
+    k = codegen.caught(i, u);
+  }
+  n = {value: w};
+  try {
+    a = codegen.reference("io");
+    h = codegen.call(j, a, "print", ["no"]);
+    b = codegen.literal("rejected").source;
+    n.value = b;
+    m = [false, void 0];
+  } catch (x) {
+    m = codegen.caught(j, x);
+  }
+  d = Object.create(null);
+  y = {value: "io"};
+  z = {value: v};
+  d.p = {value: e};
+  d.io = y;
+  d.value = z;
+  f = Object.create(null);
+  A = {value: "io"};
+  f.p = {value: e};
+  f.io = A;
+  f.value = l;
+  g = Object.create(null);
+  B = {value: "io"};
+  g.p = {value: e};
+  g.io = B;
+  g.value = n;
+  o = codegen.branch(s, t, i, j, k, m, d, f, g);
+  if (o[0]) {
+    C = o[1];
+    return codegen.finish(c, C);
+  }
+  D = (d["value"]).value;
+  a = codegen.reference(D);
+  return codegen.finish(c, a);
+}
+
+const codegen = require("../codegen.cjs");
+module.exports={compile,run:function(program,io){return Function("return ("+compile(program)+");")()(io);}};

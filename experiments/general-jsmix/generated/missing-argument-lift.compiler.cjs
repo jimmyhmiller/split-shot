@@ -1,0 +1,24 @@
+function compile(d) {
+  let b, a, c;
+  b = codegen.buffer();
+  a = codegen.reference("io");
+  c = codegen.prepare(b, a, "print");
+  a = codegen.reference("io");
+  a = codegen.call(b, a, "prompt", []).source;
+  a = codegen.reference(a);
+  a = [codegen.bindExpression(b, a)];
+  codegen.invoke(b, c, a);
+  a = codegen.reference("io");
+  c = codegen.prepare(b, a, "print");
+  a = codegen.literal(void 0).source;
+  a = codegen.reference(a);
+  a = [codegen.bindExpression(b, a)];
+  codegen.invoke(b, c, a);
+  a = d[0];
+  a = codegen.literal(a).source;
+  a = codegen.reference(a);
+  return codegen.finish(b, a);
+}
+
+const codegen = require("../codegen.cjs");
+module.exports={compile,run:function(program,io){return Function("return ("+compile(program)+");")()(io);}};
