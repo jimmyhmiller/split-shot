@@ -4,10 +4,10 @@
 import { el, makePane, setDoc, getDoc, debounce, fmtNum, fmtMs, remeasureAll } from "./ui.js";
 import { specialize } from "./pe.js";
 import { encodeState, decodeState } from "./share.js";
-import { EXAMPLES } from "./examples.js";
+import { EXAMPLES, GROUPS } from "./examples.js";
 
 const app = document.getElementById("app");
-const st = { current: null, sourceNames: true };
+const st = { current: null, sourceNames: true, files: [] };
 let seq = 0;
 let loading = false;
 
@@ -26,7 +26,8 @@ function setState(text, kind = "") {
 function paintExamples() {
   exampleSelect.replaceChildren(
     ...(st.current ? [] : [el("option", { value: "", selected: true, disabled: true }, "(edited)")]),
-    ...EXAMPLES.map((ex) => el("option", { value: ex.id, selected: ex.id === st.current }, ex.title)));
+    ...GROUPS.map((g) => el("optgroup", { label: g.label },
+      ...g.examples.map((ex) => el("option", { value: ex.id, selected: ex.id === st.current }, ex.title)))));
 }
 
 // ───────────── panes ─────────────
@@ -34,8 +35,21 @@ function paintExamples() {
 const left = makePane({
   title: "Source",
   note: "split-shot specializes main; its parameter is the dynamic input",
-  tabs: [{ id: "src", label: "program.js", wrap: true, onChange: () => { if (!loading) { st.current = null; paintExamples(); } respecialize(); } }],
+  tabs: [{ id: "program.js", label: "program.js" }],
 });
+
+// The program: the files in order, as one script.
+function program() {
+  return st.files.map((f) => getDoc(left.views[f.name])).join("\n");
+}
+
+function setFiles(files) {
+  st.files = files.map((f) => ({ name: f.name }));
+  left.setTabs(files.map((f) => ({
+    id: f.name, label: f.name, doc: f.src, wrap: true,
+    onChange: () => { if (!loading) { st.current = null; paintExamples(); } respecialize(); },
+  })));
+}
 
 const namesBox = el("input", { type: "checkbox", checked: true, onchange: () => { st.sourceNames = namesBox.checked; respecialize.now(); } });
 const copyBtn = el("button", { type: "button", onclick: () => copy(getDoc(right.views[right.current]), copyBtn) }, "Copy");
@@ -66,7 +80,7 @@ async function run() {
   const s = ++seq;
   setState("specializing…", "busy");
   try {
-    const r = await specialize(getDoc(left.views.src), { sourceNames: st.sourceNames, why: true });
+    const r = await specialize(program(), { sourceNames: st.sourceNames, why: true });
     if (s !== seq) return;
     setDoc(right.views.js, r.js);
     setDoc(right.views.ir, r.ir);
@@ -87,11 +101,11 @@ async function run() {
 }
 const respecialize = debounce(run, 350);
 
-function load(src, current) {
+function load(files, current) {
   st.current = current;
   paintExamples();
   loading = true;
-  setDoc(left.views.src, src);
+  setFiles(files);
   loading = false;
   respecialize.now();
 }
@@ -99,7 +113,8 @@ function load(src, current) {
 // ───────────── sharing and routing ─────────────
 
 async function share() {
-  const data = await encodeState({ src: getDoc(left.views.src), sourceNames: st.sourceNames });
+  const files = st.files.map((f) => ({ name: f.name, src: getDoc(left.views[f.name]) }));
+  const data = await encodeState({ files, sourceNames: st.sourceNames });
   const url = `${location.origin}${location.pathname}#/?s=${data}`;
   history.replaceState(null, "", url);
   try {
@@ -123,16 +138,17 @@ async function route() {
       const o = await decodeState(shared);
       st.sourceNames = o.sourceNames !== false;
       namesBox.checked = st.sourceNames;
-      load(o.src, null);
+      // (A link of one program, `src`, from before programs had files.)
+      load(o.files ?? [{ name: "program.js", src: o.src }], null);
     } catch (e) {
       notice.hidden = false;
       notice.textContent = "This link's program could not be read: " + e.message;
-      if (getDoc(left.views.src) === "") load(EXAMPLES[0].src, EXAMPLES[0].id);
+      if (st.files.length === 0) load(EXAMPLES[0].files, EXAMPLES[0].id);
     }
   } else {
     const id = parts[0] === "play" ? parts[2] : parts[0];
     const ex = EXAMPLES.find((x) => x.id === id) ?? EXAMPLES[0];
-    if (ex.id !== st.current) load(ex.src, ex.id);
+    if (ex.id !== st.current) load(ex.files, ex.id);
   }
   requestAnimationFrame(remeasureAll);
 }

@@ -100,6 +100,12 @@ dark.addEventListener("change", () => {
   }
 });
 
+export function destroyEditor(view) {
+  const i = views.findIndex((v) => v.view === view);
+  if (i >= 0) views.splice(i, 1);
+  view.destroy();
+}
+
 export function setDoc(view, text) {
   if (view.state.doc.toString() === text) return;
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
@@ -135,20 +141,30 @@ export function makePane({ title, note = null, tools = [], tabs }) {
     for (const [k, box] of Object.entries(boxes)) box.hidden = k !== id;
     views[id].requestMeasure();
   }
-  for (const tab of tabs) {
-    const box = el("div", { class: "view" });
-    editorBox.append(box);
-    boxes[tab.id] = box;
-    views[tab.id] = makeEditor(box, tab);
-    const ph = el("div", { class: "placeholder", hidden: true });
-    box.append(ph);
-    placeholders[tab.id] = ph;
-    buttons[tab.id] = el("button", { role: "tab", onclick: () => select(tab.id) }, tab.label);
-    tabBar.append(buttons[tab.id]);
+  // Replace the tabs (and their editors) with `tabs`.
+  function setTabs(tabs) {
+    for (const id of Object.keys(views)) {
+      destroyEditor(views[id]);
+      delete views[id]; delete boxes[id]; delete placeholders[id]; delete buttons[id];
+    }
+    tabBar.replaceChildren();
+    editorBox.replaceChildren();
+    for (const tab of tabs) {
+      const box = el("div", { class: "view" });
+      editorBox.append(box);
+      boxes[tab.id] = box;
+      views[tab.id] = makeEditor(box, tab);
+      const ph = el("div", { class: "placeholder", hidden: true });
+      box.append(ph);
+      placeholders[tab.id] = ph;
+      buttons[tab.id] = el("button", { role: "tab", onclick: () => select(tab.id) }, tab.label);
+      tabBar.append(buttons[tab.id]);
+    }
+    select(tabs[0].id);
   }
-  select(tabs[0].id);
+  setTabs(tabs);
   return {
-    root, details, views, select,
+    root, details, views, select, setTabs,
     get current() { return current; },
     // Show `text` over a tab's editor (or clear it with null).
     placeholder(id, text) {

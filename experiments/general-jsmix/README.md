@@ -15,6 +15,7 @@ npm ci --ignore-scripts --prefix tools/readable-js
 cargo build -q --release -p js-frontend --bin js-frontend
 node experiments/general-jsmix/derive.cjs
 node experiments/general-jsmix/check-codegen.cjs
+node experiments/general-jsmix/check-subset-parse.cjs
 node experiments/general-jsmix/check.cjs
 npm test --prefix tools/readable-js
 RUST_MIN_STACK=16777216 cargo test -p js-frontend --lib -- --test-threads=4
@@ -45,26 +46,39 @@ run(['prompt', 'print'], {
 
 ## What is specialized
 
-`parse.cjs` lowers ordinary JavaScript syntax using Acorn. `binding-times.cjs`
-performs a generic fixed-point, monovariant binding-time analysis: the entry's
-first parameter is static to jsmix and the second dynamic. Calls propagate
-binding times into declared functions; assignments and dynamic control promote
-bindings. Array allocations remain dynamic to preserve freshness and sharing.
+The split-shot input is one plain program, with no preprocessing: the
+interpreter, then `subset-parse.js`, `binding-times.js` and `jsmix.js`, and a
+`main` that parses the interpreter's own source and runs jsmix on it:
+
+```js
+function main(program) {
+  var INT = analyze(parseProgram(interp.toString()), "interp");
+  return jsmix(INT, "interp", program);
+}
+```
+
+split-shot runs the parse and the analysis at specialization time (a call of
+`Function.prototype.toString` on a function of known code is its source text),
+so neither is left in the compiler. The three files hold only function
+declarations: a script with top-level code has globals another script could
+replace before `main` runs, and then split-shot rightly keeps the calls through
+them. `derive.cjs` builds this program (`plainProgram`) and rejects an
+interpreter function named like one of the files' functions.
+
+`subset-parse.js` is a hand-written parser for the subset, in plain JavaScript.
+`parse.cjs` lowers Acorn's AST to the same shape; `check-subset-parse.cjs`
+checks the two agree (the same AST on every interpreter the checks use, and the
+same rejections). `binding-times.js` performs a generic fixed-point, monovariant
+binding-time analysis: the entry's first parameter is static to jsmix and the
+second dynamic. Calls propagate binding times into declared functions;
+assignments and dynamic control promote bindings. Array allocations remain
+dynamic to preserve freshness and sharing.
 
 `jsmix.js` interprets that annotated AST. It handles expressions, declarations,
 assignments, function calls, if/else, static while loops, completion and throw.
 Its source contains no prompt/print instruction rules. `codegen.cjs` implements
 generic residual expressions, calls, fresh names, branches and source rendering;
-it stays outside the outer specialization input.
-
-The outer split-shot input is:
-
-```js
-function main(program) {
-  var INT = /* fixed, parsed and annotated interpreter AST */;
-  return jsmix(INT, 'interp', program);
-}
-```
+it is not part of the program, so the compiler calls it.
 
 Thus the interpreted program remains unknown to split-shot, including its
 length. It is known later, when the derived compiler runs. Dynamic values are
