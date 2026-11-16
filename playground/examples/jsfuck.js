@@ -1,8 +1,8 @@
 // JSFuck: JavaScript written with only six characters: [ ] ( ) ! +
 // Every value is built from type coercions ([]+[] is "", ![] is false, ...)
 // and indexing into the strings they produce. None of it depends on x, so
-// the partial evaluator runs every coercion and folds the expressions away.
-function jsfuck(x) {
+// split-shot runs every coercion and folds the expressions away.
+function main(x) {
   const word =
     ([]+{})[+!![]+!![]] +                               // "b"  from "[object Object]"[2]
     ([]+{})[+!![]] +                                    // "o"

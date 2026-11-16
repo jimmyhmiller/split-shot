@@ -10,3 +10,13 @@ function evaluate(node, env) {
     default: throw new Error("unknown op " + node.op);
   }
 }
+
+function main(env) {
+  // (x + 3) * (x + y)
+  const tree = {
+    op: "mul",
+    l: { op: "add", l: { op: "var", name: "x" }, r: { op: "lit", val: 3 } },
+    r: { op: "add", l: { op: "var", name: "x" }, r: { op: "var", name: "y" } },
+  };
+  return evaluate(tree, env);
+}

@@ -19,3 +19,14 @@ function run(code, input) {
   }
   return acc;
 }
+
+function main(n) {
+  const code = [
+    ["jz", 4],   // 0: while (n !== 0) {
+    ["add"],     // 1:   acc = acc + n
+    ["dec"],     // 2:   n = n - 1
+    ["jmp", 0],  // 3: }
+    ["ret"],     // 4: return acc
+  ];
+  return run(code, n);
+}

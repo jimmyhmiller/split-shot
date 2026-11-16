@@ -39,9 +39,4 @@ function call(msg, timeoutMs) {
 }
 
 export const specialize = (src, { entry = "main", budget = 0, sourceNames = true, why = true } = {}) =>
-  call({ kind: "specialize", src, entry, budget, sourceNames, why }, 60000);
-export const evaluate = (body, timeoutMs = 3000) => call({ kind: "eval", body }, timeoutMs);
-export const p2 = (op, args, timeoutMs = 60000) => call({ kind: "p2", op, args }, timeoutMs);
-export const p3 = (op, args = {}, timeoutMs = 60000) => call({ kind: "p3", op, args }, timeoutMs);
-// Start the worker (and its wasm) before the first request needs it.
-export function warm() { if (!worker) spawn(); }
+  call({ src, entry, budget, sourceNames, why }, 60000);

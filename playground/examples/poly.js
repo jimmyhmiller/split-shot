@@ -9,3 +9,8 @@ function poly(coeffs, x) {
   }
   return acc;
 }
+
+function main(x) {
+  // 3x^3 + 2x + 5
+  return poly([3, 0, 2, 5], x);
+}

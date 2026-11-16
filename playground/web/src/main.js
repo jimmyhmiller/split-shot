@@ -1,144 +1,182 @@
-import { el, remeasureAll } from "./ui.js";
-import { warm } from "./pe.js";
+// The playground: a program on the left, what split-shot makes of it on the
+// right. split-shot specializes `main`; its parameter is the dynamic input,
+// and everything else the program computes from known values happens now.
+import { el, makePane, setDoc, getDoc, debounce, fmtNum, fmtMs, remeasureAll } from "./ui.js";
+import { specialize } from "./pe.js";
 import { encodeState, decodeState } from "./share.js";
-import { SPECIALIZE, COMPILER, COGEN } from "./examples.js";
-import { createSpecialize } from "./modes/specialize.js";
-import { createCompiler } from "./modes/compiler.js";
-import { createCogen } from "./modes/cogen.js";
+import { EXAMPLES } from "./examples.js";
 
 const app = document.getElementById("app");
+const st = { current: null, sourceNames: true };
+let seq = 0;
+let loading = false;
 
-const FORMULAS = {
-  specialize: () => [el("i", {}, "mix"), "(", el("span", { class: "s" }, "program"), ", ", el("span", { class: "s" }, "static args"), ") = ", el("span", { class: "r" }, "residual program")],
-  compiler: () => [el("i", {}, "mix"), "(", el("span", { class: "s" }, "jsmix"), ", ", el("span", { class: "s" }, "interpreter"), ") = ", el("span", { class: "r" }, "compiler")],
-  cogen: () => [el("i", {}, "mix"), "(", el("span", { class: "s" }, "mix"), ", ", el("span", { class: "s" }, "mix"), ") = ", el("span", { class: "r" }, "cogen")],
-};
+// ───────────── toolbar ─────────────
 
-// ───────────── home ─────────────
+const state = el("span", { class: "state", role: "status" });
+const exampleSelect = el("select", { "aria-label": "Example", onchange: () => { location.hash = `#/${exampleSelect.value}`; } });
+const shareBtn = el("button", { type: "button", onclick: share }, "Share");
+const notice = el("div", { class: "toast-error", hidden: true });
 
-function home() {
-  const projection = (n, mode, formula, desc) => el("li", {}, el("a", { href: `#/play/${mode}` },
-    el("span", { class: "n", text: n }), el("span", { class: "formula" }, ...formula), el("span", { class: "desc", text: desc })));
-  return el("main", { class: "page" },
-    el("h1", {}, "split-shot"),
-    el("p", { class: "lede" }, "A partial evaluator for JavaScript. Give it a program and the part of the input that is already known, and it writes a specialized program that only needs the rest. It runs here in your browser, compiled to WebAssembly."),
-    el("button", { class: "primary", onclick: () => { location.hash = "#/play"; } }, "Open the playground"),
-    el("h2", {}, "The three projections"),
-    el("ul", { class: "projections" },
-      projection("1", "specialize", FORMULAS.specialize(), "Specialize a program to its static inputs. Specialize an interpreter to a program, and the program is compiled."),
-      projection("2", "compiler", FORMULAS.compiler(), "Specialize a partial evaluator to an interpreter, and out comes a compiler. Nobody wrote its code generator."),
-      projection("3", "cogen", FORMULAS.cogen(), "Specialize a partial evaluator to itself, and out comes a compiler generator: it turns interpreters into compilers.")),
-    el("h2", {}, "Examples"),
-    el("ul", { class: "examples" },
-      ...SPECIALIZE.map((ex) => el("li", {}, el("a", { href: `#/play/specialize/${ex.id}`, text: ex.title }))),
-      ...COMPILER.map((ex) => el("li", {}, el("a", { href: `#/play/compiler/${ex.id}`, text: ex.title }), el("span", { class: "what", text: " · compiler" }))),
-      ...COGEN.map((ex) => el("li", {}, el("a", { href: `#/play/cogen/${ex.id}`, text: ex.title }), el("span", { class: "what", text: " · cogen" })))),
-    el("footer", {}, "The first two projections run the Rust engine as wasm in a Web Worker. The third uses jsmix2, a small self-applicable partial evaluator, or the Rust engine specializing jsmix2 to itself."),
-  );
+function setState(text, kind = "") {
+  state.textContent = text;
+  state.className = "state" + (kind ? " " + kind : "");
 }
 
-// ───────────── playground ─────────────
-
-let pg = null;
-
-function playground() {
-  const state = el("span", { class: "state", role: "status" });
-  const exampleSelect = el("select", { "aria-label": "Example", onchange: () => { location.hash = `#/play/${pg.active.id}/${exampleSelect.value}`; } });
-  const shareBtn = el("button", { type: "button", onclick: share }, "Share");
-  const modeSeg = el("div", { class: "seg", role: "group", "aria-label": "Projection" });
-  const formula = el("span", { class: "formula" });
-  const blurb = el("span", { class: "blurb" });
-  const workspace = el("div", { class: "workspace" });
-  const notice = el("div", { class: "toast-error", hidden: true });
-
-  const ctx = { changed: (m) => { if (pg && m === pg.active) paint(); } };
-  const modes = [createSpecialize(ctx), createCompiler(ctx), createCogen(ctx)];
-  for (const m of modes) { m.root.hidden = true; workspace.append(m.root); }
-  const modeButtons = modes.map((m, i) => el("button", { type: "button", onclick: () => { location.hash = `#/play/${m.id}${m.current ? "/" + m.current : ""}`; } }, `${i + 1} · ${m.title}`));
-  modeSeg.append(...modeButtons);
-
-  const root = el("div", { class: "shell" },
-    el("header", { class: "toolbar" },
-      el("button", { class: "home", onclick: () => { location.hash = "#/"; } }, "split-shot"),
-      modeSeg,
-      el("label", {}, "Example", exampleSelect),
-      shareBtn,
-      state),
-    el("div", { class: "strip" }, formula, blurb, notice),
-    workspace);
-
-  function paint() {
-    const m = pg.active;
-    for (const [i, b] of modeButtons.entries()) b.setAttribute("aria-pressed", String(modes[i] === m));
-    exampleSelect.replaceChildren(
-      ...(m.current ? [] : [el("option", { value: "", selected: true, disabled: true }, "(edited)")]),
-      ...m.examples.map((ex) => el("option", { value: ex.id, selected: ex.id === m.current }, ex.title)));
-    formula.replaceChildren(...FORMULAS[m.id]());
-    blurb.textContent = m.blurb;
-    state.textContent = m.state.text;
-    state.className = "state" + (m.state.kind ? " " + m.state.kind : "");
-  }
-
-  async function share() {
-    const m = pg.active;
-    const data = await encodeState(m.snapshot());
-    const url = `${location.origin}${location.pathname}#/play/${m.id}?s=${data}`;
-    history.replaceState(null, "", url);
-    try {
-      await navigator.clipboard.writeText(url);
-      shareBtn.textContent = "Link copied";
-    } catch {
-      shareBtn.textContent = "Link in address bar";
-    }
-    setTimeout(() => { shareBtn.textContent = "Share"; }, 1500);
-  }
-
-  // Show `modeId`, and load the example or shared state the URL names.
-  async function show(modeId, exampleId, shared) {
-    const m = modes.find((x) => x.id === modeId) || modes[0];
-    for (const x of modes) x.root.hidden = x !== m;
-    pg.active = m;
-    m.active = true;
-    for (const x of modes) if (x !== m) x.active = false;
-    notice.hidden = true;
-    if (shared) {
-      try {
-        m.restore(await decodeState(shared));
-      } catch (e) {
-        notice.hidden = false;
-        notice.textContent = "This link's program could not be read: " + e.message;
-      }
-    } else {
-      const ex = m.examples.find((x) => x.id === exampleId);
-      if (ex && ex.id !== m.current) m.load(ex);
-      else if (!ex && !m.loaded) m.load(m.examples[0]);
-    }
-    m.loaded = true;
-    m.activate();
-    paint();
-    requestAnimationFrame(remeasureAll);
-  }
-
-  return { root, show, active: modes[0] };
+function paintExamples() {
+  exampleSelect.replaceChildren(
+    ...(st.current ? [] : [el("option", { value: "", selected: true, disabled: true }, "(edited)")]),
+    ...EXAMPLES.map((ex) => el("option", { value: ex.id, selected: ex.id === st.current }, ex.title)));
 }
 
-// ───────────── routing ─────────────
+// ───────────── panes ─────────────
 
-function route() {
-  const hash = location.hash.replace(/^#/, "") || "/";
-  const [path, query = ""] = hash.split("?");
+const left = makePane({
+  title: "Source",
+  note: "split-shot specializes main; its parameter is the dynamic input",
+  tabs: [{ id: "src", label: "program.js", wrap: true, onChange: () => { if (!loading) { st.current = null; paintExamples(); } respecialize(); } }],
+});
+
+const namesBox = el("input", { type: "checkbox", checked: true, onchange: () => { st.sourceNames = namesBox.checked; respecialize.now(); } });
+const copyBtn = el("button", { type: "button", onclick: () => copy(getDoc(right.views[right.current]), copyBtn) }, "Copy");
+const right = makePane({
+  title: "Residual",
+  tools: [el("label", { class: "check", title: "Name residual variables as the source does, where one stands for one" }, namesBox, "source names"), copyBtn],
+  tabs: [
+    { id: "js", label: "residual.js", readOnly: true, wrap: true },
+    { id: "ir", label: "IR", readOnly: true, lang: "text", wrap: true },
+    { id: "why", label: "why", readOnly: true, lang: "text", wrap: true },
+  ],
+});
+const errors = el("pre", { class: "errors" });
+right.details.append(el("b", {}, "Error"), errors);
+
+app.replaceChildren(el("div", { class: "shell" },
+  el("header", { class: "toolbar" },
+    el("span", { class: "brand" }, "split-shot"),
+    el("label", {}, "Example", exampleSelect),
+    shareBtn,
+    notice,
+    state),
+  el("div", { class: "workspace" }, left.root, right.root)));
+
+// ───────────── specializing ─────────────
+
+async function run() {
+  const s = ++seq;
+  setState("specializing…", "busy");
+  try {
+    const r = await specialize(getDoc(left.views.src), { sourceNames: st.sourceNames, why: true });
+    if (s !== seq) return;
+    setDoc(right.views.js, r.js);
+    setDoc(right.views.ir, r.ir);
+    setDoc(right.views.why, formatWhy(r.why));
+    for (const id of ["js", "ir", "why"]) right.placeholder(id, null);
+    right.details.hidden = true;
+    setState(`${r.blocks} ${r.blocks === 1 ? "block" : "blocks"} · ${fmtNum(r.steps)} steps · ${fmtMs(r.ms)}`);
+  } catch (e) {
+    if (s !== seq) return;
+    for (const id of ["js", "ir", "why"]) {
+      setDoc(right.views[id], "");
+      right.placeholder(id, "split-shot could not specialize this program. The error is below.");
+    }
+    errors.textContent = e.message;
+    right.details.hidden = false;
+    setState("error", "error");
+  }
+}
+const respecialize = debounce(run, 350);
+
+function load(src, current) {
+  st.current = current;
+  paintExamples();
+  loading = true;
+  setDoc(left.views.src, src);
+  loading = false;
+  respecialize.now();
+}
+
+// ───────────── sharing and routing ─────────────
+
+async function share() {
+  const data = await encodeState({ src: getDoc(left.views.src), sourceNames: st.sourceNames });
+  const url = `${location.origin}${location.pathname}#/?s=${data}`;
+  history.replaceState(null, "", url);
+  try {
+    await navigator.clipboard.writeText(url);
+    shareBtn.textContent = "Link copied";
+  } catch {
+    shareBtn.textContent = "Link in address bar";
+  }
+  setTimeout(() => { shareBtn.textContent = "Share"; }, 1500);
+}
+
+// `#/<example>`, or `#/?s=<shared program>`. (An earlier layout's links,
+// `#/play/<mode>/<example>`, name the example third.)
+async function route() {
+  const [path, query = ""] = location.hash.replace(/^#/, "").split("?");
   const parts = path.split("/").filter(Boolean);
-  if (parts[0] !== "play") {
-    document.title = "split-shot — a partial evaluator for JavaScript";
-    app.replaceChildren(home());
-    warm();
-    return;
+  const shared = new URLSearchParams(query).get("s");
+  notice.hidden = true;
+  if (shared) {
+    try {
+      const o = await decodeState(shared);
+      st.sourceNames = o.sourceNames !== false;
+      namesBox.checked = st.sourceNames;
+      load(o.src, null);
+    } catch (e) {
+      notice.hidden = false;
+      notice.textContent = "This link's program could not be read: " + e.message;
+      if (getDoc(left.views.src) === "") load(EXAMPLES[0].src, EXAMPLES[0].id);
+    }
+  } else {
+    const id = parts[0] === "play" ? parts[2] : parts[0];
+    const ex = EXAMPLES.find((x) => x.id === id) ?? EXAMPLES[0];
+    if (ex.id !== st.current) load(ex.src, ex.id);
   }
-  if (!pg) pg = playground();
-  if (app.firstChild !== pg.root) app.replaceChildren(pg.root);
-  document.title = "split-shot playground";
-  pg.show(parts[1] || "specialize", parts[2], new URLSearchParams(query).get("s"));
+  requestAnimationFrame(remeasureAll);
 }
 
 window.addEventListener("hashchange", route);
 route();
+
+// ───────────── helpers ─────────────
+
+async function copy(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "Copied";
+  } catch {
+    button.textContent = "Copy failed";
+  }
+  setTimeout(() => { button.textContent = "Copy"; }, 1200);
+}
+
+// The engine's account of what the residual holds and why (`--why`).
+function formatWhy(json) {
+  if (!json) return "";
+  const w = JSON.parse(json);
+  const counts = (c) => `${c.units} unit${c.units === 1 ? "" : "s"}: ${c.needed} needed, ${c.merged} merged, ${c.gap} gap`;
+  const lines = [
+    "What the residual holds, and why.",
+    "  needed: work on dynamic values, which has to happen at run time",
+    "  merged: work left because paths with different static values were joined",
+    "  gap:    work split-shot could have done now but did not",
+    "",
+    `residual work: ${counts(w.summary)}`,
+  ];
+  for (const [name, c] of Object.entries(w.sections)) lines.push(`  ${name}: ${counts(c)}`);
+  if (w.causes.length) {
+    lines.push("", "causes:");
+    for (const c of w.causes) lines.push(`  ${c.class.padEnd(7)} ${c.kind}${c.what ? " " + c.what : ""}: ${c.units} unit${c.units === 1 ? "" : "s"}${c.sole ? ` (${c.sole} by this cause alone)` : ""}`);
+  }
+  if (w.units.length) {
+    lines.push("", "units:");
+    let section = null;
+    for (const u of w.units) {
+      if (u.section !== section) { section = u.section; lines.push(`  ${section}`); }
+      lines.push(`    ${u.class.padEnd(7)} ${u.kind.padEnd(6)} ${u.text}`);
+    }
+  }
+  return lines.join("\n");
+}

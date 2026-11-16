@@ -45,3 +45,8 @@ function exec(body, tape, ptr, input, read, out) {
   }
   return [ptr, read];
 }
+
+function main(input) {
+  // Read a number and print it doubled.
+  return brainfuck(",[->++<]>.", input);
+}

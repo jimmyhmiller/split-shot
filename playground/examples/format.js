@@ -20,3 +20,7 @@ function format(fmt, args) {
   }
   return out + lit;
 }
+
+function main(args) {
+  return format("x = %d, name = %s (100%% done)", args);
+}

@@ -1,9 +1,7 @@
 import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
 
-// The projection sources (docs/p3, experiments/general-jsmix, tools/readable-js)
-// are imported straight from the repository so the playground never holds a
-// drifting copy of them.
+// The examples are imported from ../examples, outside this package.
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export default defineConfig({

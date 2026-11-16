@@ -15,3 +15,7 @@ function render(template, data) {
   }
   return out;
 }
+
+function main(data) {
+  return render("Hello, {name}! You have {count} new messages.", data);
+}

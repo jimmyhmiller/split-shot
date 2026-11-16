@@ -23,7 +23,6 @@ export function el(tag, attrs = {}, ...kids) {
 
 export function fmtNum(n) { return Math.round(n).toLocaleString("en-US"); }
 export function fmtMs(ms) { return ms < 10 ? ms.toFixed(1) + " ms" : ms < 10000 ? fmtNum(ms) + " ms" : (ms / 1000).toFixed(1) + " s"; }
-export function fmtBytes(n) { return n < 1024 ? n + " B" : n < 1024 * 1024 ? (n / 1024).toFixed(1) + " KB" : (n / 1024 / 1024).toFixed(1) + " MB"; }
 
 // ───────────── editor ─────────────
 
@@ -61,8 +60,8 @@ const baseTheme = EditorView.theme({
   ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55" },
   ".cm-content": { padding: "10px 0" },
   ".cm-line": { padding: "0 1rem 0 .75rem" },
-  ".cm-gutters": { backgroundColor: "var(--paper)", color: "var(--muted)", border: "none", opacity: ".7" },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 .25rem 0 .75rem", minWidth: "2.5rem" },
+  ".cm-gutters": { backgroundColor: "var(--paper)", color: "var(--gutter)", border: "none" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 .5rem 0 .75rem", minWidth: "2.75rem" },
   ".cm-activeLine": { backgroundColor: "var(--active-line)" },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--ink)" },
   "&.cm-focused": { outline: "none" },
@@ -113,14 +112,17 @@ export function remeasureAll() {
 
 // ───────────── panes ─────────────
 
-// A pane: heading (title + tools), tabs, one editor per tab, details footer.
-// `tabs`: [{ id, label, readOnly, lang, wrap, doc, onChange, placeholder }].
-export function makePane({ title, tools = [], tabs, onTab = null }) {
+// A pane: heading (title, note, tools), tabs, one editor per tab, and a
+// details footer (hidden until something is put in it).
+// `tabs`: [{ id, label, readOnly, lang, wrap, doc, onChange }].
+export function makePane({ title, note = null, tools = [], tabs }) {
   const tabBar = el("div", { class: "tabs", role: "tablist" });
   const editorBox = el("div", { class: "editor" });
-  const details = el("div", { class: "details" });
+  const details = el("div", { class: "details", hidden: true });
   const root = el("section", { class: "pane" },
-    el("div", { class: "pane-heading" }, el("span", { class: "pane-title", text: title }), el("div", { class: "tools" }, ...tools)),
+    el("div", { class: "pane-heading" },
+      el("span", {}, el("span", { class: "pane-title", text: title }), note ? el("span", { class: "pane-note" }, note) : null),
+      el("div", { class: "tools" }, ...tools)),
     tabBar, editorBox, details);
   const views = {};
   const boxes = {};
@@ -132,7 +134,6 @@ export function makePane({ title, tools = [], tabs, onTab = null }) {
     for (const [k, b] of Object.entries(buttons)) b.classList.toggle("active", k === id);
     for (const [k, box] of Object.entries(boxes)) box.hidden = k !== id;
     views[id].requestMeasure();
-    if (onTab) onTab(id);
   }
   for (const tab of tabs) {
     const box = el("div", { class: "view" });
@@ -142,7 +143,7 @@ export function makePane({ title, tools = [], tabs, onTab = null }) {
     const ph = el("div", { class: "placeholder", hidden: true });
     box.append(ph);
     placeholders[tab.id] = ph;
-    buttons[tab.id] = el("button", { role: "tab", onclick: () => select(tab.id) }, tab.label, tab.readOnly && tab.badge !== false ? el("span", { class: "ro", text: "read-only" }) : null);
+    buttons[tab.id] = el("button", { role: "tab", onclick: () => select(tab.id) }, tab.label);
     tabBar.append(buttons[tab.id]);
   }
   select(tabs[0].id);
@@ -155,45 +156,6 @@ export function makePane({ title, tools = [], tabs, onTab = null }) {
       placeholders[id].textContent = text ?? "";
     },
   };
-}
-
-export function seg(options, value, onPick) {
-  const box = el("div", { class: "seg", role: "group" });
-  const buttons = options.map(([v, label, extra = {}]) => el("button", { type: "button", "aria-pressed": String(v === value), ...extra, onclick: () => { set(v); onPick(v); } }, label));
-  function set(v) { for (const [i, b] of buttons.entries()) b.setAttribute("aria-pressed", String(options[i][0] === v)); }
-  box.append(...buttons);
-  box.set = set;
-  return box;
-}
-
-// Re-indent code emitted one statement per line with no indentation (jsmix2
-// and the codegen helpers do that). Depth follows braces outside string
-// literals. Display only: every comparison uses the raw text.
-export function reindent(src) {
-  let depth = 0;
-  const out = [];
-  for (const raw of src.split("\n")) {
-    const line = raw.trim();
-    let opens = 0, closes = 0, leading = 0, inStr = null;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inStr) {
-        if (c === "\\") i++;
-        else if (c === inStr) inStr = null;
-      } else if (c === '"' || c === "'") inStr = c;
-      else if (c === "{") opens++;
-      else if (c === "}") { if (opens > 0) opens--; else closes++; }
-    }
-    for (const c of line) { if (c === "}") leading++; else break; }
-    const d = Math.max(0, depth - Math.min(leading, closes));
-    out.push(line === "" ? "" : "  ".repeat(d) + line);
-    depth = Math.max(0, depth + opens - closes);
-  }
-  return out.join("\n");
-}
-
-export function verdict(ok, yes, no) {
-  return el("span", { class: `verdict ${ok ? "good" : "bad"}`, text: ok ? "✓ " + yes : "✗ " + no });
 }
 
 // A debounced caller.

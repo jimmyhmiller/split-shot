@@ -9,3 +9,7 @@ function matches(pattern, text) {
   }
   return text.length > 0 && (pattern[0] === "." || pattern[0] === text[0]) && matches(pattern.slice(1), text.slice(1));
 }
+
+function main(text) {
+  return matches("a*b*c", text);
+}

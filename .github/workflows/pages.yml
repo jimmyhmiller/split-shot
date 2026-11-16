@@ -11,9 +11,6 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "playground/**"
-      - "docs/p3/**"
-      - "experiments/general-jsmix/**"
-      - "tools/readable-js/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
