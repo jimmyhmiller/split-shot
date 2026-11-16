@@ -44,7 +44,7 @@ npm run wasm    # build ../wasm into src/pkg (needs wasm-pack)
 npm run dev
 ```
 
-The site is published to GitHub Pages (https://jimmyhmiller.github.io/split-shot/)
+The site is published to GitHub Pages (https://jimmyhmiller.com/split-shot/)
 by `.github/workflows/pages.yml` on each push to main that touches the engine,
 the playground, or the sources it imports. The workflow builds the wasm with
 wasm-pack, then the site with Vite (`base: "./"`, so it works under the
