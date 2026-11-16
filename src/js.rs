@@ -23432,6 +23432,24 @@ impl Js {
         if let Abs::Ref(addr) = &callee {
             if let HeapObj::Builtin { kind, .. } = &s.heap[addr].clone() {
                 if let Some(method) = kind.strip_prefix("Function.prototype.") {
+                    if method == "toString" {
+                        // On a function of known code with source text: that
+                        // text, as a conversion of it gives (see `to_string_rec`).
+                        // (The intrinsic itself is called: what the function
+                        // carries of its own `toString` does not enter.)
+                        let text = match &this {
+                            Abs::Ref(t) => match &s.heap[t] {
+                                HeapObj::Closure { fid, known: true, .. } => self.fn_source_text[*fid].as_deref().map(str::to_string),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        if let Some(text) = text {
+                            s.top_mut().pc += 1;
+                            self.finish_call(s, Abs::Str(text.into()), this, ret, pc, out);
+                            return Step::Continue;
+                        }
+                    }
                     // `f.bind(t, ...args)` of a function of known code (or a
                     // modeled proxy or bound function): a bound function.
                     if method == "bind" {

@@ -2329,6 +2329,23 @@ mod tests {
         assert_node_equiv(src, &[0, 5, -3]);
     }
 
+    /// `f.toString()` of a function of known code is its source text, as a
+    /// conversion of it (`"" + f`) is: the call folds, and so does what is
+    /// computed from the text. A function's own `toString` is its own call.
+    #[test]
+    fn function_to_string_call_folds_to_source_text() {
+        let src = "function f(a) { return a + 1; }
+            function main(x) { var s = f.toString(); return [s.length, s.slice(0, 10), x]; }";
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("toString"), "got:\n{js}");
+        assert_node_equiv(src, &[0, 5]);
+        assert_node_equiv(
+            "function f(a) { return a; }
+            function main(x) { f.toString = function () { return \"own\" + x; }; return f.toString(); }",
+            &[0, 5],
+        );
+    }
+
     /// A method inherited from `Object.prototype` (`toString`, `hasOwnProperty`,
     /// ...) read off a static object resolves to the real function: the object
     /// escapes and the call residualizes, rather than folding the read to
