@@ -168,8 +168,9 @@ function puncts() {
 }
 
 function readPunct(src, i) {
-  for (var k = 0; k < puncts().length; k++) {
-    var op = puncts()[k];
+  var ops = puncts();
+  for (var k = 0; k < ops.length; k++) {
+    var op = ops[k];
     if (src.slice(i, i + op.length) === op) return op;
   }
   throw new SyntaxError("Unexpected character " + JSON.stringify(src[i]));

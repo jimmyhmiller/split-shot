@@ -106,7 +106,7 @@ const crypto=require('node:crypto');
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname,file))).digest('hex');
 fs.writeFileSync(path.join(__dirname,'generated/validation.json'),JSON.stringify({
  semanticComparisons:comparisons,
- sourceHashes:Object.fromEntries(['jsmix.js','codegen.cjs','parse.cjs','binding-times.cjs','../../js-frontend/src/structured.rs'].map(file=>[file,hash(file)])),
+ sourceHashes:Object.fromEntries(['jsmix.js','codegen.cjs','subset-parse.js','binding-times.js','../../js-frontend/src/structured.rs'].map(file=>[file,hash(file)])),
  primaryResidualHash:hash('generated/prompt-print.output.txt'),
  diagnosticEnvironment:Object.fromEntries(Object.entries(process.env).filter(([key])=>/^(PE_|SPEC_WEIGHT|RESID_DEBUG)/.test(key)))
 },null,2)+'\n');
