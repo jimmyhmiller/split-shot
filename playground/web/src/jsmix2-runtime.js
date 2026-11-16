@@ -35,7 +35,7 @@ function getCogen(which, specialize) {
     } else {
       const input = prelude + "\n" + jsmix2Src +
         `\nfunction main(input) {\n  var MIX = ${JSON.stringify(MIX)};\n  return mix(MIX, "mix", [input[0], input[1]]);\n}\n`;
-      const r = specialize(input, 100000000);
+      const r = specialize(input, "main", 100000000, false, false);
       src = r.js;
       blocks = r.blocks;
       r.free();

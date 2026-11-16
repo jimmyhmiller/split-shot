@@ -19,7 +19,7 @@ function spawn() {
 
 function restart() {
   if (worker) worker.terminate();
-  for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error("worker restarted")); }
+  for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error("the worker was restarted")); }
   pending.clear();
   spawn();
 }
@@ -31,13 +31,17 @@ function call(msg, timeoutMs) {
     const timer = setTimeout(() => {
       pending.delete(id);
       restart();
-      reject(new Error(`timed out after ${timeoutMs / 1000}s (the worker was restarted)`));
+      reject(new Error(`timed out after ${timeoutMs / 1000} s (the worker was restarted)`));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     worker.postMessage({ id, ...msg });
   });
 }
 
-export const specialize = (src, budget = 0) => call({ kind: "specialize", src, budget }, 60000);
-export const evaluate = (body, { raw = false, timeoutMs = 3000 } = {}) => call({ kind: "eval", body, raw }, timeoutMs);
-export const jsmix2 = (op, args = {}, timeoutMs = 60000) => call({ kind: "p3", op, args }, timeoutMs);
+export const specialize = (src, { entry = "main", budget = 0, sourceNames = true, why = true } = {}) =>
+  call({ kind: "specialize", src, entry, budget, sourceNames, why }, 60000);
+export const evaluate = (body, timeoutMs = 3000) => call({ kind: "eval", body }, timeoutMs);
+export const p2 = (op, args, timeoutMs = 60000) => call({ kind: "p2", op, args }, timeoutMs);
+export const p3 = (op, args = {}, timeoutMs = 60000) => call({ kind: "p3", op, args }, timeoutMs);
+// Start the worker (and its wasm) before the first request needs it.
+export function warm() { if (!worker) spawn(); }

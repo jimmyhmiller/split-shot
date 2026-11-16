@@ -35,6 +35,7 @@ pub fn start() {
 pub struct SpecResult {
     js: String,
     ir: String,
+    why: String,
     blocks: u32,
     steps: f64,
     weight: f64,
@@ -50,6 +51,12 @@ impl SpecResult {
     pub fn ir(&self) -> String {
         self.ir.clone()
     }
+    /// The `why` report as JSON (see `js_frontend::why_json`), or "" when
+    /// it was not asked for.
+    #[wasm_bindgen(getter)]
+    pub fn why(&self) -> String {
+        self.why.clone()
+    }
     #[wasm_bindgen(getter)]
     pub fn blocks(&self) -> u32 {
         self.blocks
@@ -64,17 +71,25 @@ impl SpecResult {
     }
 }
 
-/// Specialize `function main(input)` in `src`. `budget` is the specialization
-/// weight budget (0 = engine default).
+/// Specialize the function `entry` of `src` (its one parameter is the
+/// dynamic input) with the CLI's pipeline. `budget` is the specialization
+/// weight budget (0 = engine default); `source_names` names residual
+/// variables as the source does; `why` also returns the account of what
+/// the residual holds and for what cause.
 #[wasm_bindgen]
-pub fn specialize(src: &str, budget: f64) -> Result<SpecResult, JsError> {
-    let budget = if budget > 0.0 { Some(budget as u64) } else { None };
-    let (vm, prog) = js_frontend::specialize_with_budget(src, budget).map_err(|e| JsError::new(&e))?;
+pub fn specialize(src: &str, entry: &str, budget: f64, source_names: bool, why: bool) -> Result<SpecResult, JsError> {
+    let opts = js_frontend::LowerOpts {
+        source_names,
+        spec_budget: (budget > 0.0).then_some(budget as u64),
+        ..js_frontend::LowerOpts::default()
+    };
+    let s = js_frontend::specialize_full(src, entry, true, false, &opts, why).map_err(|e| JsError::new(&e))?;
     Ok(SpecResult {
-        js: js_frontend::residual_to_js(&vm, &prog),
-        ir: vm.dump(&prog),
-        blocks: prog.blocks.len() as u32,
-        steps: vm.spec_steps_used() as f64,
-        weight: vm.spec_weight_used() as f64,
+        ir: s.vm.dump(&s.prog),
+        why: s.report.as_ref().map(|r| js_frontend::why_json(r).to_string()).unwrap_or_default(),
+        blocks: s.prog.blocks.len() as u32,
+        steps: s.vm.spec_steps_used() as f64,
+        weight: s.vm.spec_weight_used() as f64,
+        js: s.js,
     })
 }
