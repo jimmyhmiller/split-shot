@@ -1,39 +1,40 @@
-function compile(b) {
-  let a, i, j, k, l, m, n, o, p, c, q, g, s, d, t, e, u, f, v, h, w;
+function compile(program) {
+  "use strict";
+  let a, result, f, effects, condition, yesEffects, noEffects, yesResult, e, h, i, j, right, k, l, b, m, c, n, d, o;
   a = codegen.buffer();
-  i = codegen.reference("io");
-  j = codegen.call(a, i, "prompt", []);
-  k = b[0];
-  l = codegen.binary("===", j, k);
-  m = codegen.fork(a);
-  o = a;
-  p = l;
-  c = m;
-  q = codegen.fork(a);
+  h = codegen.reference("io");
+  j = codegen.call(a, h, "prompt", []);
+  right = program[0];
+  i = codegen.binary("===", j, right);
+  f = codegen.fork(a);
+  effects = a;
+  condition = i;
+  yesEffects = f;
+  noEffects = codegen.fork(a);
   try {
-    n = new Error();
-    codegen.throwValue(c, n);
-    g = [true, void 0];
-  } catch (r) {
-    g = codegen.caught(c, r);
+    k = new Error();
+    codegen.throwValue(yesEffects, k);
+    yesResult = [true, void 0];
+  } catch (g) {
+    yesResult = codegen.caught(yesEffects, g);
   }
-  s = [false, void 0];
+  l = [false, void 0];
+  b = Object.create(null);
+  m = {value: "io"};
+  b.p = {value: program};
+  b.io = m;
+  c = Object.create(null);
+  n = {value: "io"};
+  c.p = {value: program};
+  c.io = n;
   d = Object.create(null);
-  t = {value: "io"};
-  d.p = {value: b};
-  d.io = t;
-  e = Object.create(null);
-  u = {value: "io"};
-  e.p = {value: b};
-  e.io = u;
-  f = Object.create(null);
-  v = {value: "io"};
-  f.p = {value: b};
-  f.io = v;
-  h = codegen.branch(o, p, c, q, g, s, d, e, f);
-  if (h[0]) {
-    w = h[1];
-    return codegen.finish(a, w);
+  o = {value: "io"};
+  d.p = {value: program};
+  d.io = o;
+  e = codegen.branch(effects, condition, yesEffects, noEffects, yesResult, l, b, c, d);
+  if (e[0]) {
+    result = e[1];
+    return codegen.finish(a, result);
   }
   return codegen.finish(a, "ok");
 }

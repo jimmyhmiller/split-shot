@@ -1,30 +1,29 @@
 function compile(program) {
-  let lines, temp, remaining, value, args;
-  lines = codegen.buffer();
-  temp = codegen.literal(null).source;
-  remaining = program;
-  value = temp;
-  while (remaining.length > 0) {
-    temp = remaining[0];
-    if (temp === "prompt") {
-      temp = codegen.reference("io");
-      temp = codegen.call(lines, temp, "prompt", []).source;
-      remaining = remaining.slice(1);
-      value = temp;
-      continue;
+  "use strict";
+  let c, assigned, b, d, a, e, value;
+  c = codegen.buffer();
+  assigned = codegen.literal(null).source;
+  b = program;
+  d = assigned;
+  while (b.length > 0) {
+    assigned = b[0];
+    if (assigned === "prompt") {
+      a = codegen.reference("io");
+      assigned = codegen.call(c, a, "prompt", []).source;
+      d = assigned;
+    } else if (assigned === "print") {
+      a = codegen.reference("io");
+      e = a;
+      a = codegen.reference(d);
+      codegen.call(c, e, "print", [a]);
+    } else {
+      value = "Unknown instruction: " + assigned;
+      throw new Error(value);
     }
-    if (temp === "print") {
-      temp = codegen.reference("io");
-      args = [codegen.reference(value)];
-      codegen.call(lines, temp, "print", args);
-      remaining = remaining.slice(1);
-      continue;
-    }
-    lines = "Unknown instruction: " + temp;
-    throw new Error(lines);
+    b = b.slice(1);
   }
-  temp = codegen.reference(value);
-  return codegen.finish(lines, temp);
+  a = codegen.reference(d);
+  return codegen.finish(c, a);
 }
 
 const codegen = require("../codegen.cjs");

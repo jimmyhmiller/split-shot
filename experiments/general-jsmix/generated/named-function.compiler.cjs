@@ -1,17 +1,18 @@
-function compile(d) {
-  let c, b, a, e;
-  c = codegen.buffer();
-  b = d[0];
+function compile(program) {
+  "use strict";
+  let b, actualArg, a, parameter, assigned, c;
+  b = codegen.buffer();
+  actualArg = program[0];
   a = codegen.reference("io");
-  a = codegen.call(c, a, "prompt", []).source;
-  a = codegen.reference(a);
-  b = codegen.binary("*", a, b);
-  b = codegen.bindExpression(c, b).source;
+  parameter = codegen.call(b, a, "prompt", []).source;
+  a = codegen.reference(parameter);
+  a = codegen.binary("*", a, actualArg);
+  assigned = codegen.bindExpression(b, a).source;
   a = codegen.reference("io");
-  e = [codegen.reference(b)];
-  codegen.call(c, a, "print", e);
-  a = codegen.reference(b);
-  return codegen.finish(c, a);
+  c = [codegen.reference(assigned)];
+  codegen.call(b, a, "print", c);
+  a = codegen.reference(assigned);
+  return codegen.finish(b, a);
 }
 
 const codegen = require("../codegen.cjs");

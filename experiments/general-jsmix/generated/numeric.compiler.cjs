@@ -1,10 +1,11 @@
-function compile(b) {
-  let c, a, d;
-  c = codegen.buffer();
+function compile(program) {
+  "use strict";
+  let b, a, right;
+  b = codegen.buffer();
   a = codegen.reference("io");
-  d = b[0];
-  a = codegen.binary("+", a, d);
-  return codegen.finish(c, a);
+  right = program[0];
+  a = codegen.binary("+", a, right);
+  return codegen.finish(b, a);
 }
 
 const codegen = require("../codegen.cjs");

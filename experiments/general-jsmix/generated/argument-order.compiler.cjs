@@ -1,4 +1,5 @@
-function compile(e) {
+function compile(program) {
+  "use strict";
   let b, a, c, d;
   b = codegen.buffer();
   a = codegen.reference("io");

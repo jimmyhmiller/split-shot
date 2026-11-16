@@ -1,15 +1,16 @@
-function compile(e) {
-  let b, a, c, d;
+function compile(program) {
+  "use strict";
+  let b, a, assigned, c;
   b = codegen.buffer();
   a = codegen.reference("io");
   a = codegen.call(b, a, "prompt", []);
   a = codegen.binary("+", a, 1);
-  a = codegen.bindExpression(b, a).source;
-  c = codegen.reference("io");
-  d = [codegen.reference(a)];
-  codegen.call(b, c, "print", d);
-  c = codegen.reference(a);
-  a = codegen.reference(a);
+  assigned = codegen.bindExpression(b, a).source;
+  a = codegen.reference("io");
+  c = [codegen.reference(assigned)];
+  codegen.call(b, a, "print", c);
+  c = codegen.reference(assigned);
+  a = codegen.reference(assigned);
   a = codegen.binary("+", c, a);
   return codegen.finish(b, a);
 }

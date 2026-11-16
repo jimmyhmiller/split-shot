@@ -1,54 +1,57 @@
---- residual as JavaScript (3 block(s)) ---
-function main(e) {
-  let c, a, i, f, n, o, p, j, q, k, r, l, s, u, b, v, w, g, x, y, h, z, A, m, B, d, C;
-  c = codegen.buffer();
-  a = codegen.reference("io");
-  i = codegen.call(c, a, "prompt", []);
-  f = i.source;
-  a = codegen.reference(f);
-  n = e[0];
-  o = codegen.binary("===", a, n);
-  p = codegen.fork(c);
-  j = c;
-  q = o;
-  k = p;
-  r = codegen.fork(c);
+--- residual as JavaScript ---
+let __pe_entry;
+
+export function main(program) {
+  "use strict";
+  let a, result, assigned, h, effects, condition, yesEffects, noEffects, yesResult, f, loaded, b, j, g, right, k, c, l, m, d, n, o, e, p, q, r, s;
+  a = codegen.buffer();
+  b = codegen.reference("io");
+  g = codegen.call(a, b, "prompt", []);
+  assigned = g.source;
+  b = codegen.reference(assigned);
+  right = program[0];
+  j = codegen.binary("===", b, right);
+  h = codegen.fork(a);
+  effects = a;
+  condition = j;
+  yesEffects = h;
+  noEffects = codegen.fork(a);
   try {
-    l = [true, codegen.literal("early")];
-  } catch (t) {
-    l = codegen.caught(k, t);
+    yesResult = [true, codegen.literal("early")];
+  } catch (i) {
+    yesResult = codegen.caught(yesEffects, i);
   }
-  u = [false, void 0];
-  b = Object.create(null);
-  v = {value: "io"};
-  w = {value: f};
-  b.p = {value: e};
-  b.io = v;
-  b.value = w;
-  g = Object.create(null);
-  x = {value: "io"};
-  y = {value: f};
-  g.p = {value: e};
-  g.io = x;
-  g.value = y;
-  h = Object.create(null);
-  z = {value: "io"};
-  A = {value: f};
-  h.p = {value: e};
-  h.io = z;
-  h.value = A;
-  m = codegen.branch(j, q, k, r, l, u, b, g, h);
-  if (m[0]) {
-    B = m[1];
-    return codegen.finish(c, B);
+  k = [false, void 0];
+  c = Object.create(null);
+  l = {value: "io"};
+  m = {value: assigned};
+  c.p = {value: program};
+  c.io = l;
+  c.value = m;
+  d = Object.create(null);
+  n = {value: "io"};
+  o = {value: assigned};
+  d.p = {value: program};
+  d.io = n;
+  d.value = o;
+  e = Object.create(null);
+  p = {value: "io"};
+  q = {value: assigned};
+  e.p = {value: program};
+  e.io = p;
+  e.value = q;
+  f = codegen.branch(effects, condition, yesEffects, noEffects, yesResult, k, c, d, e);
+  if (f[0]) {
+    result = f[1];
+    return codegen.finish(a, result);
   }
-  d = (b["io"]).value;
-  a = codegen.reference(d);
-  d = (b["value"]).value;
-  C = a;
-  s = [codegen.reference(d)];
-  i = codegen.call(j, C, "print", s);
-  d = (b["value"]).value;
-  a = codegen.reference(d);
-  return codegen.finish(c, a);
+  loaded = (c["io"]).value;
+  b = codegen.reference(loaded);
+  loaded = (c["value"]).value;
+  r = b;
+  s = [codegen.reference(loaded)];
+  g = codegen.call(a, r, "print", s);
+  loaded = (c["value"]).value;
+  b = codegen.reference(loaded);
+  return codegen.finish(a, b);
 }

@@ -142,3 +142,34 @@ module.exports.caught = function(lines,error) {
   throwValue(lines,error);
   return [true,undefined];
 };
+
+// A variable of its own for `value`, carried around a target loop.
+module.exports.carry = function(lines, value) {
+  const name = fresh(lines);
+  lines.push('var ' + name + ' = ' + argument(value) + ';\n');
+  return name;
+};
+// `while (true) { test; if (!condition) break; body; carried = after; }`.
+// The back edge assigns all carried variables at once: a value that is
+// another carried variable is read before any is assigned.
+module.exports.loop = function(lines, testLines, condition, bodyLines, bodyResult, carried, after) {
+  let backEdge = '';
+  if (bodyResult[0]) {
+    bodyLines.push('return ' + argument(bodyResult[1]) + ';\n');
+  } else {
+    const staged = [];
+    const assigns = [];
+    carried.forEach((name, i) => {
+      if (after[i] === name) return;
+      if (carried.includes(after[i])) {
+        const temp = fresh(lines);
+        staged.push('var ' + temp + ' = ' + after[i] + ';\n');
+        assigns.push(name + ' = ' + temp + ';\n');
+      } else {
+        assigns.push(name + ' = ' + after[i] + ';\n');
+      }
+    });
+    backEdge = staged.join('') + assigns.join('');
+  }
+  lines.push('while (true) {\n' + testLines.join('') + 'if (!(' + argument(condition) + ')) break;\n' + bodyLines.join('') + backEdge + '}\n');
+};

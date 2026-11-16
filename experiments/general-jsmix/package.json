@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "node derive.cjs",
-    "test": "node check-codegen.cjs && node check.cjs",
+    "test": "node check-codegen.cjs && node check-subset-parse.cjs && node check.cjs && node check-brainfuck.cjs && node check-expressions.cjs",
     "clean": "node clean-bindings.cjs",
     "test:bindings": "node clean-bindings.cjs && node check-bindings.cjs"
   },

@@ -1,12 +1,13 @@
-function compile(e) {
-  let b, a, c, d;
-  b = codegen.buffer();
-  a = codegen.call(b, "hello", "toUpperCase", []).source;
-  c = codegen.reference("io");
-  d = [codegen.reference(a)];
-  codegen.call(b, c, "print", d);
-  a = codegen.reference(a);
-  return codegen.finish(b, a);
+function compile(program) {
+  "use strict";
+  let a, assigned, b, c;
+  a = codegen.buffer();
+  assigned = codegen.call(a, "hello", "toUpperCase", []).source;
+  b = codegen.reference("io");
+  c = [codegen.reference(assigned)];
+  codegen.call(a, b, "print", c);
+  b = codegen.reference(assigned);
+  return codegen.finish(a, b);
 }
 
 const codegen = require("../codegen.cjs");

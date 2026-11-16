@@ -1,16 +1,17 @@
-function compile(d) {
-  let c, a, b;
-  c = codegen.buffer();
-  a = d[0];
-  b = codegen.reference("io");
-  b = codegen.call(c, b, "prompt", []).source;
-  if (a === 0) {
+function compile(program) {
+  "use strict";
+  let b, actualArg, a, parameter;
+  b = codegen.buffer();
+  actualArg = program[0];
+  a = codegen.reference("io");
+  parameter = codegen.call(b, a, "prompt", []).source;
+  if (actualArg === 0) {
     a = codegen.literal(7);
-    return codegen.finish(c, a);
+    return codegen.finish(b, a);
   }
-  b = codegen.reference(b);
-  a = codegen.binary("+", b, 1);
-  return codegen.finish(c, a);
+  a = codegen.reference(parameter);
+  a = codegen.binary("+", a, 1);
+  return codegen.finish(b, a);
 }
 
 const codegen = require("../codegen.cjs");

@@ -8,12 +8,12 @@ const checkSrc = fs.readFileSync(path.join(__dirname, 'check.cjs'), 'utf8');
 for (const m of checkSrc.matchAll(/`(function [^`]*)`/g)) sources.push(Function('return `' + m[1] + '`;')());
 for (const m of checkSrc.matchAll(/'(function interp[^']*)'/g)) sources.push(m[1]);
 sources.push(fs.readFileSync(path.join(__dirname, '../readable-second-projection/interpreter.js'), 'utf8'));
-// The playground's compiler examples (an interpreter and a main each).
-const examples = path.join(__dirname, '../../playground/examples');
-// What their main parses: the interpreter functions' own source text.
-for (const f of fs.readdirSync(examples).filter(f => f.startsWith('compiler-'))) {
-  const src = fs.readFileSync(path.join(examples, f), 'utf8');
-  const names = [...src.matchAll(/^function ([A-Za-z_$][\w$]*)/gm)].map(m => m[1]).filter(n => n !== 'main');
+// The interpreters the compiler examples use, as their main parses them: the
+// functions' own source text.
+const interpreters = path.join(__dirname, 'interpreters');
+for (const f of fs.readdirSync(interpreters).filter(f => f.endsWith('.js'))) {
+  const src = fs.readFileSync(path.join(interpreters, f), 'utf8');
+  const names = [...src.matchAll(/^function ([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
   const fns = Function(src + '\nreturn [' + names.join(', ') + '];')();
   sources.push(fns.map(fn => fn.toString()).join('\n'));
 }

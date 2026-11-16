@@ -1,5 +1,8 @@
---- residual as JavaScript (1 block(s)) ---
-function main(c) {
+--- residual as JavaScript ---
+let __pe_entry;
+
+export function main(program) {
+  "use strict";
   let b, a;
   b = codegen.buffer();
   a = codegen.reference("io");

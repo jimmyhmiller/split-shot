@@ -1,20 +1,23 @@
-function compile(c) {
-  let b, a, d, e;
-  a: {
-    b = codegen.buffer();
-    if (c[0]) {
-      a = codegen.literal(1);
-      a = codegen.bindExpression(b, a).source;
-      break a;
-    }
+function compile(program) {
+  "use strict";
+  let b, a, assigned, c;
+  b = codegen.buffer();
+  if (program[0]) {
+    a = codegen.literal(1);
+    assigned = codegen.bindExpression(b, a).source;
     a = codegen.reference("io");
-    a = codegen.call(b, a, "prompt", []);
-    a = codegen.bindExpression(b, a).source;
+    c = [codegen.reference(assigned)];
+    codegen.call(b, a, "print", c);
+    a = codegen.reference(assigned);
+    return codegen.finish(b, a);
   }
-  d = codegen.reference("io");
-  e = [codegen.reference(a)];
-  codegen.call(b, d, "print", e);
-  a = codegen.reference(a);
+  a = codegen.reference("io");
+  a = codegen.call(b, a, "prompt", []);
+  assigned = codegen.bindExpression(b, a).source;
+  a = codegen.reference("io");
+  c = [codegen.reference(assigned)];
+  codegen.call(b, a, "print", c);
+  a = codegen.reference(assigned);
   return codegen.finish(b, a);
 }
 

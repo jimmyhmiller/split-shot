@@ -1,12 +1,13 @@
-function compile(d) {
-  let b, a, c;
+function compile(program) {
+  "use strict";
+  let b, a, c, assigned;
   b = codegen.buffer();
   a = codegen.reference("io");
   c = [codegen.reference("undefined")];
   codegen.call(b, a, "print", c);
   a = codegen.reference("io");
-  a = codegen.call(b, a, "prompt", []).source;
-  a = codegen.reference(a);
+  assigned = codegen.call(b, a, "prompt", []).source;
+  a = codegen.reference(assigned);
   return codegen.finish(b, a);
 }
 

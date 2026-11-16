@@ -1,22 +1,23 @@
-function compile(d) {
-  let b, a, c;
+function compile(program) {
+  "use strict";
+  let b, a, c, parameter, actualArg;
   b = codegen.buffer();
   a = codegen.reference("io");
   c = codegen.prepare(b, a, "print");
   a = codegen.reference("io");
-  a = codegen.call(b, a, "prompt", []).source;
-  a = codegen.reference(a);
+  parameter = codegen.call(b, a, "prompt", []).source;
+  a = codegen.reference(parameter);
   a = [codegen.bindExpression(b, a)];
   codegen.invoke(b, c, a);
   a = codegen.reference("io");
   c = codegen.prepare(b, a, "print");
-  a = codegen.literal(void 0).source;
-  a = codegen.reference(a);
+  parameter = codegen.literal(void 0).source;
+  a = codegen.reference(parameter);
   a = [codegen.bindExpression(b, a)];
   codegen.invoke(b, c, a);
-  a = d[0];
-  a = codegen.literal(a).source;
-  a = codegen.reference(a);
+  actualArg = program[0];
+  parameter = codegen.literal(actualArg).source;
+  a = codegen.reference(parameter);
   return codegen.finish(b, a);
 }
 

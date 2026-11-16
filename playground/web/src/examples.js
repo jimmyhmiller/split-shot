@@ -11,10 +11,6 @@ import interp from "../../examples/interp.js?raw";
 import vm from "../../examples/vm.js?raw";
 import brainfuck from "../../examples/brainfuck.js?raw";
 import jsfuck from "../../examples/jsfuck.js?raw";
-import promptPrint from "../../examples/compiler-prompt-print.js?raw";
-import calculator from "../../examples/compiler-calculator.js?raw";
-import helpers from "../../examples/compiler-helpers.js?raw";
-import password from "../../examples/compiler-password.js?raw";
 import cogenLambda from "../../examples/cogen-lambda.js?raw";
 // Interpreters from the interpreter suite (tools/wild/interp), each an ES
 // module with a fixed program and an exported main.
@@ -28,20 +24,27 @@ import interp6 from "../../../tools/wild/interp/assembler-two-pass.mjs?raw";
 import interp7 from "../../../tools/wild/interp/turing-machine-table.mjs?raw";
 import interp8 from "../../../tools/wild/interp/debruijn-lexical-tak.mjs?raw";
 import interp9 from "../../../tools/wild/interp/peg-recognizer-assignments.mjs?raw";
-// The second projection's specializer, from experiments/general-jsmix.
+// The second projection: each example's main, its interpreter, and jsmix with
+// its parser and binding-time analysis (experiments/general-jsmix).
+import mainBrainfuck from "../../examples/compiler-brainfuck.mjs?raw";
+import mainExpressions from "../../examples/compiler-expressions.mjs?raw";
+import mainPromptPrint from "../../examples/compiler-prompt-print.mjs?raw";
+import intBrainfuck from "../../../experiments/general-jsmix/interpreters/brainfuck.js?raw";
+import intExpressions from "../../../experiments/general-jsmix/interpreters/expressions.js?raw";
+import intPromptPrint from "../../../experiments/readable-second-projection/interpreter.js?raw";
 import jsmix from "../../../experiments/general-jsmix/jsmix.js?raw";
 import bindingTimes from "../../../experiments/general-jsmix/binding-times.js?raw";
 import subsetParse from "../../../experiments/general-jsmix/subset-parse.js?raw";
 
 const one = (src) => [{ name: "program.js", src }];
 const module = (src) => [{ name: "program.mjs", src }];
-const withJsmix = (src) => [
-  { name: "program.js", src },
+const withJsmix = (main, interpreterName, interpreter) => [
+  { name: "main.mjs", src: main },
+  { name: interpreterName, src: interpreter },
   { name: "jsmix.js", src: jsmix },
   { name: "binding-times.js", src: bindingTimes },
   { name: "subset-parse.js", src: subsetParse },
 ];
-
 export const GROUPS = [
   { label: "Programs", examples: [
     { id: "power", title: "Power", files: one(power) },
@@ -67,10 +70,9 @@ export const GROUPS = [
     { id: "peg-recognizer-assignments", title: "PEG recognizer", files: module(interp9) },
   ] },
   { label: "Deriving a compiler", examples: [
-    { id: "compiler-prompt-print", title: "prompt / print", files: withJsmix(promptPrint) },
-    { id: "compiler-calculator", title: "Calculator", files: withJsmix(calculator) },
-    { id: "compiler-helpers", title: "Helper functions", files: withJsmix(helpers) },
-    { id: "compiler-password", title: "Password check", files: withJsmix(password) },
+    { id: "compiler-brainfuck", title: "Brainfuck compiler", files: withJsmix(mainBrainfuck, "brainfuck.js", intBrainfuck) },
+    { id: "compiler-expressions", title: "Expression compiler", files: withJsmix(mainExpressions, "expressions.js", intExpressions) },
+    { id: "compiler-prompt-print", title: "prompt / print compiler", files: withJsmix(mainPromptPrint, "prompt-print.js", intPromptPrint) },
   ] },
   { label: "A compiler generator", examples: [
     { id: "cogen-lambda", title: "Lambda calculus", files: one(cogenLambda) },

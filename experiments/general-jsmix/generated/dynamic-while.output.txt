@@ -1,0 +1,40 @@
+--- residual as JavaScript ---
+let __pe_entry;
+
+export function main(program) {
+  "use strict";
+  let b, assigned, h, c, g, effects, testEffects, condition, bodyEffects, bodyResult, loaded, a, d, j, k, l, m, e, f, n;
+  b = codegen.buffer();
+  assigned = codegen.literal(0).source;
+  l = codegen;
+  m = codegen.carry;
+  h = codegen.reference(assigned);
+  c = m.call(l, b, h);
+  g = codegen.fork(b);
+  a = codegen.reference("io");
+  j = codegen.call(g, a, "prompt", []);
+  d = codegen.binary("!==", j, "");
+  f = {value: c};
+  effects = b;
+  testEffects = g;
+  condition = d;
+  bodyEffects = codegen.fork(b);
+  try {
+    a = codegen.reference("io");
+    k = codegen.prepare(bodyEffects, a, "print");
+    e = [program[0]];
+    codegen.invoke(bodyEffects, k, e);
+    loaded = f.value;
+    a = codegen.reference(loaded);
+    d = codegen.binary("+", a, 1);
+    f.value = codegen.bindExpression(bodyEffects, d).source;
+    bodyResult = [false, void 0];
+  } catch (i) {
+    bodyResult = codegen.caught(bodyEffects, i);
+  }
+  n = [c];
+  e = [f.value];
+  codegen.loop(effects, testEffects, condition, bodyEffects, bodyResult, n, e);
+  a = codegen.reference(c);
+  return codegen.finish(b, a);
+}

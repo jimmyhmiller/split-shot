@@ -1,13 +1,16 @@
---- residual as JavaScript (1 block(s)) ---
-function main(e) {
-  let b, a, c, d;
+--- residual as JavaScript ---
+let __pe_entry;
+
+export function main(program) {
+  "use strict";
+  let b, a, assigned, c, parameter;
   b = codegen.buffer();
   a = codegen.reference("io");
-  a = codegen.call(b, a, "prompt", []).source;
-  c = codegen.reference("io");
-  d = [codegen.reference(a)];
-  codegen.call(b, c, "print", d);
-  a = codegen.reference(a).source;
-  a = codegen.reference(a);
+  assigned = codegen.call(b, a, "prompt", []).source;
+  a = codegen.reference("io");
+  c = [codegen.reference(assigned)];
+  codegen.call(b, a, "print", c);
+  parameter = codegen.reference(assigned).source;
+  a = codegen.reference(parameter);
   return codegen.finish(b, a);
 }

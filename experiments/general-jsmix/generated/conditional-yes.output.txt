@@ -1,28 +1,31 @@
---- residual as JavaScript (1 block(s)) ---
-function main(g) {
-  let a, b, h, i, j, k, l, m, c, d, e, f, p;
+--- residual as JavaScript ---
+let __pe_entry;
+
+export function main(program) {
+  "use strict";
+  let a, b, c, d, effects, condition, yesEffects, noEffects, yesValue, noValue, g, h, right;
   a = codegen.buffer();
   b = codegen.reference("io");
   h = codegen.call(a, b, "prompt", []);
-  i = g[0];
-  j = codegen.binary("===", h, i);
-  k = codegen.fork(a);
-  l = a;
-  m = j;
-  c = k;
+  right = program[0];
+  c = codegen.binary("===", h, right);
   d = codegen.fork(a);
+  effects = a;
+  condition = c;
+  yesEffects = d;
+  noEffects = codegen.fork(a);
   try {
     b = codegen.reference("io");
-    e = codegen.call(c, b, "prompt", []);
-  } catch (n) {
-    e = codegen.caught(c, n)[1];
+    yesValue = codegen.call(yesEffects, b, "prompt", []);
+  } catch (e) {
+    yesValue = codegen.caught(yesEffects, e)[1];
   }
   try {
     b = codegen.reference("io");
-    f = codegen.call(d, b, "prompt", []);
-  } catch (o) {
-    f = codegen.caught(d, o)[1];
+    noValue = codegen.call(noEffects, b, "prompt", []);
+  } catch (f) {
+    noValue = codegen.caught(noEffects, f)[1];
   }
-  p = codegen.conditional(l, m, c, e, d, f);
-  return codegen.finish(a, p);
+  g = codegen.conditional(effects, condition, yesEffects, yesValue, noEffects, noValue);
+  return codegen.finish(a, g);
 }

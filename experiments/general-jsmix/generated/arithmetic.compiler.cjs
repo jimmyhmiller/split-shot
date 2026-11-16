@@ -1,34 +1,35 @@
-function compile(e) {
-  let c, a, b, d, f;
+function compile(program) {
+  "use strict";
+  let c, assigned, b, a, right, d;
   c = codegen.buffer();
-  a = codegen.literal(0).source;
-  b = e;
+  assigned = codegen.literal(0).source;
+  b = program;
   while (b["length"] > 0) {
     a: {
       if (b[0][0] === "get") {
         a = codegen.reference("io");
-        a = codegen.call(c, a, "fetch", []).source;
+        assigned = codegen.call(c, a, "fetch", []).source;
         break a;
       }
       if (b[0][0] === "scale") {
-        a = codegen.reference(a);
-        d = b[0][1];
-        a = codegen.binary("*", a, d);
-        a = codegen.bindExpression(c, a).source;
+        a = codegen.reference(assigned);
+        right = b[0][1];
+        a = codegen.binary("*", a, right);
+        assigned = codegen.bindExpression(c, a).source;
         break a;
       }
       if (b[0][0] === "literal") {
-        a = b[0][1];
-        a = codegen.literal(a).source;
+        assigned = b[0][1];
+        assigned = codegen.literal(assigned).source;
         break a;
       }
-      d = codegen.reference("io");
-      f = [codegen.reference(a)];
-      codegen.call(c, d, "send", f);
+      a = codegen.reference("io");
+      d = [codegen.reference(assigned)];
+      codegen.call(c, a, "send", d);
     }
     b = b.slice(1);
   }
-  a = codegen.reference(a);
+  a = codegen.reference(assigned);
   return codegen.finish(c, a);
 }
 

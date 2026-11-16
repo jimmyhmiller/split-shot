@@ -68,7 +68,7 @@ function analyze(functions, entry, staticCount = 1) {
       case 'return': annotate(s[1],env);s.push(returns.get(fn));break;
       case 'block':s[1].forEach(x=>annotateStmt(x,env,fn));break;
       case 'if':annotate(s[1],env);annotateStmt(s[2],env,fn);if(s[3])annotateStmt(s[3],env,fn);break;
-      case 'while':if(expr(s[1],env,false))throw new Error('Dynamic while is not supported by this subset');annotate(s[1],env);annotateStmt(s[2],env,fn);break;
+      case 'while':annotate(s[1],env);annotateStmt(s[2],env,fn);break;
     }
   }
   for(const fn of functions){annotateStmt(['block',fn[3]],flags.get(fn[1]),fn[1]);fn.push(fn[2].map(n=>flags.get(fn[1]).get(n)));fn.push(fn[4].map(n=>flags.get(fn[1]).get(n)));}

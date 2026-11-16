@@ -89,7 +89,11 @@ for(const input of ['yes','no']){
 }
 checkCase('undefined-shadow',`function echo(undefined){return undefined;}function interp(p,io){var value=io.prompt();var value;io.print(value);return echo(value);}`,[[]],['kept'],true);
 checkCase('unary',`function interp(p,io){return -io.prompt();}`,[[]],[2.5],true);
-assert.throws(()=>parse('function interp(p,io){while(io.prompt()){io.print(p);}return p;}'),/Dynamic while/);
+// A loop on runtime data is a loop in the target; one nested in recursion on
+// the program is a loop in the code the compiler emits for each level.
+checkCase('dynamic-while',`function interp(p,io){var count=0;while(io.prompt()!==""){io.print(p[0]);count=count+1;}return count;}`,[['x'],['y']],['a','b',''],true);
+checkCase('dynamic-while-nested',`function interp(p,io){return run(p,io);}function run(code,io){var i=0;while(i<code.length){var op=code[i];if(op==="tick"){io.print(op);}else{while(io.prompt()!=="stop"){run(op,io);}}i=i+1;}return i;}`,
+ [[],['tick'],['tick',['tick']],[['tick',['tick']],'tick']],['go','stop','go','go','stop','stop'],true);
 assert.throws(()=>parse('function interp(p,Error){throw new Error("x");}'),/Shadowed builtin/);
 
 

@@ -1,0 +1,765 @@
+function __o0() {
+  return {value: void 0};
+}
+function __o1() {
+  return {value: "undefined"};
+}
+
+function __rf13(env, effects) {
+  "use strict";
+  let returned, assigned, loaded, a, m, left, u, r, v, condition, yesEffects, noEffects, yesValue, noValue, value, t, actualArg, parameter, b, right, k, n, p, s, y, c, d, e, f, g, h, q, o, l, j, i;
+  assigned = (env["e"]).value[0];
+  (env["op"]).value = assigned;
+  if ((env["op"]).value === "num") {
+    returned = (env["e"]).value[1];
+    return [true, codegen.literal(returned)];
+  }
+  if ((env["op"]).value === "input") {
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    t = codegen.call(effects, a, "read", []);
+    return [true, t];
+  }
+  if ((env["op"]).value === "+") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    q = Object.create(null);
+    o = {value: actualArg};
+    l = {value: parameter};
+    j = __o0();
+    i = __o1();
+    q.e = o;
+    q.io = l;
+    q.op = j;
+    q.value = i;
+    b = __rf13(q, effects);
+    left = b[1];
+    m = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    f = Object.create(null);
+    g = {value: actualArg};
+    h = {value: parameter};
+    d = __o0();
+    c = __o1();
+    f.e = g;
+    f.io = h;
+    f.op = d;
+    f.value = c;
+    b = __rf13(f, effects);
+    right = b[1];
+    return [true, codegen.binary("+", m, right)];
+  }
+  if ((env["op"]).value === "-") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    o = Object.create(null);
+    l = {value: actualArg};
+    j = {value: parameter};
+    i = __o0();
+    e = __o1();
+    o.e = l;
+    o.io = j;
+    o.op = i;
+    o.value = e;
+    b = __rf13(o, effects);
+    left = b[1];
+    m = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    g = Object.create(null);
+    h = {value: actualArg};
+    d = {value: parameter};
+    c = __o0();
+    k = __o1();
+    g.e = h;
+    g.io = d;
+    g.op = c;
+    g.value = k;
+    b = __rf13(g, effects);
+    right = b[1];
+    return [true, codegen.binary("-", m, right)];
+  }
+  if ((env["op"]).value === "*") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    l = Object.create(null);
+    j = {value: actualArg};
+    i = {value: parameter};
+    e = __o0();
+    f = __o1();
+    l.e = j;
+    l.io = i;
+    l.op = e;
+    l.value = f;
+    b = __rf13(l, effects);
+    left = b[1];
+    m = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    h = Object.create(null);
+    d = {value: actualArg};
+    c = {value: parameter};
+    k = __o0();
+    n = __o1();
+    h.e = d;
+    h.io = c;
+    h.op = k;
+    h.value = n;
+    b = __rf13(h, effects);
+    right = b[1];
+    return [true, codegen.binary("*", m, right)];
+  }
+  if ((env["op"]).value === "<") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    j = Object.create(null);
+    i = {value: actualArg};
+    e = {value: parameter};
+    f = __o0();
+    g = __o1();
+    j.e = i;
+    j.io = e;
+    j.op = f;
+    j.value = g;
+    b = __rf13(j, effects);
+    left = b[1];
+    m = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    d = Object.create(null);
+    c = {value: actualArg};
+    k = {value: parameter};
+    n = __o0();
+    p = __o1();
+    d.e = c;
+    d.io = k;
+    d.op = n;
+    d.value = p;
+    b = __rf13(d, effects);
+    right = b[1];
+    return [true, codegen.binary("<", m, right)];
+  }
+  if ((env["op"]).value === "if") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    i = Object.create(null);
+    e = {value: actualArg};
+    f = {value: parameter};
+    g = __o0();
+    h = __o1();
+    i.e = e;
+    i.io = f;
+    i.op = g;
+    i.value = h;
+    b = __rf13(i, effects);
+    condition = b[1];
+    u = codegen.fork(effects);
+    r = env;
+    v = effects;
+    yesEffects = u;
+    noEffects = codegen.fork(effects);
+    try {
+      actualArg = (r["e"]).value[2];
+      loaded = (r["io"]).value;
+      a = codegen.reference(loaded);
+      parameter = a.source;
+      c = Object.create(null);
+      k = {value: actualArg};
+      n = {value: parameter};
+      p = __o0();
+      s = __o1();
+      c.e = k;
+      c.io = n;
+      c.op = p;
+      c.value = s;
+      b = __rf14(c, yesEffects, true);
+      b[0];
+      yesValue = b[1];
+    } catch (w) {
+      yesValue = codegen.caught(yesEffects, w)[1];
+    }
+    try {
+      actualArg = (r["e"]).value[3];
+      loaded = (r["io"]).value;
+      a = codegen.reference(loaded);
+      parameter = a.source;
+      c = Object.create(null);
+      k = {value: actualArg};
+      n = {value: parameter};
+      p = __o0();
+      s = __o1();
+      c.e = k;
+      c.io = n;
+      c.op = p;
+      c.value = s;
+      b = __rf14(c, noEffects, true);
+      b[0];
+      noValue = b[1];
+    } catch (x) {
+      noValue = codegen.caught(noEffects, x)[1];
+    }
+    d = [true, codegen.conditional(v, condition, yesEffects, yesValue, noEffects, noValue)];
+    return d;
+  }
+  if ((env["op"]).value === "print") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    e = Object.create(null);
+    f = {value: actualArg};
+    g = {value: parameter};
+    h = __o0();
+    d = __o1();
+    e.e = f;
+    e.io = g;
+    e.op = h;
+    e.value = d;
+    b = __rf13(e, effects);
+    assigned = b[1];
+    assigned = codegen.bindExpression(effects, assigned).source;
+    (env["value"]).value = assigned;
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    loaded = (env["value"]).value;
+    y = a;
+    a = codegen.reference(loaded);
+    t = codegen.call(effects, y, "print", [a]);
+    loaded = (env["value"]).value;
+    a = codegen.reference(loaded);
+    return [true, a];
+  }
+  value = "Unknown expression: " + (env["op"]).value;
+  throw new Error(value);
+}
+
+function __rf14(env, effects, underDynamic) {
+  "use strict";
+  let assigned, returned, loaded, a, actualArg, parameter, d, c, b, e, left, f, right, value;
+  assigned = (env["e"]).value[0];
+  (env["op"]).value = assigned;
+  if ((env["op"]).value === "num") {
+    returned = (env["e"]).value[1];
+    return [true, codegen.literal(returned)];
+  }
+  if ((env["op"]).value === "input") {
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    return [true, codegen.call(effects, a, "read", [])];
+  }
+  if ((env["op"]).value === "+") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    a = Object.create(null);
+    d = {value: actualArg};
+    c = {value: parameter};
+    b = __o0();
+    e = __o1();
+    a.e = d;
+    a.io = c;
+    a.op = b;
+    a.value = e;
+    left = __rf14(a, effects, underDynamic)[1];
+    d = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    a = Object.create(null);
+    c = {value: actualArg};
+    b = {value: parameter};
+    e = __o0();
+    f = __o1();
+    a.e = c;
+    a.io = b;
+    a.op = e;
+    a.value = f;
+    right = __rf14(a, effects, underDynamic)[1];
+    return [true, codegen.binary("+", d, right)];
+  }
+  if ((env["op"]).value === "-") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    d = Object.create(null);
+    c = {value: actualArg};
+    b = {value: parameter};
+    e = __o0();
+    f = __o1();
+    d.e = c;
+    d.io = b;
+    d.op = e;
+    d.value = f;
+    left = __rf14(d, effects, underDynamic)[1];
+    d = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    c = Object.create(null);
+    b = {value: actualArg};
+    e = {value: parameter};
+    f = __o0();
+    a = __o1();
+    c.e = b;
+    c.io = e;
+    c.op = f;
+    c.value = a;
+    right = __rf14(c, effects, underDynamic)[1];
+    return [true, codegen.binary("-", d, right)];
+  }
+  if ((env["op"]).value === "*") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    c = Object.create(null);
+    b = {value: actualArg};
+    e = {value: parameter};
+    f = __o0();
+    a = __o1();
+    c.e = b;
+    c.io = e;
+    c.op = f;
+    c.value = a;
+    left = __rf14(c, effects, underDynamic)[1];
+    d = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    b = Object.create(null);
+    e = {value: actualArg};
+    f = {value: parameter};
+    a = __o0();
+    c = __o1();
+    b.e = e;
+    b.io = f;
+    b.op = a;
+    b.value = c;
+    right = __rf14(b, effects, underDynamic)[1];
+    return [true, codegen.binary("*", d, right)];
+  }
+  if ((env["op"]).value === "<") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    b = Object.create(null);
+    f = {value: parameter};
+    a = __o0();
+    c = __o1();
+    b.e = {value: actualArg};
+    b.io = f;
+    b.op = a;
+    b.value = c;
+    left = __rf14(b, effects, underDynamic)[1];
+    d = codegen.bindExpression(effects, left);
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    e = Object.create(null);
+    a = {value: parameter};
+    c = __o0();
+    b = __o1();
+    e.e = {value: actualArg};
+    e.io = a;
+    e.op = c;
+    e.value = b;
+    right = __rf14(e, effects, underDynamic)[1];
+    return [true, codegen.binary("<", d, right)];
+  }
+  a = __rf15(env, effects, underDynamic);
+  d = a[0];
+  a = a[1];
+  if (d) {
+    b = [d, a];
+    return b;
+  }
+  if ((env["op"]).value === "print") {
+    actualArg = (env["e"]).value[1];
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    parameter = a.source;
+    f = Object.create(null);
+    a = {value: actualArg};
+    c = {value: parameter};
+    b = __o0();
+    e = __o1();
+    f.e = a;
+    f.io = c;
+    f.op = b;
+    f.value = e;
+    assigned = __rf14(f, effects, underDynamic)[1];
+    assigned = codegen.bindExpression(effects, assigned).source;
+    (env["value"]).value = assigned;
+    loaded = (env["io"]).value;
+    a = codegen.reference(loaded);
+    loaded = (env["value"]).value;
+    d = a;
+    a = codegen.reference(loaded);
+    codegen.call(effects, d, "print", [a]);
+    loaded = (env["value"]).value;
+    a = codegen.reference(loaded);
+    return [true, a];
+  }
+  value = "Unknown expression: " + (env["op"]).value;
+  a = new Error(value);
+  if (underDynamic ? underDynamic : false) {
+    codegen.throwValue(effects, a);
+    a = [true, void 0];
+    return a;
+  }
+  throw a;
+}
+
+function __rf15(env, effects, underDynamic) {
+  "use strict";
+  let a;
+  if ((env["op"]).value === "if") {
+    a = __rf16(env, effects, underDynamic);
+    return [a[0], a[1]];
+  }
+  return [false, void 0];
+}
+
+function __rf16(d, effects, underDynamic) {
+  "use strict";
+  let loaded, b, i, env, j, condition, yesEffects, noEffects, yesValue, noValue, actualArg, parameter, c, m, n, o, a, e, f, g, h;
+  actualArg = (d["e"]).value[1];
+  loaded = (d["io"]).value;
+  b = codegen.reference(loaded);
+  parameter = b.source;
+  c = Object.create(null);
+  m = {value: parameter};
+  n = __o0();
+  o = __o1();
+  c.e = {value: actualArg};
+  c.io = m;
+  c.op = n;
+  c.value = o;
+  condition = __rf14(c, effects, underDynamic)[1];
+  i = codegen.fork(effects);
+  env = d;
+  j = effects;
+  yesEffects = i;
+  noEffects = codegen.fork(effects);
+  try {
+    actualArg = (env["e"]).value[2];
+    loaded = (env["io"]).value;
+    b = codegen.reference(loaded);
+    parameter = b.source;
+    a = Object.create(null);
+    e = {value: actualArg};
+    f = {value: parameter};
+    g = __o0();
+    h = __o1();
+    a.e = e;
+    a.io = f;
+    a.op = g;
+    a.value = h;
+    yesValue = __rf14(a, yesEffects, true)[1];
+  } catch (k) {
+    yesValue = codegen.caught(yesEffects, k)[1];
+  }
+  try {
+    actualArg = (env["e"]).value[3];
+    loaded = (env["io"]).value;
+    b = codegen.reference(loaded);
+    parameter = b.source;
+    a = Object.create(null);
+    e = {value: actualArg};
+    f = {value: parameter};
+    g = __o0();
+    h = __o1();
+    a.e = e;
+    a.io = f;
+    a.op = g;
+    a.value = h;
+    noValue = __rf14(a, noEffects, true)[1];
+  } catch (l) {
+    noValue = codegen.caught(noEffects, l)[1];
+  }
+  return [true, codegen.conditional(j, condition, yesEffects, yesValue, noEffects, noValue)];
+}
+
+function compile(program) {
+  "use strict";
+  let c, y, returned, assigned, b, p, v, z, effects, condition, yesEffects, noEffects, yesValue, noValue, C, value, x, actualArg, parameter, a, h, d, i, j, k, l, e, q, n, m, f, g, o, s, r, t, w, D, u;
+  c = codegen.buffer();
+  b = codegen.reference("io");
+  parameter = b.source;
+  assigned = program[0];
+  if (assigned === "num") {
+    returned = program[1];
+    y = codegen.literal(returned);
+    return codegen.finish(c, y);
+  }
+  if (assigned === "input") {
+    b = codegen.reference(parameter);
+    x = codegen.call(c, b, "read", []);
+    return codegen.finish(c, x);
+  }
+  a: {
+    if (assigned === "+") {
+      actualArg = program[1];
+      b = codegen.reference(parameter);
+      h = parameter;
+      parameter = b.source;
+      u = Object.create(null);
+      q = {value: actualArg};
+      n = {value: parameter};
+      m = __o0();
+      f = __o1();
+      u.e = q;
+      u.io = n;
+      u.op = m;
+      u.value = f;
+      a = __rf13(u, c);
+      a[0];
+      d = a[1];
+      p = codegen.bindExpression(c, d);
+      actualArg = program[2];
+      b = codegen.reference(h);
+      parameter = b.source;
+      i = Object.create(null);
+      j = {value: actualArg};
+      k = {value: parameter};
+      l = __o0();
+      e = __o1();
+      i.e = j;
+      i.io = k;
+      i.op = l;
+      i.value = e;
+      a = __rf13(i, c);
+      a[0];
+      d = a[1];
+      v = codegen.binary("+", p, d);
+      break a;
+    }
+    if (assigned === "-") {
+      actualArg = program[1];
+      b = codegen.reference(parameter);
+      h = parameter;
+      parameter = b.source;
+      q = Object.create(null);
+      n = {value: actualArg};
+      m = {value: parameter};
+      f = __o0();
+      g = __o1();
+      q.e = n;
+      q.io = m;
+      q.op = f;
+      q.value = g;
+      a = __rf13(q, c);
+      a[0];
+      d = a[1];
+      p = codegen.bindExpression(c, d);
+      actualArg = program[2];
+      b = codegen.reference(h);
+      parameter = b.source;
+      j = Object.create(null);
+      k = {value: actualArg};
+      l = {value: parameter};
+      e = __o0();
+      o = __o1();
+      j.e = k;
+      j.io = l;
+      j.op = e;
+      j.value = o;
+      a = __rf13(j, c);
+      a[0];
+      d = a[1];
+      v = codegen.binary("-", p, d);
+      break a;
+    }
+    if (assigned === "*") {
+      actualArg = program[1];
+      b = codegen.reference(parameter);
+      h = parameter;
+      parameter = b.source;
+      n = Object.create(null);
+      m = {value: actualArg};
+      f = {value: parameter};
+      g = __o0();
+      s = __o1();
+      n.e = m;
+      n.io = f;
+      n.op = g;
+      n.value = s;
+      a = __rf13(n, c);
+      a[0];
+      d = a[1];
+      p = codegen.bindExpression(c, d);
+      actualArg = program[2];
+      b = codegen.reference(h);
+      parameter = b.source;
+      k = Object.create(null);
+      l = {value: actualArg};
+      e = {value: parameter};
+      o = __o0();
+      r = __o1();
+      k.e = l;
+      k.io = e;
+      k.op = o;
+      k.value = r;
+      a = __rf13(k, c);
+      a[0];
+      d = a[1];
+      v = codegen.binary("*", p, d);
+      break a;
+    }
+    if (assigned === "<") {
+      actualArg = program[1];
+      b = codegen.reference(parameter);
+      h = parameter;
+      parameter = b.source;
+      m = Object.create(null);
+      f = {value: actualArg};
+      g = {value: parameter};
+      s = __o0();
+      i = __o1();
+      m.e = f;
+      m.io = g;
+      m.op = s;
+      m.value = i;
+      a = __rf13(m, c);
+      a[0];
+      d = a[1];
+      p = codegen.bindExpression(c, d);
+      actualArg = program[2];
+      b = codegen.reference(h);
+      parameter = b.source;
+      l = Object.create(null);
+      e = {value: actualArg};
+      o = {value: parameter};
+      r = __o0();
+      t = __o1();
+      l.e = e;
+      l.io = o;
+      l.op = r;
+      l.value = t;
+      a = __rf13(l, c);
+      a[0];
+      d = a[1];
+      v = codegen.binary("<", p, d);
+      break a;
+    }
+    if (assigned === "if") {
+      actualArg = program[1];
+      b = codegen.reference(parameter);
+      h = parameter;
+      parameter = b.source;
+      f = Object.create(null);
+      g = {value: actualArg};
+      s = {value: parameter};
+      i = __o0();
+      j = __o1();
+      f.e = g;
+      f.io = s;
+      f.op = i;
+      f.value = j;
+      a = __rf13(f, c);
+      a[0];
+      d = a[1];
+      z = codegen.fork(c);
+      effects = c;
+      condition = d;
+      yesEffects = z;
+      noEffects = codegen.fork(c);
+      try {
+        actualArg = program[2];
+        b = codegen.reference(h);
+        parameter = b.source;
+        e = Object.create(null);
+        o = {value: actualArg};
+        r = {value: parameter};
+        t = __o0();
+        w = __o1();
+        e.e = o;
+        e.io = r;
+        e.op = t;
+        e.value = w;
+        a = __rf14(e, yesEffects, true);
+        a[0];
+        yesValue = a[1];
+      } catch (A) {
+        yesValue = codegen.caught(yesEffects, A)[1];
+      }
+      try {
+        actualArg = program[3];
+        b = codegen.reference(h);
+        parameter = b.source;
+        e = Object.create(null);
+        o = {value: actualArg};
+        r = {value: parameter};
+        t = __o0();
+        w = __o1();
+        e.e = o;
+        e.io = r;
+        e.op = t;
+        e.value = w;
+        a = __rf14(e, noEffects, true);
+        a[0];
+        noValue = a[1];
+      } catch (B) {
+        noValue = codegen.caught(noEffects, B)[1];
+      }
+      C = codegen.conditional(effects, condition, yesEffects, yesValue, noEffects, noValue);
+      return codegen.finish(c, C);
+    }
+    if (assigned === "print") {
+      actualArg = program[1];
+      b = codegen.reference(parameter);
+      h = parameter;
+      parameter = b.source;
+      g = Object.create(null);
+      i = {value: parameter};
+      j = __o0();
+      k = __o1();
+      g.e = {value: actualArg};
+      g.io = i;
+      g.op = j;
+      g.value = k;
+      a = __rf13(g, c);
+      a[0];
+      d = a[1];
+      assigned = codegen.bindExpression(c, d).source;
+      b = codegen.reference(h);
+      D = b;
+      b = codegen.reference(assigned);
+      x = codegen.call(c, D, "print", [b]);
+      b = codegen.reference(assigned);
+      return codegen.finish(c, b);
+    }
+    value = "Unknown expression: " + assigned;
+    throw new Error(value);
+  }
+  return codegen.finish(c, v);
+}
+
+const codegen = require("../codegen.cjs");
+module.exports={compile,run:function(program,io){return Function("return ("+compile(program)+");")()(io);}};

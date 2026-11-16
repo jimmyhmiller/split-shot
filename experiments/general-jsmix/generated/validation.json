@@ -1,12 +1,12 @@
 {
-  "semanticComparisons": 1916,
+  "semanticComparisons": 1947,
   "sourceHashes": {
-    "jsmix.js": "274471b9dc0a8a7e6525b47f27626ccefbec164351e80c21a3f4ad20fa1bca96",
-    "codegen.cjs": "c9176893bed471a0bcd20c24b2979c6d34b2fef21a22171de84653ebf1da86c0",
+    "jsmix.js": "688e2e480b98205808a2b8433ac036cf6259a992b8d6e0aaedd5f4c7f5f77514",
+    "codegen.cjs": "ce67f8ecc3b0caf875bd5083193642f0fa69c5f12247157c3aca5170421b8256",
     "subset-parse.js": "5a28a147502f034afe3929155f76b4fda536f8b113ea3a158998430ea673aa3a",
-    "binding-times.js": "f093f0e57dee5c21de47e5e164a764135f494b32051509ea9fb2bbc76efb893d",
+    "binding-times.js": "2b2690ee4030f847e26e9b9fc569a7fcd4910fa0c1e3dd667393e3b8de941884",
     "../../js-frontend/src/structured.rs": "412e8d91503fab233b9d8386810d73a6aa93a054622d13668265f1e0999bbbf5"
   },
-  "primaryResidualHash": "a209b04d48559dd76dadcb17bfdccb100d21fb822bb90cefa6ea296f5b5c1695",
+  "primaryResidualHash": "2ad63eac3dfc6a300e822d0c775fa5c30c82b1df3fc15028cc0c65d6e74b3630",
   "diagnosticEnvironment": {}
 }

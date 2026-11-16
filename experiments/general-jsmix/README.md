@@ -46,24 +46,50 @@ run(['prompt', 'print'], {
 
 ## What is specialized
 
-The split-shot input is one plain program, with no preprocessing: the
-interpreter, then `subset-parse.js`, `binding-times.js` and `jsmix.js`, and a
-`main` that parses the interpreter's own source and runs jsmix on it:
+The split-shot input is one plain ES module, with no preprocessing: the
+interpreter, then `subset-parse.js`, `binding-times.js` and `jsmix.js`, the
+interpreter parsed from its own source and annotated at load, and an exported
+`main` that runs jsmix on it:
 
 ```js
-function main(program) {
-  var INT = analyze(parseProgram(interp.toString()), "interp");
+const INT = analyze(parseProgram(interp.toString()), "interp");
+export function main(program) {
   return jsmix(INT, "interp", program);
 }
 ```
 
 split-shot runs the parse and the analysis at specialization time (a call of
 `Function.prototype.toString` on a function of known code is its source text),
-so neither is left in the compiler. The three files hold only function
-declarations: a script with top-level code has globals another script could
-replace before `main` runs, and then split-shot rightly keeps the calls through
-them. `derive.cjs` builds this program (`plainProgram`) and rejects an
-interpreter function named like one of the files' functions.
+so neither is left in the compiler. `INT` is load data no code of `main`
+changes, so every residual function knows it: that is what lets an interpreter
+that recurses on the program (Brainfuck's brackets, an expression tree) become a
+compiler that recurses on it, one compile function per interpreter function.
+(Made inside `main`, `INT` would be a record argument, and it is far larger than
+the records split-shot passes as known; and a script's top-level functions are
+globals another script could replace, so the module form is needed too.)
+`derive.cjs` builds this program (`plainProgram`) and rejects an interpreter
+function named like one of the files' functions.
+
+A loop whose test is dynamic is a loop in the target: binding-time analysis
+makes every variable its body assigns dynamic, jsmix gives each a target
+variable carried around the loop, specializes the test and the body once, and
+assigns the body's values back on the back edge, all at once (`codegen.loop`).
+jsmix evaluates a nested statement as it is (`evalStmt`), never wrapped in a new
+one-element list: a list allocated in a loop that is residual in the compiler
+is not the program's fixed syntax to split-shot, which then keeps jsmix's
+evaluator.
+
+`interpreters/brainfuck.js` (text, brackets matched at compile time, loops on
+the tape) and `interpreters/expressions.js` (a tree, with conditionals on runtime
+values) get compilers this way; `check-brainfuck.cjs` and
+`check-expressions.cjs` run them (Hello World among the Brainfuck programs)
+against the interpreters and against jsmix run directly.
+
+Known gap: jsmix evaluates each branch of a dynamic conditional inside
+`try`/`catch` (a static error there is a `throw` in that branch of the target),
+and split-shot does not pass records into calls made inside a `try` as known.
+The expression compiler therefore builds jsmix's environments at runtime in
+those calls: it is correct, but larger than it needs to be.
 
 `subset-parse.js` is a hand-written parser for the subset, in plain JavaScript.
 `parse.cjs` lowers Acorn's AST to the same shape; `check-subset-parse.cjs`
@@ -112,7 +138,7 @@ handwritten replacement residual are used for the successful path.
 
 The entry has two parameters. There are top-level ordinary function declarations,
 function-scoped var declarations, assignment to those variables, blocks,
-if/else, while with static conditions, return, throw, primitive literals,
+if/else, while (a dynamic test is a loop in the target), return, throw, primitive literals,
 arrays, properties/indexing, unary `! - + typeof`, arithmetic/comparison and bitwise `&`
 operators, conditional expressions, named calls, and ordinary method calls.
 Builtin error constructors with zero or one argument are accepted immediately
@@ -124,8 +150,7 @@ getters, coercion sharing, exceptions and array identity are checked. The target
 assumes standard pristine builtins, including Reflect.apply.
 
 This is not all JavaScript. let/const/block lexical scope, arbitrary closures,
-mutation of static input data, try/catch in interpreted source, dynamic while
-loops, non-finite numeric source literals and other unlisted constructs are
+mutation of static input data, try/catch in interpreted source, non-finite numeric source literals and other unlisted constructs are
 rejected or outside the model. Static inputs are immutable primitive/array
 values with standard prototypes, not arbitrary objects with getters or methods.
 Static heap data is modeled by value; dynamic code must not observe the identity

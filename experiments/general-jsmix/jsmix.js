@@ -205,79 +205,135 @@ function cloneEnv(env) {
   return copy;
 }
 function envSet(env, name, value) { env[name].value = value; return env; }
+// A list of statements: its completion, [returned, value].
 function evalStmts(funcs, stmts, env, effects, underDynamic) {
   var i = 0;
   while (i < stmts.length) {
-    var s = stmts[i];
-    var st = s[0];
-    if (st === "throw") {
-      var error = evalExpr(funcs, s[1], env, effects, underDynamic);
-      if (underDynamic || s[1][s[1].length - 1]) { codegen.throwValue(effects, error); return [true, undefined]; }
-      throw error;
-    }
-    if (st === "return") {
-      var returned = evalExpr(funcs, s[1], env, effects, underDynamic);
-      if (s[2] && !s[1][s[1].length - 1]) { returned = codegen.literal(returned); }
-      return [true, returned];
-    }
-    if (st === "var" || st === "assign") {
-      var assigned = evalExpr(funcs, s[2], env, effects, underDynamic);
-      if (s[3]) {
-        if (s[2][s[2].length - 1]) {
-          if (!atomic(s[2])) { assigned = codegen.bindExpression(effects, assigned); }
-          assigned = assigned.source;
-        }
-        else { assigned = codegen.literal(assigned).source; }
-      }
-      envSet(env, s[1], assigned);
-    } else if (st === "expr") {
-      var discarded = evalExpr(funcs, s[1], env, effects, underDynamic);
-      if (s[1][s[1].length - 1] && !atomic(s[1])) { codegen.discard(effects, discarded); }
-    }
-    else if (st === "if") {
-      if (s[1][s[1].length - 1]) {
-        var condition = evalExpr(funcs, s[1], env, effects, underDynamic);
-        var yesEnv = cloneEnv(env);
-        var noEnv = cloneEnv(env);
-        var yesEffects = codegen.fork(effects);
-        var noEffects = codegen.fork(effects);
-        var yesResult;
-        try { yesResult = evalStmts(funcs, [s[2]], yesEnv, yesEffects, true); }
-        catch (error) { yesResult = codegen.caught(yesEffects, error); }
-        var noResult = [false, undefined];
-        if (s[3]) {
-          try { noResult = evalStmts(funcs, [s[3]], noEnv, noEffects, true); }
-          catch (error) { noResult = codegen.caught(noEffects, error); }
-        }
-        var joined = codegen.branch(effects, condition, yesEffects, noEffects, yesResult, noResult, env, yesEnv, noEnv);
-        if (joined[0]) { return joined; }
-        i = i + 1;
-        continue;
-      }
-      if (evalExpr(funcs, s[1], env, effects, underDynamic)) {
-        var yes = evalStmts(funcs, [s[2]], env, effects, underDynamic);
-        if (yes[0]) { return yes; }
-
-      } else if (s[3]) {
-        var no = evalStmts(funcs, [s[3]], env, effects, underDynamic);
-        if (no[0]) { return no; }
-
-      }
-    } else if (st === "block") {
-      var block = evalStmts(funcs, s[1], env, effects, underDynamic);
-      if (block[0]) { return block; }
-
-    } else if (st === "while") {
-      if (s[1][s[1].length - 1]) { throw new Error("Dynamic while is not supported"); }
-      while (evalExpr(funcs, s[1], env, effects, underDynamic)) {
-        var body = evalStmts(funcs, [s[2]], env, effects, underDynamic);
-        if (body[0]) { return body; }
-
-      }
-    }
+    var done = evalStmt(funcs, stmts[i], env, effects, underDynamic);
+    if (done[0]) { return done; }
     i = i + 1;
   }
   return [false, undefined];
+}
+
+// One statement. (A nested statement is evaluated as it is, not wrapped in a
+// new list: what the specializer of this file allocates in a loop it cannot
+// treat as the program's fixed syntax.)
+function evalStmt(funcs, s, env, effects, underDynamic) {
+  var st = s[0];
+  if (st === "throw") {
+    var error = evalExpr(funcs, s[1], env, effects, underDynamic);
+    if (underDynamic || s[1][s[1].length - 1]) { codegen.throwValue(effects, error); return [true, undefined]; }
+    throw error;
+  }
+  if (st === "return") {
+    var returned = evalExpr(funcs, s[1], env, effects, underDynamic);
+    if (s[2] && !s[1][s[1].length - 1]) { returned = codegen.literal(returned); }
+    return [true, returned];
+  }
+  if (st === "var" || st === "assign") {
+    var assigned = evalExpr(funcs, s[2], env, effects, underDynamic);
+    if (s[3]) {
+      if (s[2][s[2].length - 1]) {
+        if (!atomic(s[2])) { assigned = codegen.bindExpression(effects, assigned); }
+        assigned = assigned.source;
+      }
+      else { assigned = codegen.literal(assigned).source; }
+    }
+    envSet(env, s[1], assigned);
+    return [false, undefined];
+  }
+  if (st === "expr") {
+    var discarded = evalExpr(funcs, s[1], env, effects, underDynamic);
+    if (s[1][s[1].length - 1] && !atomic(s[1])) { codegen.discard(effects, discarded); }
+    return [false, undefined];
+  }
+  if (st === "if") {
+    if (s[1][s[1].length - 1]) {
+      var condition = evalExpr(funcs, s[1], env, effects, underDynamic);
+      var yesEnv = cloneEnv(env);
+      var noEnv = cloneEnv(env);
+      var yesEffects = codegen.fork(effects);
+      var noEffects = codegen.fork(effects);
+      var yesResult;
+      try { yesResult = evalStmt(funcs, s[2], yesEnv, yesEffects, true); }
+      catch (error) { yesResult = codegen.caught(yesEffects, error); }
+      var noResult = [false, undefined];
+      if (s[3]) {
+        try { noResult = evalStmt(funcs, s[3], noEnv, noEffects, true); }
+        catch (error) { noResult = codegen.caught(noEffects, error); }
+      }
+      return codegen.branch(effects, condition, yesEffects, noEffects, yesResult, noResult, env, yesEnv, noEnv);
+    }
+    if (evalExpr(funcs, s[1], env, effects, underDynamic)) {
+      return evalStmt(funcs, s[2], env, effects, underDynamic);
+    }
+    if (s[3]) {
+      return evalStmt(funcs, s[3], env, effects, underDynamic);
+    }
+    return [false, undefined];
+  }
+  if (st === "block") {
+    return evalStmts(funcs, s[1], env, effects, underDynamic);
+  }
+  if (st === "while") {
+    if (s[1][s[1].length - 1]) {
+      return evalDynamicWhile(funcs, s, env, effects);
+    }
+    while (evalExpr(funcs, s[1], env, effects, underDynamic)) {
+      var body = evalStmt(funcs, s[2], env, effects, underDynamic);
+      if (body[0]) { return body; }
+    }
+    return [false, undefined];
+  }
+  throw new Error("Unsupported statement: " + st);
+}
+
+// A loop whose test is dynamic becomes a loop in the target. Binding-time
+// analysis makes every variable the body assigns dynamic, so each is carried
+// around the target loop in a variable of its own; the test and the body are
+// specialized once, with those variables, and the values the body leaves are
+// assigned back to them on the back edge.
+function evalDynamicWhile(funcs, s, env, effects) {
+  var names = assignedNames(s[2], []);
+  var carried = [];
+  var c = 0;
+  while (c < names.length) {
+    var loopVar = codegen.carry(effects, codegen.reference(envLookup(env, names[c])));
+    envSet(env, names[c], loopVar);
+    carried.push(loopVar);
+    c = c + 1;
+  }
+  var testEffects = codegen.fork(effects);
+  var condition = evalExpr(funcs, s[1], env, testEffects, true);
+  var bodyEffects = codegen.fork(effects);
+  var bodyEnv = cloneEnv(env);
+  var bodyResult;
+  try { bodyResult = evalStmt(funcs, s[2], bodyEnv, bodyEffects, true); }
+  catch (error) { bodyResult = codegen.caught(bodyEffects, error); }
+  var after = [];
+  var a = 0;
+  while (a < names.length) { after.push(envLookup(bodyEnv, names[a])); a = a + 1; }
+  codegen.loop(effects, testEffects, condition, bodyEffects, bodyResult, carried, after);
+  return [false, undefined];
+}
+
+// The variables a statement assigns (not those of functions it calls, which
+// have their own).
+function assignedNames(s, names) {
+  var st = s[0];
+  if (st === "var" || st === "assign") {
+    if (names.indexOf(s[1]) < 0) { names.push(s[1]); }
+  } else if (st === "block") {
+    var i = 0;
+    while (i < s[1].length) { assignedNames(s[1][i], names); i = i + 1; }
+  } else if (st === "if") {
+    assignedNames(s[2], names);
+    if (s[3]) { assignedNames(s[3], names); }
+  } else if (st === "while") {
+    assignedNames(s[2], names);
+  }
+  return names;
 }
 
 // entry: specialize the interpreter `entryName(prog, input)` for a given prog,
