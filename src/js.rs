@@ -2371,6 +2371,51 @@ fn entry_check_heap_from(heap: &Heap, start: &Heap) {
     }
 }
 
+/// Of the objects an escape makes (`made`), those that stay modeled (see
+/// `Js::escape_all`): the load code's, unchanged, all they reach such too,
+/// that runtime code has as the load code made them, so the model's copy is
+/// the runtime object's. With `keep_all`, any with a runtime identity (see
+/// `EntryWatch::hoisted`); otherwise, and wherever it is handed over, a
+/// frozen one: no code can change it (a compiler's output holding a part of
+/// the program it was made from). A frozen one with no runtime identity
+/// yet, made here as a copy, is kept too: made by `main`, it is one the next
+/// pass has the load code make, see `EntrySplit`; this pass's identity is
+/// not the residual's. `PE_NO_KEEP_FROZEN`: frozen ones as any other.
+fn kept_on_escape(heap: &Heap, made: &HashMap<usize, usize>, keep_all: bool) -> std::collections::HashSet<usize> {
+    let frozen_whole = |a: &usize| {
+        !env_flag!("PE_NO_KEEP_FROZEN")
+            && match heap.get(a) {
+                Some(HeapObj::Array(arr)) => arr.frozen && arr.props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)),
+                Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. }) => {
+                    private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0))
+                }
+                _ => false,
+            }
+    };
+    let mut kept: std::collections::HashSet<usize> =
+        made.keys().copied().filter(|a| entry_unchanged(*a, heap.get(a)) && ((entry_is_hoisted(*a) && keep_all) || frozen_whole(a))).collect();
+    loop {
+        let drop: Vec<usize> = kept
+            .iter()
+            .copied()
+            .filter(|a| {
+                let mut ok = true;
+                if let Some(o) = heap.get(a) {
+                    o.for_each_child_ref(&mut |c| ok &= kept.contains(&c) || (entry_boundary_object(c) && entry_unchanged(c, heap.get(&c)) && !made.contains_key(&c)));
+                    o.for_each_child(&mut |c| ok &= !matches!(c, Abs::Dyn(_)));
+                }
+                !ok
+            })
+            .collect();
+        if drop.is_empty() {
+            return kept;
+        }
+        for a in drop {
+            kept.remove(&a);
+        }
+    }
+}
+
 /// Whether `a` is an object of the boundary's state (see `EntryWatch`),
 /// while `main` is specialized from it.
 fn entry_boundary_object(a: usize) -> bool {
@@ -13319,6 +13364,10 @@ impl Client for Js {
     fn key_matches(&self, s: &State, k: &IsoKey) -> bool {
         states_iso(s, &k.0)
     }
+    fn describe(&self, s: &State) -> String {
+        s.frames.iter().map(|f| format!("{}@{}", self.names[f.func], f.pc)).collect::<Vec<_>>().join(" > ")
+    }
+
     fn point(&self, s: &State) -> Vec<usize> {
         if !env_flag!("PE_CONTEXT_POINTS") {
             let mut point = Vec::with_capacity(s.frames.len() * 2);
@@ -16758,6 +16807,10 @@ impl Js {
                             }
                     };
                     if oc.len() == cc.len() && oc.iter().zip(cc.iter()).any(|(x, y)| x != y && (matches!(x, Abs::Ref(_)) || matches!(y, Abs::Ref(_))) && !same_escaped(x, y)) {
+                        if env_flag!("GEN_DEBUG") {
+                            let diff: Vec<String> = oc.iter().zip(cc.iter()).filter(|(x, y)| x != y).map(|(x, y)| format!("{x:?} -> {y:?}")).collect();
+                            eprintln!("[GEN-REF-CHANGE] @{addr} boundary {}: {}", entry_boundary_object(*addr), diff.join(", "));
+                        }
                         changed.push(*addr);
                     }
                 }
@@ -31897,54 +31950,8 @@ impl Js {
         // function's record a call frame holds, `{pc, fp, f}` pushed on a
         // runtime stack, stays the program's. `PE_NO_KEEP_HOISTED`: made
         // runtime.)
-        // (Wherever it is handed over, one frozen: no code can change it,
-        // and the model's copy is the runtime object's (a compiler's output
-        // holding a part of the program it was made from). `PE_NO_KEEP_FROZEN`:
-        // as any other.)
-        let frozen_whole = |a: &usize| {
-            !env_flag!("PE_NO_KEEP_FROZEN")
-                && match heap.get(a) {
-                    Some(HeapObj::Array(arr)) => arr.frozen && arr.props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)),
-                    Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. }) => {
-                        private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0))
-                    }
-                    _ => false,
-                }
-        };
         let keep_all = !env_flag!("PE_NO_KEEP_HOISTED") && self.keep_hoisted_on.get();
-        let kept: std::collections::HashSet<usize> = if env_flag!("PE_NO_KEEP_HOISTED") {
-            std::collections::HashSet::new()
-        } else {
-            // (A frozen one the load code made but that has no runtime
-            // identity yet, made here as a copy: kept too. Made by `main`, it
-            // is one the next pass has the load code make, see
-            // `EntrySplit`; this pass's identity is not the residual's.)
-            let mut kept: std::collections::HashSet<usize> = made
-                .keys()
-                .copied()
-                .filter(|a| entry_unchanged(*a, heap.get(a)) && ((entry_is_hoisted(*a) && keep_all) || frozen_whole(a)))
-                .collect();
-            loop {
-                let drop: Vec<usize> = kept
-                    .iter()
-                    .copied()
-                    .filter(|a| {
-                        let mut ok = true;
-                        if let Some(o) = heap.get(a) {
-                            o.for_each_child_ref(&mut |c| ok &= kept.contains(&c) || (entry_boundary_object(c) && entry_unchanged(c, heap.get(&c)) && !made.contains_key(&c)));
-                            o.for_each_child(&mut |c| ok &= !matches!(c, Abs::Dyn(_)));
-                        }
-                        !ok
-                    })
-                    .collect();
-                if drop.is_empty() {
-                    break kept;
-                }
-                for a in drop {
-                    kept.remove(&a);
-                }
-            }
-        };
+        let kept = if env_flag!("PE_NO_KEEP_HOISTED") { std::collections::HashSet::new() } else { kept_on_escape(&heap, &made, keep_all) };
         let reach: std::collections::HashSet<usize> = made.keys().copied().filter(|a| !final_cell(a) && !kept.contains(a)).collect();
         for f in &mut s.frames {
             for v in f.values_mut() {
@@ -32985,7 +32992,15 @@ impl Js {
                     continue;
                 }
                 let Some(o) = s.heap.get(&a) else { continue };
+                // (A collection holding no runtime value itself may still
+                // hold objects that do: a `Map` of variables, one a list
+                // with a runtime element. Not a typed array's view of its
+                // buffer, as before. `PE_NO_STATIC_FRAME_REFS`: not
+                // followed.)
                 if o.holds_no_dyn() {
+                    if !env_flag!("PE_NO_STATIC_FRAME_REFS") && matches!(o, HeapObj::Builtin { kind, .. } if matches!(kind.as_str(), "Map" | "Set" | "WeakMap" | "WeakSet")) {
+                        work.extend(o.child_refs());
+                    }
                     continue;
                 }
                 for c in o.children() {
@@ -32998,6 +33013,18 @@ impl Js {
             }
             true
         };
+        if env_flag!("DYNLOOP_WHY") {
+            let k = self.dispatch_key(s);
+            eprintln!(
+                "[DYNLOOP-WHY] {} pc {}: key {:?} seen {:?} branches {} static frame {}",
+                self.names[s.top().func],
+                s.top().pc,
+                k,
+                k.and_then(|k| s.dispatch_seen.get(&k).copied()),
+                s.dyn_branches,
+                static_frame(s)
+            );
+        }
         if let (false, Some(k)) = (self_hosted, self.dispatch_key(s)) {
             if s.dispatch_seen.get(&k).is_some_and(|n| *n != s.dyn_branches) && !static_frame(s) {
                 if env_flag!("DYNLOOP_DEBUG") {
@@ -34171,6 +34198,12 @@ impl Js {
         // reference to it (a closure's capture, a field of a static object,
         // another frame) must name the same variable, or the abstract copy and
         // the runtime one would diverge.
+        // (But a frozen object of the load code's, which stays modeled: see
+        // `kept_on_escape`.)
+        let kept = kept_on_escape(&heap, &seen, false);
+        if !kept.is_empty() {
+            seen.retain(|a, _| !kept.contains(a));
+        }
         if !seen.is_empty() {
             let redirect = |v: &mut Abs| {
                 if let Abs::Ref(a) = v {

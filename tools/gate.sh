@@ -19,6 +19,11 @@ done
 echo "P2 compiler: compiled programs run correctly"
 node docs/p3/p3rust.js | grep -c identical | sed 's/^/P3 via Rust: targets identical: /'
 node docs/p3/rust-p2-check.js | tr '\n' ' '; echo
+# A compiler mix makes of itself for an interpreter, given as JavaScript by
+# split-shot specializing the flowchart evaluator to it (see
+# experiments/third-projection): no evaluator left, every program compiled as
+# the evaluator compiles it.
+node experiments/third-projection/check-compiler.cjs
 cargo run -q -p js-frontend --release --bin fuzz -- --seed 7 --count 300 --batch 150 --no-shrink 2>&1 | tail -2
 node tools/corpus.js | tail -1 || true
 # The corpus again with each object input behind a recording proxy: what the

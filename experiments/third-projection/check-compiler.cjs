@@ -4,9 +4,14 @@
 // comes out is the compiler as JavaScript. It must give, for every program,
 // exactly the target the compiler gives when the evaluator runs it.
 //
-//   node check-compiler.cjs [interpreter.js] [division-static] [division-dynamic]
+//   node check-compiler.cjs [interpreter.js] [dynamic variables, as JSON]
 //
-// Default: tiny.js (program static). Needs ../../target/release/js-frontend.
+// Default: tiny.js. P3=1: the compiler is the one the cogen (mix applied to
+// itself) makes, run by the evaluator at load: the third projection. KEEP=file
+// saves the compiler split-shot made.
+// PROGRAMS (JSON) replaces the programs compiled; a
+// compiled target is compared by its text (JSON). Needs
+// ../../target/release/js-frontend.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -25,7 +30,10 @@ const INTERPRETER = toFlowchart(parseProgram(${name}.toString())[0]);
 const MIX = toFlowchart(parseProgram(mix.toString())[0]);
 const MIX_DIVISION = division(MIX, ["program", "division"], ["n"]);
 const DIVISION = division(INTERPRETER, ["program"], ${JSON.stringify(dynamic)});
-const COMPILER = deepFreeze(mix(MIX, MIX_DIVISION, initial(MIX_DIVISION, { program: INTERPRETER, division: DIVISION })));
+${process.env.P3
+  ? `const COGEN = mix(MIX, MIX_DIVISION, initial(MIX_DIVISION, { program: MIX, division: MIX_DIVISION }));
+const COMPILER = deepFreeze(runFlowchart(COGEN, [initial(MIX_DIVISION, { program: INTERPRETER, division: DIVISION })]));`
+  : `const COMPILER = deepFreeze(mix(MIX, MIX_DIVISION, initial(MIX_DIVISION, { program: INTERPRETER, division: DIVISION })));`}
 const ENTRY = initial(DIVISION, {});
 const PROGRAM = DIVISION.indexOf("program");
 export function main(program) {
@@ -47,7 +55,9 @@ fs.writeFileSync(compiled, residual);
 (async () => {
   const fromSplitShot = (await import(pathToFileURL(compiled))).main;
   const fromEvaluator = (await import(pathToFileURL(src))).main;
-  const programs = ["", "+", "-", "++", "+-", "-+", "--", "+++", "+-+-", "---++", "+".repeat(20), "-+".repeat(9)];
+  const programs = process.env.PROGRAMS
+    ? JSON.parse(process.env.PROGRAMS)
+    : ["", "+", "-", "++", "+-", "-+", "--", "+++", "+-+-", "---++", "+".repeat(20), "-+".repeat(9)];
   let same = 0;
   for (const p of programs) {
     const a = JSON.stringify(fromSplitShot(p));
@@ -58,6 +68,7 @@ fs.writeFileSync(compiled, residual);
   const lines = residual.split("\n").length;
   const left = /evalExpression|"lit" ===|=== "lit"/.test(residual);
   console.log(`${interpFile}: compiler in ${seconds} s, ${lines} lines, evaluator ${left ? "LEFT IN" : "gone"}; ${same}/${programs.length} programs compile identically`);
+  if (process.env.KEEP) fs.copyFileSync(compiled, path.resolve(process.env.KEEP));
   fs.rmSync(dir, { recursive: true });
   process.exit(same === programs.length && !left ? 0 : 1);
 })();

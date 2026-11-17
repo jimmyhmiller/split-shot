@@ -48,6 +48,10 @@ pub trait Client {
         self.key(s) == *k
     }
     fn point(&self, s: &Self::State) -> Self::Point;
+    /// Where a state is, for debugging output.
+    fn describe(&self, _s: &Self::State) -> String {
+        String::new()
+    }
 
     /// Advance the state by one source construct.
     ///
@@ -312,6 +316,10 @@ fn add_block<C: Client>(client: &C, st: C::State, id: BlockId, cx: &mut Ctx<C>) 
 fn whistle_candidate<C: Client>(client: &C, target: &C::State, cx: &Ctx<C>) -> Option<(C::State, BlockId)> {
     let p = client.point(target);
     let v = cx.seen.get(&p)?;
+    // (`UNROLL_DEBUG`: a point every 50 states met there.)
+    if v.len() % 50 == 49 && std::env::var_os("UNROLL_DEBUG").is_some() {
+        eprintln!("[UNROLL] {} states at {}", v.len() + 1, client.describe(target));
+    }
     let force = v.len() >= UNROLL_BOUND;
     let facts = client.cand_facts(target);
     let class = if force { None } else { client.cand_class(target, &facts) };

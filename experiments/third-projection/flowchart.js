@@ -166,8 +166,15 @@ function evalExpression(e, store) {
     case "bin": return binary(e[1], evalExpression(e[2], store), evalExpression(e[3], store));
     case "cond": return evalExpression(e[1], store) ? evalExpression(e[2], store) : evalExpression(e[3], store);
     case "call": {
+      // (Each argument evaluated and passed as it is, not gathered in a list
+      // first: a builtin takes at most three.)
       var receiver = e[1][0] === "dot" ? evalExpression(e[1][1], store) : undefined;
-      return callBuiltin(e[1], evalList(e[2], store), receiver);
+      var args = e[2];
+      if (args.length > 3) throw new Error("flowchart: a call with more than three arguments");
+      var a0 = args.length > 0 ? evalExpression(args[0], store) : undefined;
+      var a1 = args.length > 1 ? evalExpression(args[1], store) : undefined;
+      var a2 = args.length > 2 ? evalExpression(args[2], store) : undefined;
+      return callBuiltin(e[1], args.length, a0, a1, a2, receiver);
     }
   }
   throw new Error("flowchart: unsupported expression " + e[0]);
@@ -204,17 +211,17 @@ function binary(op, a, b) {
 }
 
 // A builtin function (callee ["var", f]) or method (["dot", receiver, m],
-// the receiver's value given).
-function callBuiltin(callee, args, receiver) {
+// the receiver's value given), with its n arguments' values.
+function callBuiltin(callee, n, a0, a1, a2, receiver) {
   if (callee[0] === "dot") {
-    if (callee[2] === "slice") return args.length === 1 ? receiver.slice(args[0]) : receiver.slice(args[0], args[1]);
-    if (callee[2] === "concat") return receiver.concat(args[0]);
-    if (callee[2] === "indexOf") return receiver.indexOf(args[0]);
+    if (callee[2] === "slice") return n === 1 ? receiver.slice(a0) : receiver.slice(a0, a1);
+    if (callee[2] === "concat") return receiver.concat(a0);
+    if (callee[2] === "indexOf") return receiver.indexOf(a0);
     throw new Error("flowchart: unsupported method " + callee[2]);
   }
   var f = BUILTINS[callee[1]];
   if (!f) throw new Error("flowchart: unknown function " + callee[1]);
-  return f(args[0], args[1], args[2]);
+  return f(a0, a1, a2);
 }
 
 // ───────────── builtins ─────────────
