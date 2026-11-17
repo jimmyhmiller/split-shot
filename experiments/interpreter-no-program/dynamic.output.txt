@@ -1,0 +1,10 @@
+--- residual as JavaScript (3 block(s)) ---
+function main(a) {
+  let c, b;
+  c = a[0];
+  b = a[1];
+  if (c === 0) {
+    return b + 1;
+  }
+  return b * 2;
+}

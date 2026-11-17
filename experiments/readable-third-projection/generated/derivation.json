@@ -1,0 +1,14 @@
+{
+  "rawNodes": 183,
+  "pureSpecializerSteps": 51918,
+  "rawCharacters": 763,
+  "helperExtraction": {
+    "fix": 2,
+    "code": 8,
+    "quote": 3
+  },
+  "expandedAlphaEquivalent": true,
+  "compilerNodes": 60,
+  "compilerExpandedAlphaEquivalent": true,
+  "compilerOutputLines": 7
+}

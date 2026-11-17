@@ -1,0 +1,652 @@
+{
+  "tag": "lam",
+  "name": "v0",
+  "body": {
+    "tag": "lam",
+    "name": "v1",
+    "body": {
+      "tag": "lam",
+      "name": "v2",
+      "body": {
+        "tag": "lam",
+        "name": "v3",
+        "body": {
+          "tag": "app",
+          "fn": {
+            "tag": "var",
+            "name": "v3"
+          },
+          "arg": {
+            "tag": "lam",
+            "name": "v4",
+            "body": {
+              "tag": "lam",
+              "name": "v5",
+              "body": {
+                "tag": "lam",
+                "name": "v6",
+                "body": {
+                  "tag": "lam",
+                  "name": "v7",
+                  "body": {
+                    "tag": "app",
+                    "fn": {
+                      "tag": "app",
+                      "fn": {
+                        "tag": "var",
+                        "name": "v6"
+                      },
+                      "arg": {
+                        "tag": "app",
+                        "fn": {
+                          "tag": "app",
+                          "fn": {
+                            "tag": "lam",
+                            "name": "v8",
+                            "body": {
+                              "tag": "app",
+                              "fn": {
+                                "tag": "lam",
+                                "name": "v9",
+                                "body": {
+                                  "tag": "app",
+                                  "fn": {
+                                    "tag": "var",
+                                    "name": "v8"
+                                  },
+                                  "arg": {
+                                    "tag": "lam",
+                                    "name": "v10",
+                                    "body": {
+                                      "tag": "app",
+                                      "fn": {
+                                        "tag": "app",
+                                        "fn": {
+                                          "tag": "var",
+                                          "name": "v9"
+                                        },
+                                        "arg": {
+                                          "tag": "var",
+                                          "name": "v9"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "arg": {
+                                        "tag": "var",
+                                        "name": "v10"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "stage": "S"
+                                },
+                                "stage": "S"
+                              },
+                              "arg": {
+                                "tag": "lam",
+                                "name": "v11",
+                                "body": {
+                                  "tag": "app",
+                                  "fn": {
+                                    "tag": "var",
+                                    "name": "v8"
+                                  },
+                                  "arg": {
+                                    "tag": "lam",
+                                    "name": "v12",
+                                    "body": {
+                                      "tag": "app",
+                                      "fn": {
+                                        "tag": "app",
+                                        "fn": {
+                                          "tag": "var",
+                                          "name": "v11"
+                                        },
+                                        "arg": {
+                                          "tag": "var",
+                                          "name": "v11"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "arg": {
+                                        "tag": "var",
+                                        "name": "v12"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "stage": "S"
+                                },
+                                "stage": "S"
+                              },
+                              "stage": "S"
+                            },
+                            "stage": "S"
+                          },
+                          "arg": {
+                            "tag": "lam",
+                            "name": "v13",
+                            "body": {
+                              "tag": "lam",
+                              "name": "v14",
+                              "body": {
+                                "tag": "app",
+                                "fn": {
+                                  "tag": "app",
+                                  "fn": {
+                                    "tag": "app",
+                                    "fn": {
+                                      "tag": "var",
+                                      "name": "v14"
+                                    },
+                                    "arg": {
+                                      "tag": "lam",
+                                      "name": "v15",
+                                      "body": {
+                                        "tag": "var",
+                                        "name": "v15"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "arg": {
+                                    "tag": "lam",
+                                    "name": "v16",
+                                    "body": {
+                                      "tag": "lam",
+                                      "name": "v17",
+                                      "body": {
+                                        "tag": "lam",
+                                        "name": "v18",
+                                        "body": {
+                                          "tag": "lam",
+                                          "name": "v19",
+                                          "body": {
+                                            "tag": "lam",
+                                            "name": "v20",
+                                            "body": {
+                                              "tag": "app",
+                                              "fn": {
+                                                "tag": "app",
+                                                "fn": {
+                                                  "tag": "var",
+                                                  "name": "v19"
+                                                },
+                                                "arg": {
+                                                  "tag": "app",
+                                                  "fn": {
+                                                    "tag": "var",
+                                                    "name": "v13"
+                                                  },
+                                                  "arg": {
+                                                    "tag": "var",
+                                                    "name": "v16"
+                                                  },
+                                                  "stage": "S"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "arg": {
+                                                "tag": "app",
+                                                "fn": {
+                                                  "tag": "var",
+                                                  "name": "v13"
+                                                },
+                                                "arg": {
+                                                  "tag": "var",
+                                                  "name": "v17"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "stage": "S"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "stage": "S"
+                                },
+                                "arg": {
+                                  "tag": "lam",
+                                  "name": "v21",
+                                  "body": {
+                                    "tag": "lam",
+                                    "name": "v22",
+                                    "body": {
+                                      "tag": "lam",
+                                      "name": "v23",
+                                      "body": {
+                                        "tag": "lam",
+                                        "name": "v24",
+                                        "body": {
+                                          "tag": "app",
+                                          "fn": {
+                                            "tag": "var",
+                                            "name": "v24"
+                                          },
+                                          "arg": {
+                                            "tag": "lam",
+                                            "name": "v25",
+                                            "body": {
+                                              "tag": "app",
+                                              "fn": {
+                                                "tag": "var",
+                                                "name": "v13"
+                                              },
+                                              "arg": {
+                                                "tag": "app",
+                                                "fn": {
+                                                  "tag": "var",
+                                                  "name": "v21"
+                                                },
+                                                "arg": {
+                                                  "tag": "lam",
+                                                  "name": "v26",
+                                                  "body": {
+                                                    "tag": "lam",
+                                                    "name": "v27",
+                                                    "body": {
+                                                      "tag": "lam",
+                                                      "name": "v28",
+                                                      "body": {
+                                                        "tag": "app",
+                                                        "fn": {
+                                                          "tag": "var",
+                                                          "name": "v26"
+                                                        },
+                                                        "arg": {
+                                                          "tag": "var",
+                                                          "name": "v25"
+                                                        },
+                                                        "stage": "S"
+                                                      },
+                                                      "stage": "S"
+                                                    },
+                                                    "stage": "S"
+                                                  },
+                                                  "stage": "S"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "stage": "S"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "stage": "S"
+                                },
+                                "stage": "S"
+                              },
+                              "stage": "S"
+                            },
+                            "stage": "S"
+                          },
+                          "stage": "S"
+                        },
+                        "arg": {
+                          "tag": "var",
+                          "name": "v0"
+                        },
+                        "stage": "S"
+                      },
+                      "stage": "S"
+                    },
+                    "arg": {
+                      "tag": "lam",
+                      "name": "v29",
+                      "body": {
+                        "tag": "lam",
+                        "name": "v30",
+                        "body": {
+                          "tag": "lam",
+                          "name": "v31",
+                          "body": {
+                            "tag": "app",
+                            "fn": {
+                              "tag": "app",
+                              "fn": {
+                                "tag": "var",
+                                "name": "v30"
+                              },
+                              "arg": {
+                                "tag": "app",
+                                "fn": {
+                                  "tag": "app",
+                                  "fn": {
+                                    "tag": "lam",
+                                    "name": "v32",
+                                    "body": {
+                                      "tag": "app",
+                                      "fn": {
+                                        "tag": "lam",
+                                        "name": "v33",
+                                        "body": {
+                                          "tag": "app",
+                                          "fn": {
+                                            "tag": "var",
+                                            "name": "v32"
+                                          },
+                                          "arg": {
+                                            "tag": "lam",
+                                            "name": "v34",
+                                            "body": {
+                                              "tag": "app",
+                                              "fn": {
+                                                "tag": "app",
+                                                "fn": {
+                                                  "tag": "var",
+                                                  "name": "v33"
+                                                },
+                                                "arg": {
+                                                  "tag": "var",
+                                                  "name": "v33"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "arg": {
+                                                "tag": "var",
+                                                "name": "v34"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "stage": "S"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "arg": {
+                                        "tag": "lam",
+                                        "name": "v35",
+                                        "body": {
+                                          "tag": "app",
+                                          "fn": {
+                                            "tag": "var",
+                                            "name": "v32"
+                                          },
+                                          "arg": {
+                                            "tag": "lam",
+                                            "name": "v36",
+                                            "body": {
+                                              "tag": "app",
+                                              "fn": {
+                                                "tag": "app",
+                                                "fn": {
+                                                  "tag": "var",
+                                                  "name": "v35"
+                                                },
+                                                "arg": {
+                                                  "tag": "var",
+                                                  "name": "v35"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "arg": {
+                                                "tag": "var",
+                                                "name": "v36"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "stage": "S"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "arg": {
+                                    "tag": "lam",
+                                    "name": "v37",
+                                    "body": {
+                                      "tag": "lam",
+                                      "name": "v38",
+                                      "body": {
+                                        "tag": "app",
+                                        "fn": {
+                                          "tag": "app",
+                                          "fn": {
+                                            "tag": "app",
+                                            "fn": {
+                                              "tag": "var",
+                                              "name": "v38"
+                                            },
+                                            "arg": {
+                                              "tag": "lam",
+                                              "name": "v39",
+                                              "body": {
+                                                "tag": "var",
+                                                "name": "v39"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "arg": {
+                                            "tag": "lam",
+                                            "name": "v40",
+                                            "body": {
+                                              "tag": "lam",
+                                              "name": "v41",
+                                              "body": {
+                                                "tag": "lam",
+                                                "name": "v42",
+                                                "body": {
+                                                  "tag": "lam",
+                                                  "name": "v43",
+                                                  "body": {
+                                                    "tag": "lam",
+                                                    "name": "v44",
+                                                    "body": {
+                                                      "tag": "app",
+                                                      "fn": {
+                                                        "tag": "app",
+                                                        "fn": {
+                                                          "tag": "var",
+                                                          "name": "v43"
+                                                        },
+                                                        "arg": {
+                                                          "tag": "app",
+                                                          "fn": {
+                                                            "tag": "var",
+                                                            "name": "v37"
+                                                          },
+                                                          "arg": {
+                                                            "tag": "var",
+                                                            "name": "v40"
+                                                          },
+                                                          "stage": "S"
+                                                        },
+                                                        "stage": "S"
+                                                      },
+                                                      "arg": {
+                                                        "tag": "app",
+                                                        "fn": {
+                                                          "tag": "var",
+                                                          "name": "v37"
+                                                        },
+                                                        "arg": {
+                                                          "tag": "var",
+                                                          "name": "v41"
+                                                        },
+                                                        "stage": "S"
+                                                      },
+                                                      "stage": "S"
+                                                    },
+                                                    "stage": "S"
+                                                  },
+                                                  "stage": "S"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "stage": "S"
+                                        },
+                                        "arg": {
+                                          "tag": "lam",
+                                          "name": "v45",
+                                          "body": {
+                                            "tag": "lam",
+                                            "name": "v46",
+                                            "body": {
+                                              "tag": "lam",
+                                              "name": "v47",
+                                              "body": {
+                                                "tag": "lam",
+                                                "name": "v48",
+                                                "body": {
+                                                  "tag": "app",
+                                                  "fn": {
+                                                    "tag": "var",
+                                                    "name": "v48"
+                                                  },
+                                                  "arg": {
+                                                    "tag": "lam",
+                                                    "name": "v49",
+                                                    "body": {
+                                                      "tag": "app",
+                                                      "fn": {
+                                                        "tag": "var",
+                                                        "name": "v37"
+                                                      },
+                                                      "arg": {
+                                                        "tag": "app",
+                                                        "fn": {
+                                                          "tag": "var",
+                                                          "name": "v45"
+                                                        },
+                                                        "arg": {
+                                                          "tag": "lam",
+                                                          "name": "v50",
+                                                          "body": {
+                                                            "tag": "lam",
+                                                            "name": "v51",
+                                                            "body": {
+                                                              "tag": "lam",
+                                                              "name": "v52",
+                                                              "body": {
+                                                                "tag": "app",
+                                                                "fn": {
+                                                                  "tag": "var",
+                                                                  "name": "v50"
+                                                                },
+                                                                "arg": {
+                                                                  "tag": "var",
+                                                                  "name": "v49"
+                                                                },
+                                                                "stage": "S"
+                                                              },
+                                                              "stage": "S"
+                                                            },
+                                                            "stage": "S"
+                                                          },
+                                                          "stage": "S"
+                                                        },
+                                                        "stage": "S"
+                                                      },
+                                                      "stage": "S"
+                                                    },
+                                                    "stage": "S"
+                                                  },
+                                                  "stage": "S"
+                                                },
+                                                "stage": "S"
+                                              },
+                                              "stage": "S"
+                                            },
+                                            "stage": "S"
+                                          },
+                                          "stage": "S"
+                                        },
+                                        "stage": "S"
+                                      },
+                                      "stage": "S"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "stage": "S"
+                                },
+                                "arg": {
+                                  "tag": "var",
+                                  "name": "v0"
+                                },
+                                "stage": "S"
+                              },
+                              "stage": "S"
+                            },
+                            "arg": {
+                              "tag": "lam",
+                              "name": "v53",
+                              "body": {
+                                "tag": "lam",
+                                "name": "v54",
+                                "body": {
+                                  "tag": "lam",
+                                  "name": "v55",
+                                  "body": {
+                                    "tag": "app",
+                                    "fn": {
+                                      "tag": "var",
+                                      "name": "v53"
+                                    },
+                                    "arg": {
+                                      "tag": "var",
+                                      "name": "v4"
+                                    },
+                                    "stage": "S"
+                                  },
+                                  "stage": "S"
+                                },
+                                "stage": "S"
+                              },
+                              "stage": "S"
+                            },
+                            "stage": "S"
+                          },
+                          "stage": "S"
+                        },
+                        "stage": "S"
+                      },
+                      "stage": "S"
+                    },
+                    "stage": "S"
+                  },
+                  "stage": "S"
+                },
+                "stage": "S"
+              },
+              "stage": "S"
+            },
+            "stage": "S"
+          },
+          "stage": "S"
+        },
+        "stage": "S"
+      },
+      "stage": "S"
+    },
+    "stage": "S"
+  },
+  "stage": "S"
+}

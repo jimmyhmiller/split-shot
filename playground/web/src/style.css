@@ -192,3 +192,27 @@ a { color: var(--accent); }
   .pane { border-right: 0; border-bottom: 1px solid var(--line); grid-template-rows: auto auto 55vh auto; }
   .toolbar .state { margin-left: 0; width: 100%; }
 }
+
+.slow-notice {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--warn);
+  font-size: .875rem;
+}
+.slow-notice[hidden] { display: none; }
+.slow-notice button {
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+  padding: .3rem .6rem;
+  cursor: pointer;
+}
+.slow-notice button:disabled { opacity: .6; cursor: wait; }
+@media (max-width: 700px) { .slow-notice { align-items: flex-start; flex-direction: column; } }
+
+.pane.has-slow-notice { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+@media (max-width: 700px) { .pane.has-slow-notice { grid-template-rows: auto auto auto 55vh auto; } }

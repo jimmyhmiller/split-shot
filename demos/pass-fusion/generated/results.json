@@ -1,0 +1,9 @@
+{
+  "astChecks": 2106,
+  "semanticChecks": 27378,
+  "generatedJsChecks": 27391,
+  "deepAstNodes": 20001,
+  "residualFunctions": 1,
+  "traversalLoops": 1,
+  "node": "v26.5.0"
+}

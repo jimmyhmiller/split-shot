@@ -13,6 +13,8 @@ on:
       - "playground/**"
       - "tools/wild/interp/**"
       - "experiments/general-jsmix/**"
+      - "experiments/third-projection/**"
+      - "experiments/wasm-binary/**"
       - "experiments/readable-second-projection/interpreter.js"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -51,9 +53,12 @@ jobs:
       - name: Build the engine as wasm
         working-directory: playground/web
         run: npm run wasm
+      - name: Check the WebAssembly interpreter example
+        working-directory: playground/web
+        run: npm run check:wasm
       - name: Build the site
         working-directory: playground/web
-        run: npx vite build
+        run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
           path: playground/web/dist

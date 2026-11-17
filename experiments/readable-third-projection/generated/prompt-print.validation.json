@@ -1,0 +1,13 @@
+{
+  "programs": 128,
+  "structuralChecks": 256,
+  "executionChecks": 1024,
+  "unknownInstructionChecks": 2,
+  "example": [
+    "prompt",
+    "print",
+    "print",
+    "prompt",
+    "print"
+  ]
+}

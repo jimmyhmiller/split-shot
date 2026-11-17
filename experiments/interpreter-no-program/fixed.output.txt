@@ -1,0 +1,4 @@
+--- residual as JavaScript (1 block(s)) ---
+function main(a) {
+  return a + 1;
+}

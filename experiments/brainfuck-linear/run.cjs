@@ -1,0 +1,14 @@
+const {compile} = require('./generated/brainfuck.bindings.cjs');
+const {createMachine} = require('./machine.cjs');
+const program = process.argv[2] || ',+>,-<.>.';
+const input = process.argv[3] === undefined ? '@C' : process.argv[3];
+const source = compile(program);
+const machine = createMachine(Buffer.from(input, 'utf8'));
+const pointer = Function('return (' + source + ');')()(machine.io);
+const state = machine.snapshot();
+console.log('Program:', program);
+console.log('Input:', JSON.stringify(input));
+console.log('Output:', JSON.stringify(Buffer.from(state.output).toString('utf8')));
+console.log('Output bytes:', state.output);
+console.log('Final pointer:', pointer);
+console.log('Tape:', state.tape);

@@ -132,6 +132,14 @@ function runFlowchart(program, args) {
     return index.get(label);
   };
   var store = new Map();
+  // Flowchart locals are function-scoped, like the subset's `var` bindings.
+  // Declare every assignment target before execution, including ones whose
+  // block is never taken. A genuinely undeclared name still throws below.
+  for (var b = 0; b < blocks.length; b++) {
+    for (var a = 0; a < blocks[b][1].length; a++) {
+      store.set(blocks[b][1][a][1], undefined);
+    }
+  }
   var params = program[1];
   for (var i = 0; i < params.length; i++) store.set(params[i], args[i]);
   var pc = 0;

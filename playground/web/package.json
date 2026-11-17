@@ -6,8 +6,13 @@
   "scripts": {
     "wasm": "cd ../wasm && wasm-pack build --release --target web --out-dir ../web/src/pkg",
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "npm run check:precomputed && vite build",
+    "preview": "vite preview",
+    "check:p3": "node scripts/check-third-projection.mjs",
+    "test": "node --test scripts/*.test.mjs",
+    "precompute": "node scripts/precompute.mjs",
+    "check:precomputed": "node scripts/check-precomputed.mjs",
+    "check:wasm": "node ../../experiments/wasm-binary/check.mjs"
   },
   "devDependencies": {
     "vite": "^6.4.5"

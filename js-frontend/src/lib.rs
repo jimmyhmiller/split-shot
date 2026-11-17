@@ -1939,6 +1939,31 @@ mod tests {
         assert_node_equiv(src, &[0, 1, 3, 5, 8]);
     }
 
+
+
+    #[test]
+    fn static_loop_entry_can_acquire_runtime_data() {
+        // The entry has only static values, but a global read inside the
+        // loop introduces runtime data. Skipping the entry checkpoint must
+        // still let the next back edge residualize the loop and its effects.
+        let src = r#"
+            function run() {
+                let n = 0;
+                let total = 0;
+                while (n < 3) {
+                    total += globalThis.loopInput;
+                    n++;
+                }
+                return total;
+            }
+            function main(input) {
+                globalThis.loopInput = input;
+                return run();
+            }
+        "#;
+        assert_node_equiv(src, &[0, 1, -2, 7]);
+    }
+
     #[test]
     fn vm_loop_generalizes_once_at_its_head() {
         // A bytecode VM whose loop count is dynamic. Three things used to bloat
@@ -3026,6 +3051,8 @@ mod tests {
         assert!(!js.contains("Map") && !js.contains(".get("), "the store should stay modeled:\n{js}");
         assert_node_equiv(src, &[0, 1, 4]);
     }
+
+
 
     /// A frozen array of the load code's data, handed to runtime code
     /// (held in a list `main` builds), is still known after: no code can

@@ -1,0 +1,51 @@
+--- a/js-frontend/src/lib.rs
++++ b/js-frontend/src/lib.rs
+@@ -1939,7 +1939,23 @@
+         assert_node_equiv(src, &[0, 1, 3, 5, 8]);
+     }
+ 
+-
++    #[test]
++    fn map_field_can_change_from_undefined_to_an_array() {
++        let src = r#"
++            function main(n) {
++                const store = new Map([["value", undefined]]);
++                let i = 0;
++                while (i < n) {
++                    store.set("value", [i]);
++                    i++;
++                }
++                return [store.get("value")];
++            }
++        "#;
++        assert_node_equiv(src, &[0, 1, 2, 7]);
++        let js = to_js(src).unwrap();
++        assert!(!js.contains("new Map"), "the value should be a variable:\n{js}");
++    }
+ 
+     #[test]
+     fn static_loop_entry_can_acquire_runtime_data() {
+@@ -3052,7 +3068,22 @@
+         assert_node_equiv(src, &[0, 1, 4]);
+     }
+ 
+-
++    #[test]
++    fn lifted_store_field_preserves_its_frozen_seed_alias() {
++        let src = r#"
++            const EMPTY = Object.freeze([]);
++            export function main(n) {
++                const store = new Map([["code", EMPTY], ["i", 0]]);
++                while (store.get("i") < n) {
++                    store.set("code", store.get("code").concat([store.get("i")]));
++                    store.set("i", store.get("i") + 1);
++                }
++                return [store.get("code"), EMPTY.length, store.get("code") === EMPTY];
++            }
++        "#;
++        let js = module_small_budget_node_equiv("lifted-frozen-seed", src, &[0, 1, 4]);
++        assert!(!js.contains("new Map"), "the store should stay modeled:\n{js}");
++    }
+ 
+     /// A frozen array of the load code's data, handed to runtime code
+     /// (held in a list `main` builds), is still known after: no code can

@@ -2,12 +2,12 @@
 // right. split-shot specializes `main`; its parameter is the dynamic input,
 // and everything else the program computes from known values happens now.
 import { el, makePane, setDoc, getDoc, debounce, fmtNum, fmtMs, remeasureAll } from "./ui.js";
-import { specialize } from "./pe.js";
+import { specialize, cancelSpecialization } from "./pe.js";
 import { encodeState, decodeState } from "./share.js";
 import { EXAMPLES, GROUPS } from "./examples.js";
 
 const app = document.getElementById("app");
-const st = { current: null, sourceNames: true, files: [] };
+const st = { current: null, sourceNames: true, files: [], slow: false, example: null };
 let seq = 0;
 let loading = false;
 
@@ -47,11 +47,12 @@ function setFiles(files) {
   st.files = files.map((f) => ({ name: f.name }));
   left.setTabs(files.map((f) => ({
     id: f.name, label: f.name, doc: f.src, wrap: true,
-    onChange: () => { if (!loading) { st.current = null; paintExamples(); } respecialize(); },
+    onChange: () => { if (!loading) { st.current = null; paintExamples(); changed(); } },
   })));
+  if (files.some((f) => f.name === "main.mjs")) left.select("main.mjs");
 }
 
-const namesBox = el("input", { type: "checkbox", checked: true, onchange: () => { st.sourceNames = namesBox.checked; respecialize.now(); } });
+const namesBox = el("input", { type: "checkbox", checked: true, onchange: () => { st.sourceNames = namesBox.checked; changed(); } });
 const copyBtn = el("button", { type: "button", onclick: () => copy(getDoc(right.views[right.current]), copyBtn) }, "Copy");
 const right = makePane({
   title: "Residual",
@@ -62,6 +63,11 @@ const right = makePane({
     { id: "why", label: "why", readOnly: true, lang: "text", wrap: true },
   ],
 });
+const runBtn = el("button", { type: "button", onclick: () => run() }, "Run specialization (~2 min)");
+const slowNotice = el("div", { class: "slow-notice", hidden: true },
+  el("span", {}, "This example takes about 2 minutes to specialize and may take longer on your device. Edits and settings changes do not run automatically."), runBtn);
+right.root.querySelector(".pane-heading").after(slowNotice);
+
 const errors = el("pre", { class: "errors" });
 right.details.append(el("b", {}, "Error"), errors);
 
@@ -76,17 +82,23 @@ app.replaceChildren(el("div", { class: "shell" },
 
 // ───────────── specializing ─────────────
 
+function displayResult(r) {
+  setDoc(right.views.js, r.js);
+  setDoc(right.views.ir, r.ir);
+  setDoc(right.views.why, formatWhy(r.why));
+  for (const id of ["js", "ir", "why"]) right.placeholder(id, null);
+  right.details.hidden = true;
+}
+
 async function run() {
   const s = ++seq;
+  respecialize.cancel();
+  runBtn.disabled = true;
   setState("specializing…", "busy");
   try {
     const r = await specialize(program(), { sourceNames: st.sourceNames, why: true });
     if (s !== seq) return;
-    setDoc(right.views.js, r.js);
-    setDoc(right.views.ir, r.ir);
-    setDoc(right.views.why, formatWhy(r.why));
-    for (const id of ["js", "ir", "why"]) right.placeholder(id, null);
-    right.details.hidden = true;
+    displayResult(r);
     setState(`${r.blocks} ${r.blocks === 1 ? "block" : "blocks"} · ${fmtNum(r.steps)} steps · ${fmtMs(r.ms)}`);
   } catch (e) {
     if (s !== seq) return;
@@ -97,24 +109,78 @@ async function run() {
     errors.textContent = e.message;
     right.details.hidden = false;
     setState("error", "error");
+  } finally {
+    if (s === seq) runBtn.disabled = false;
   }
 }
 const respecialize = debounce(run, 350);
 
-function load(files, current) {
+function stop() {
+  ++seq;
+  respecialize.cancel();
+  cancelSpecialization();
+  runBtn.disabled = false;
+}
+
+async function showPrecomputed() {
+  const s = ++seq;
+  const example = st.example;
+  if (!example?.precomputed) {
+    setState("Run manually · slow example");
+    return;
+  }
+  setState("loading precomputed result…");
+  try {
+    const snapshot = await example.precomputed();
+    const sourceHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(program()))),
+      b => b.toString(16).padStart(2, "0")).join("");
+    if (s !== seq) return;
+    if (snapshot.sourceHash !== sourceHash || snapshot.sourceNames !== st.sourceNames) {
+      setState("Source or settings changed · result out of date");
+      return;
+    }
+    displayResult(snapshot.result);
+    setState(`${snapshot.result.blocks} blocks · precomputed result`);
+  } catch (e) {
+    if (s !== seq) return;
+    setState("Precomputed result unavailable · run manually");
+    errors.textContent = e.message;
+    right.details.hidden = false;
+  }
+}
+
+function changed() {
+  stop();
+  if (st.slow) showPrecomputed();
+  else respecialize();
+}
+
+function load(files, current, slow = false) {
+  stop();
   st.current = current;
+  st.example = EXAMPLES.find(e => e.id === current) ??
+    EXAMPLES.find(e => e.precomputed && JSON.stringify(e.files) === JSON.stringify(files));
+  st.slow = slow || !!st.example?.slow;
+  slowNotice.hidden = !st.slow;
+  right.root.classList.toggle("has-slow-notice", st.slow);
   paintExamples();
   loading = true;
   setFiles(files);
   loading = false;
-  respecialize.now();
+  for (const id of ["js", "ir", "why"]) {
+    setDoc(right.views[id], "");
+    right.placeholder(id, st.slow ? "Run specialization to generate a result for this source and these settings." : null);
+  }
+  right.details.hidden = true;
+  if (st.slow) showPrecomputed();
+  else respecialize.now();
 }
 
 // ───────────── sharing and routing ─────────────
 
 async function share() {
   const files = st.files.map((f) => ({ name: f.name, src: getDoc(left.views[f.name]) }));
-  const data = await encodeState({ files, sourceNames: st.sourceNames });
+  const data = await encodeState({ files, sourceNames: st.sourceNames, slow: st.slow });
   const url = `${location.origin}${location.pathname}#/?s=${data}`;
   history.replaceState(null, "", url);
   try {
@@ -139,7 +205,7 @@ async function route() {
       st.sourceNames = o.sourceNames !== false;
       namesBox.checked = st.sourceNames;
       // (A link of one program, `src`, from before programs had files.)
-      load(o.files ?? [{ name: "program.js", src: o.src }], null);
+      load(o.files ?? [{ name: "program.js", src: o.src }], null, o.slow === true);
     } catch (e) {
       notice.hidden = false;
       notice.textContent = "This link's program could not be read: " + e.message;

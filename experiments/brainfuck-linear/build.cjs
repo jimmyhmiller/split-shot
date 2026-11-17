@@ -1,0 +1,18 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const {derive} = require('../general-jsmix/derive.cjs');
+const {simplify} = require('../../tools/readable-js/index.cjs');
+const {cleanBindings} = require('../../tools/readable-js/bindings.cjs');
+const dir = __dirname;
+const result = derive(fs.readFileSync(path.join(dir,'interpreter.js'),'utf8'), 'brainfuck', {outputDirectory:path.join(dir,'generated')});
+const readable = simplify(result.residual, {names:{compile:{f:'program',b:'lines',e:'remaining',c:'pointer',a:'temp',d:'tmp'}}});
+const bindings = cleanBindings(readable.code);
+fs.writeFileSync(result.prefix+'.bindings.cjs', bindings.code+result.linkage);
+fs.writeFileSync(result.prefix+'.bindings.json', JSON.stringify(bindings.counts,null,2)+'\n');
+const compiler = require(result.prefix+'.compiler.cjs');
+const example = ',+>,-<.>.';
+fs.writeFileSync(path.join(dir,'generated/example.bf'), example+'\n');
+fs.writeFileSync(path.join(dir,'generated/example.target.js'), compiler.compile(example)+'\n');
+console.log('Binding cleanup:', bindings.counts);
+console.log('Example:', example);
+console.log(compiler.compile(example));

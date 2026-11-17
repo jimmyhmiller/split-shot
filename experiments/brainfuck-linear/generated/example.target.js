@@ -1,0 +1,31 @@
+function run(io) {
+var v0 = io;
+var v1 = v0.set;
+var v2 = io.read();
+var v3 = Reflect.apply(v1, v0, [0, v2]);
+var v4 = io;
+var v5 = v4.set;
+var v6 = io.get(0);
+var v7 = (v6 + 1);
+var v8 = (v7 & 255);
+var v9 = Reflect.apply(v5, v4, [0, v8]);
+var v10 = io;
+var v11 = v10.set;
+var v12 = io.read();
+var v13 = Reflect.apply(v11, v10, [1, v12]);
+var v14 = io;
+var v15 = v14.set;
+var v16 = io.get(1);
+var v17 = (v16 - 1);
+var v18 = (v17 & 255);
+var v19 = Reflect.apply(v15, v14, [1, v18]);
+var v20 = io;
+var v21 = v20.write;
+var v22 = io.get(0);
+var v23 = Reflect.apply(v21, v20, [v22]);
+var v24 = io;
+var v25 = v24.write;
+var v26 = io.get(1);
+var v27 = Reflect.apply(v25, v24, [v26]);
+return 1;
+}

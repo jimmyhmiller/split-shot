@@ -1,0 +1,8 @@
+{
+  "compilerChecks": 4,
+  "targetChecks": 21,
+  "numericChecks": 168,
+  "rawNodes": 183,
+  "helperExpandedAlphaEquivalent": true,
+  "noSpecializerCallsInGeneratedCode": true
+}

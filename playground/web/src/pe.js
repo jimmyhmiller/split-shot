@@ -17,14 +17,22 @@ function spawn() {
   };
 }
 
-function restart() {
+export function cancelSpecialization() {
   if (worker) worker.terminate();
+  worker = null;
   for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error("the worker was restarted")); }
   pending.clear();
+}
+
+function restart() {
+  cancelSpecialization();
   spawn();
 }
 
 function call(msg, timeoutMs) {
+  // A new source replaces the previous request. Stop its computation now,
+  // rather than leaving it ahead of the new example in the worker queue.
+  if (pending.size) restart();
   if (!worker) spawn();
   const id = nextId++;
   return new Promise((resolve, reject) => {
@@ -39,4 +47,4 @@ function call(msg, timeoutMs) {
 }
 
 export const specialize = (src, { entry = "main", budget = 0, sourceNames = true, why = true } = {}) =>
-  call({ src, entry, budget, sourceNames, why }, 60000);
+  call({ src, entry, budget, sourceNames, why }, 300000);

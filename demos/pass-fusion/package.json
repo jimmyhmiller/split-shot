@@ -1,0 +1,6 @@
+{
+  "name": "split-shot-pass-fusion",
+  "private": true,
+  "scripts": {"demo": "node run.cjs"},
+  "dependencies": {"acorn": "8.15.0", "astring": "1.9.0"}
+}

@@ -16,7 +16,8 @@ import lambdaCogen from "../../examples/lambda/cogen.js?raw";
 import lambdaAllThree from "../../examples/lambda/all-three.js?raw";
 // Interpreters from the interpreter suite (tools/wild/interp), each an ES
 // module with a fixed program and an exported main.
-import interp0 from "../../../tools/wild/interp/wasm-structured-vm.mjs?raw";
+import wasmInterpreter from "../../../experiments/wasm-binary/interpreter.mjs?raw";
+import wasmBinary from "../../examples/wasm-binary.mjs?raw";
 import interp1 from "../../../tools/wild/interp/forth-colon-defs.mjs?raw";
 import interp2 from "../../../tools/wild/interp/cpu-6502-emulator.mjs?raw";
 import interp3 from "../../../tools/wild/interp/register-vm-lua-style.mjs?raw";
@@ -37,6 +38,28 @@ import intPromptPrint from "../../../experiments/readable-second-projection/inte
 import jsmix from "../../../experiments/general-jsmix/jsmix.js?raw";
 import bindingTimes from "../../../experiments/general-jsmix/binding-times.js?raw";
 import subsetParse from "../../../experiments/general-jsmix/subset-parse.js?raw";
+
+import cogenBrainfuck from "../../examples/cogen-brainfuck.mjs?raw";
+import flowBrainfuck from "../../../experiments/third-projection/brainfuck.js?raw";
+import flowchart from "../../../experiments/third-projection/flowchart.js?raw";
+import flowMix from "../../../experiments/third-projection/mix.js?raw";
+import flowGlue from "../../../experiments/third-projection/glue.js?raw";
+
+const precomputedResult = (url) => {
+  let saved;
+  return () => saved ??= fetch(url).then(response => {
+    if (!response.ok) throw new Error(`Could not load saved result (${response.status})`);
+    return response.json();
+  }).catch(error => { saved = null; throw error; });
+};
+
+const withFlowMix = (main) => [
+  { name: "mix.js", src: flowMix },
+  { name: "flowchart.js", src: flowchart },
+  { name: "glue.js", src: flowGlue },
+  { name: "subset-parse.js", src: subsetParse },
+  { name: "main.mjs", src: main.replace(/^const INTERPRETER /m, () => flowBrainfuck.trimEnd() + "\n\nconst INTERPRETER ") },
+];
 
 const one = (src) => [{ name: "program.js", src }];
 const module = (src) => [{ name: "program.mjs", src }];
@@ -64,7 +87,7 @@ const withJsmix = (main, interpreter) => {
     { id: "jsfuck", title: "JSFuck", files: one(jsfuck) },
   ] },
   { label: "Interpreters", examples: [
-    { id: "wasm-structured-vm", title: "WebAssembly VM", files: module(interp0) },
+    { id: "wasm-structured-vm", title: "WebAssembly binary interpreter", files: [{ name: "main.mjs", src: wasmInterpreter + "\n" + wasmBinary }] },
     { id: "forth-colon-defs", title: "Forth", files: module(interp1) },
     { id: "cpu-6502-emulator", title: "6502 CPU emulator", files: module(interp2) },
     { id: "register-vm-lua-style", title: "Lua-style register VM", files: module(interp3) },
@@ -81,6 +104,7 @@ const withJsmix = (main, interpreter) => {
     { id: "compiler-prompt-print", title: "prompt / print compiler", files: withJsmix(mainPromptPrint, intPromptPrint) },
   ] },
   { label: "A compiler generator", examples: [
+    { id: "cogen-brainfuck", title: "Brainfuck compiler from a cogen", files: withFlowMix(cogenBrainfuck), slow: true, precomputed: precomputedResult(new URL("./precomputed/cogen-brainfuck.json", import.meta.url).href) },
     { id: "all-three-projections", title: "All three projections", files: [{ name: "all-three.js", src: lambdaAllThree }, { name: "specializer.js", src: lambdaSpecializer }] },
     { id: "cogen-lambda", title: "The cogen itself", files: [{ name: "cogen.js", src: lambdaCogen }, { name: "specializer.js", src: lambdaSpecializer }] },
   ] },

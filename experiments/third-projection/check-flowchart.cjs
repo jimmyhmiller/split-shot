@@ -11,6 +11,17 @@ const host = 'var str = BUILTINS.str, isArr = BUILTINS.isArr, fail = BUILTINS.fa
 const native = (src, name) => Function('BUILTINS', host + src + '\nreturn ' + name + ';')(F.BUILTINS);
 const mix = native(read('mix.js'), 'mix');
 const brainfuck = native(read('brainfuck.js'), 'brainfuck');
+// `var` bindings exist on entry, even if their assignment is never reached.
+for (const src of [
+  'function test(input) { if (input) { var x = 7; } return x; }',
+  'function test(input) { var result = x; var x = input; return result; }',
+  'function test(input) { if (false) { var input = 99; } return input; }',
+]) {
+  const program = F.toFlowchart(parse(src)[0]);
+  const original = native(src, 'test');
+  for (const input of [0, 1, 7]) assert.deepEqual(F.runFlowchart(program, [input]), original(input));
+}
+assert.throws(() => F.runFlowchart(['flowchart', [], [['entry', [], ['return', ['var', 'missing']]]]], []), /unbound variable/);
 const MIX = F.toFlowchart(parse(read('mix.js'))[0]);
 const BF = F.toFlowchart(parse(read('brainfuck.js'))[0]);
 // (The worklist position n only grows: static, it would make a new state for

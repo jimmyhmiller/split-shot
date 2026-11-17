@@ -32948,6 +32948,36 @@ impl Js {
         s.frames.iter().any(|f| f.runtime_loops.iter().any(|&h| h <= f.pc && f.pc <= self.loop_back[h]))
     }
 
+    /// A loop entered with only known values can peel its first iteration
+    /// without saving a state for generalization. Follow all heap edges,
+    /// including collection contents: a static Map may hold runtime data.
+    /// Mixed activations retain their entry checkpoint so a runtime loop
+    /// generalizes there without emitting an extra copy of its first test.
+    fn static_activation(&self, s: &State) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        let mut work = Vec::new();
+        for v in s.top().values() {
+            match v {
+                Abs::Dyn(_) => return false,
+                Abs::Ref(a) => work.push(*a),
+                _ => {}
+            }
+        }
+        while let Some(a) = work.pop() {
+            if !seen.insert(a) { continue; }
+            if s.escaped.contains(&a) { return false; }
+            let Some(o) = s.heap.get(&a) else { return false; };
+            for v in o.children() {
+                match v {
+                    Abs::Dyn(_) => return false,
+                    Abs::Ref(a) => work.push(*a),
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+
     fn dynamically_controlled(&self, s: &State) -> bool {
         if !self.loop_head[s.top().pc] {
             return false;
@@ -33448,12 +33478,13 @@ impl Js {
         // iteration goes on in this block. (A block per iteration
         // canonicalized the whole state each time: with engine262's realm
         // modeled, most of the time.) Past the engine's unroll bound per loop
-        // the blocks are made again, for its backstop. The loop's entry
-        // still makes a block at its head: should an iteration later branch
-        // dynamically, the whistle generalizes against the entry state (an
-        // iteration run before the head's first block is peeled off). No
-        // other path reaches that state, so it is a fresh block, never
-        // memoized (`Step::JumpFresh`: its key is not computed).
+        // the blocks are made again, for its backstop. An entry holding
+        // runtime data still makes a block at its head: should an iteration
+        // branch dynamically, the whistle generalizes against that state
+        // without peeling a runtime test. A fully static entry can continue:
+        // if runtime data appears later, its next back edge makes a block;
+        // if it remains static, the same unroll backstop still applies.
+        // A saved entry is fresh, never memoized (`Step::JumpFresh`).
         // (Nor a loop only its counters change, on a path that took a
         // dynamic branch in the iteration: its iterations are the same
         // residual code, and it runs at runtime. See `counter_only_loop`.)
@@ -33471,6 +33502,13 @@ impl Js {
             };
         let static_loop = static_guards && target <= from;
         let fresh_entry = static_guards && target > from;
+        if fresh_entry && !env_flag!("PE_NO_STATIC_LOOP_ENTRY_INLINE") && self.static_activation(s) {
+            s.top_mut().pc = target;
+            prune_joins(s);
+            self.clear_dead_moved(s);
+            self.passed_leader.set(Some(target));
+            return Step::Continue;
+        }
         if env_flag!("LOOP_DEBUG") && self.loop_head[target] && !static_guards {
             s.top_mut().pc = target;
             eprintln!(

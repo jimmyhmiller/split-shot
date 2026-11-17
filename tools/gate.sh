@@ -9,7 +9,7 @@ cargo test --release -p partial 2>&1 | grep -E "test result: .* [1-9][0-9]* pass
 cargo test --release -p js-frontend 2>&1 | grep -E "test result: .* [1-9][0-9]* passed|FAILED|panicked" | head -3
 out=$(node docs/p2real/derive.js docs/p2real/int.js -o "${TMPDIR:-/tmp}/gate_dc.js" 2>&1)
 echo "P2: $out"
-echo "$out" | grep -q "derived a 14-block compiler" || { echo "P2 block count changed"; exit 1; }
+echo "$out" | grep -q "derived a 16-block compiler" || { echo "P2 block count changed"; exit 1; }
 # The derived compiler must compile programs that compute what the interpreter does.
 for case in '[["addin",0]]|5|5' '[["addlit",1],["mullit",3]]|5|3' '[["subin",0],["mullit",2]]|5|-10' '[]|5|0' '[["addin",0],["addlit",1],["mullit",3],["subin",0]]|5|13' '[["addin",0],["addlit",1],["mullit",3],["subin",0]]|-3|-3'; do
   IFS='|' read -r prog x want <<< "$case"
@@ -17,6 +17,7 @@ for case in '[["addin",0]]|5|5' '[["addlit",1],["mullit",3]]|5|3' '[["subin",0],
   [ "$got" = "run($x) = $want" ] || { echo "P2 compiler: $prog on $x gave '$got', want run($x) = $want"; exit 1; }
 done
 echo "P2 compiler: compiled programs run correctly"
+node docs/p2real/check-effects.cjs
 node docs/p3/p3rust.js | grep -c identical | sed 's/^/P3 via Rust: targets identical: /'
 node docs/p3/rust-p2-check.js | tr '\n' ' '; echo
 # A compiler mix makes of itself for an interpreter, given as JavaScript by
@@ -24,6 +25,12 @@ node docs/p3/rust-p2-check.js | tr '\n' ' '; echo
 # experiments/third-projection): no evaluator left, every program compiled as
 # the evaluator compiles it.
 node experiments/third-projection/check-compiler.cjs
+# The complete third projection: construct cogen by self-application, run it
+# on Brainfuck at load, and specialize the generated compiler to JavaScript.
+# Check both projection identities and execute the targets (including loops
+# and Hello World). The checker bounds compilation to five minutes.
+node experiments/third-projection/check-flowchart.cjs
+P3=1 node experiments/third-projection/check-compiler.cjs
 cargo run -q -p js-frontend --release --bin fuzz -- --seed 7 --count 300 --batch 150 --no-shrink 2>&1 | tail -2
 node tools/corpus.js | tail -1 || true
 # The corpus again with each object input behind a recording proxy: what the

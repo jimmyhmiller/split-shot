@@ -1,0 +1,78 @@
+var __s0 = "Loops are not supported in this subset";
+
+function compile(f) {
+  let b, e, c, a, d;
+  b = codegen.buffer();
+  e = f;
+  c = 0;
+  while (e["length"] > 0) {
+    a: {
+      a = e[0];
+      if (a === "+") {
+        a = codegen.reference("io");
+        d = codegen.prepare(b, a, "set");
+        a = codegen.reference("io");
+        a = codegen.call(b, a, "get", [c]);
+        a = codegen.binary("+", a, 1);
+        a = codegen.bindExpression(b, a);
+        a = codegen.binary("&", a, 255);
+        a = [c, codegen.bindExpression(b, a)];
+        codegen.invoke(b, d, a);
+        break a;
+      }
+      if (a === "-") {
+        a = codegen.reference("io");
+        d = codegen.prepare(b, a, "set");
+        a = codegen.reference("io");
+        a = codegen.call(b, a, "get", [c]);
+        a = codegen.binary("-", a, 1);
+        a = codegen.bindExpression(b, a);
+        a = codegen.binary("&", a, 255);
+        a = [c, codegen.bindExpression(b, a)];
+        codegen.invoke(b, d, a);
+        break a;
+      }
+      if (a === ">") {
+        if (c + 1 >= 16) {
+          throw new RangeError("Tape pointer out of range");
+        }
+        c += 1;
+        break a;
+      }
+      if (a === "<") {
+        if (c - 1 < 0) {
+          throw new RangeError("Tape pointer out of range");
+        }
+        c -= 1;
+        break a;
+      }
+      if (a === ",") {
+        a = codegen.reference("io");
+        d = codegen.prepare(b, a, "set");
+        a = codegen.reference("io");
+        a = [c, codegen.call(b, a, "read", [])];
+        codegen.invoke(b, d, a);
+        break a;
+      }
+      if (a === ".") {
+        a = codegen.reference("io");
+        d = codegen.prepare(b, a, "write");
+        a = codegen.reference("io");
+        a = [codegen.call(b, a, "get", [c])];
+        codegen.invoke(b, d, a);
+        break a;
+      }
+      if (a === "[") {
+        throw new Error(__s0);
+      }
+      if (a === "]") {
+        throw new Error(__s0);
+      }
+    }
+    e = e.slice(1);
+  }
+  return codegen.finish(b, c);
+}
+
+const codegen = require("../../general-jsmix/codegen.cjs");
+module.exports={compile,run:function(program,io){return Function("return ("+compile(program)+");")()(io);}};

@@ -1,0 +1,337 @@
+{
+  "tag": "app",
+  "fn": {
+    "tag": "lam",
+    "name": "h",
+    "body": {
+      "tag": "app",
+      "fn": {
+        "tag": "lam",
+        "name": "x",
+        "body": {
+          "tag": "app",
+          "fn": {
+            "tag": "var",
+            "name": "h"
+          },
+          "arg": {
+            "tag": "lam",
+            "name": "z",
+            "body": {
+              "tag": "app",
+              "fn": {
+                "tag": "app",
+                "fn": {
+                  "tag": "var",
+                  "name": "x"
+                },
+                "arg": {
+                  "tag": "var",
+                  "name": "x"
+                },
+                "stage": "S"
+              },
+              "arg": {
+                "tag": "var",
+                "name": "z"
+              },
+              "stage": "S"
+            },
+            "stage": "S"
+          },
+          "stage": "S"
+        },
+        "stage": "S"
+      },
+      "arg": {
+        "tag": "lam",
+        "name": "x",
+        "body": {
+          "tag": "app",
+          "fn": {
+            "tag": "var",
+            "name": "h"
+          },
+          "arg": {
+            "tag": "lam",
+            "name": "z",
+            "body": {
+              "tag": "app",
+              "fn": {
+                "tag": "app",
+                "fn": {
+                  "tag": "var",
+                  "name": "x"
+                },
+                "arg": {
+                  "tag": "var",
+                  "name": "x"
+                },
+                "stage": "S"
+              },
+              "arg": {
+                "tag": "var",
+                "name": "z"
+              },
+              "stage": "S"
+            },
+            "stage": "S"
+          },
+          "stage": "S"
+        },
+        "stage": "S"
+      },
+      "stage": "S"
+    },
+    "stage": "S"
+  },
+  "arg": {
+    "tag": "lam",
+    "name": "p",
+    "body": {
+      "tag": "lam",
+      "name": "m",
+      "body": {
+        "tag": "app",
+        "fn": {
+          "tag": "app",
+          "fn": {
+            "tag": "app",
+            "fn": {
+              "tag": "app",
+              "fn": {
+                "tag": "app",
+                "fn": {
+                  "tag": "var",
+                  "name": "m"
+                },
+                "arg": {
+                  "tag": "lam",
+                  "name": "x",
+                  "body": {
+                    "tag": "var",
+                    "name": "x"
+                  },
+                  "stage": "S"
+                },
+                "stage": "S"
+              },
+              "arg": {
+                "tag": "lam",
+                "name": "w",
+                "body": {
+                  "tag": "lam",
+                  "name": "u",
+                  "body": {
+                    "tag": "app",
+                    "fn": {
+                      "tag": "app",
+                      "fn": {
+                        "tag": "var",
+                        "name": "p"
+                      },
+                      "arg": {
+                        "tag": "var",
+                        "name": "w"
+                      },
+                      "stage": "S"
+                    },
+                    "arg": {
+                      "tag": "app",
+                      "fn": {
+                        "tag": "var",
+                        "name": "p"
+                      },
+                      "arg": {
+                        "tag": "var",
+                        "name": "u"
+                      },
+                      "stage": "S"
+                    },
+                    "stage": "D"
+                  },
+                  "stage": "S"
+                },
+                "stage": "S"
+              },
+              "stage": "S"
+            },
+            "arg": {
+              "tag": "lam",
+              "name": "w",
+              "body": {
+                "tag": "lam",
+                "name": "x",
+                "body": {
+                  "tag": "app",
+                  "fn": {
+                    "tag": "var",
+                    "name": "p"
+                  },
+                  "arg": {
+                    "tag": "app",
+                    "fn": {
+                      "tag": "var",
+                      "name": "w"
+                    },
+                    "arg": {
+                      "tag": "var",
+                      "name": "x"
+                    },
+                    "stage": "S"
+                  },
+                  "stage": "S"
+                },
+                "stage": "D"
+              },
+              "stage": "S"
+            },
+            "stage": "S"
+          },
+          "arg": {
+            "tag": "lam",
+            "name": "w",
+            "body": {
+              "tag": "lam",
+              "name": "u",
+              "body": {
+                "tag": "lam",
+                "name": "a",
+                "body": {
+                  "tag": "lam",
+                  "name": "b",
+                  "body": {
+                    "tag": "lam",
+                    "name": "c",
+                    "body": {
+                      "tag": "app",
+                      "fn": {
+                        "tag": "app",
+                        "fn": {
+                          "tag": "var",
+                          "name": "b"
+                        },
+                        "arg": {
+                          "tag": "app",
+                          "fn": {
+                            "tag": "var",
+                            "name": "p"
+                          },
+                          "arg": {
+                            "tag": "var",
+                            "name": "w"
+                          },
+                          "stage": "S"
+                        },
+                        "stage": "D"
+                      },
+                      "arg": {
+                        "tag": "app",
+                        "fn": {
+                          "tag": "var",
+                          "name": "p"
+                        },
+                        "arg": {
+                          "tag": "var",
+                          "name": "u"
+                        },
+                        "stage": "S"
+                      },
+                      "stage": "D"
+                    },
+                    "stage": "D"
+                  },
+                  "stage": "D"
+                },
+                "stage": "D"
+              },
+              "stage": "S"
+            },
+            "stage": "S"
+          },
+          "stage": "S"
+        },
+        "arg": {
+          "tag": "lam",
+          "name": "w",
+          "body": {
+            "tag": "lam",
+            "name": "a",
+            "body": {
+              "tag": "lam",
+              "name": "b",
+              "body": {
+                "tag": "lam",
+                "name": "c",
+                "body": {
+                  "tag": "app",
+                  "fn": {
+                    "tag": "var",
+                    "name": "c"
+                  },
+                  "arg": {
+                    "tag": "lam",
+                    "name": "x",
+                    "body": {
+                      "tag": "app",
+                      "fn": {
+                        "tag": "var",
+                        "name": "p"
+                      },
+                      "arg": {
+                        "tag": "app",
+                        "fn": {
+                          "tag": "var",
+                          "name": "w"
+                        },
+                        "arg": {
+                          "tag": "lam",
+                          "name": "a",
+                          "body": {
+                            "tag": "lam",
+                            "name": "b",
+                            "body": {
+                              "tag": "lam",
+                              "name": "c",
+                              "body": {
+                                "tag": "app",
+                                "fn": {
+                                  "tag": "var",
+                                  "name": "a"
+                                },
+                                "arg": {
+                                  "tag": "var",
+                                  "name": "x"
+                                },
+                                "stage": "D"
+                              },
+                              "stage": "D"
+                            },
+                            "stage": "D"
+                          },
+                          "stage": "D"
+                        },
+                        "stage": "S"
+                      },
+                      "stage": "S"
+                    },
+                    "stage": "D"
+                  },
+                  "stage": "D"
+                },
+                "stage": "D"
+              },
+              "stage": "D"
+            },
+            "stage": "D"
+          },
+          "stage": "S"
+        },
+        "stage": "S"
+      },
+      "stage": "S"
+    },
+    "stage": "S"
+  },
+  "stage": "S"
+}

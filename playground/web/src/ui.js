@@ -179,5 +179,6 @@ export function debounce(fn, ms) {
   let timer = null;
   const d = (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
   d.now = (...args) => { clearTimeout(timer); return fn(...args); };
+  d.cancel = () => { clearTimeout(timer); timer = null; };
   return d;
 }

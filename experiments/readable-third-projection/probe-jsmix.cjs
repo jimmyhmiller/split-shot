@@ -1,0 +1,16 @@
+const fs=require('node:fs'),path=require('node:path');
+const H=require('../../docs/p3/harness.js');
+const source=H.JSMIX2_SRC+'\nfunction interp(program, input) { return mix(program, "interp", [input]); }\n';
+const SELF=H.parseProgram(source);
+const start=Date.now();
+const cogenSource=H.mix(SELF,'interp',[SELF]);
+fs.writeFileSync(path.join(__dirname,'jsmix.cogen.js'),cogenSource);
+console.log('cogen',cogenSource.length,'bytes',Date.now()-start,'ms');
+const cogen=H.load(cogenSource,'main');
+const I=H.parseProgram(H.read('int.js'));
+const compilerSource=cogen(I);
+const expected=H.mix(SELF,'interp',[I]);
+console.log('compiler',compilerSource.length,'bytes','same P2?',compilerSource===expected);
+fs.writeFileSync(path.join(__dirname,'jsmix.compiler.js'),compilerSource);
+const compile=H.load(compilerSource,'main');
+for(const p of [[],[['addin',0],['addlit',1]],[['mullit',2]]])console.log(JSON.stringify(p),compile(p)===H.mix(I,'interp',[p]));

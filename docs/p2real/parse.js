@@ -1,7 +1,7 @@
 // A small parser for a reasonable JS subset, producing the AST `jsmix` consumes.
 // Front-end only (plain Node) -- it turns a JS interpreter's SOURCE TEXT into the
 // AST that the partial evaluator works on. Supports: function declarations;
-// statements return/if-else/var/block/expr; expressions with ?:, comparison,
+// statements return/if-else/while/var/assign/block/expr; expressions with ?:, comparison,
 // + - *, calls, member a[b]/a.b, array literals, number/string/bool literals,
 // identifiers, and function/arrow expressions (for reducers).
 //
@@ -67,6 +67,7 @@ function parseProgram(src) {
     if(t[0]==="num"){ next(); return ["lit", t[1]]; }
     if(t[0]==="str"){ next(); return ["lit", t[1]]; }
     if(t[0]==="id"){
+      if(t[1]==="null"){ next(); return ["lit", null]; }
       if(t[1]==="true"){ next(); return ["lit", true]; }
       if(t[1]==="false"){ next(); return ["lit", false]; }
       if(t[1]==="function"){ next(); eatOp("("); var ps=parseParams(); var body=parseBlock(); return ["fun", ps, body]; }
@@ -109,10 +110,12 @@ function parseProgram(src) {
   function parseExpr(){ return parseCond(); }
 
   function parseStmt(){
+    if(isId("while")){ next(); eatOp("("); var wc=parseExpr(); eatOp(")"); return ["while", wc, parseStmt()]; }
+    if(peek()[0]==="id" && toks[p+1][1]==="="){ var an=next()[1]; next(); var av=parseExpr(); if(isOp(";"))next(); return ["assign",an,av]; }
     if(isId("return")){ next(); var e=parseExpr(); if(isOp(";"))next(); return ["return", e]; }
     if(isId("var")){ next(); var nm=next()[1]; eatOp("="); var ve=parseExpr(); if(isOp(";"))next(); return ["var", nm, ve]; }
     if(isId("if")){ next(); eatOp("("); var c=parseExpr(); eatOp(")"); var th=parseStmt(); var el=null; if(isId("else")){ next(); el=parseStmt(); } return ["if", c, th, el]; }
-    if(isOp("{")){ return parseBlock(); }
+    if(isOp("{")){ return ["block", parseBlock()]; }
     var ex=parseExpr(); if(isOp(";"))next(); return ["expr", ex];
   }
   function parseBlock(){ eatOp("{"); var ss=[]; while(!isOp("}")){ ss.push(parseStmt()); } eatOp("}"); return ss; }
