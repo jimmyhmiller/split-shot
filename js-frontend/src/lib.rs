@@ -3004,6 +3004,46 @@ mod tests {
         assert!(!js.contains("\"call\"") && !js.contains("\"if\"") && !js.contains(".ev("), "the interpreted program should compile away:\n{js}");
     }
 
+    /// A variable store (a `Map`) carried through a loop under runtime
+    /// control, one of its variables a list made anew, longer, each round
+    /// (`code = code.concat([n])`): no object of one round stands for the
+    /// other's, so the list becomes a runtime value and the store's entry a
+    /// variable. The store stays modeled; it no longer becomes a runtime
+    /// `Map` of its own.
+    #[test]
+    fn store_entry_holding_a_rebuilt_list_is_lifted() {
+        let src = r#"
+            function main(x) {
+              const env = new Map([["n", 0], ["code", []]]);
+              while (env.get("n") < x) {
+                env.set("code", env.get("code").concat([env.get("n")]));
+                env.set("n", env.get("n") + 1);
+              }
+              return env.get("code");
+            }
+        "#;
+        let js = to_js(src).unwrap();
+        assert!(!js.contains("Map") && !js.contains(".get("), "the store should stay modeled:\n{js}");
+        assert_node_equiv(src, &[0, 1, 4]);
+    }
+
+    /// A frozen array of the load code's data, handed to runtime code
+    /// (held in a list `main` builds), is still known after: no code can
+    /// change it, so a read of it folds.
+    #[test]
+    fn frozen_load_data_stays_known_after_escape() {
+        let src = r#"
+            const NODES = Object.freeze([Object.freeze(["k", 1]), Object.freeze(["k", 2])]);
+            export function main(x) {
+              let out = [];
+              for (let i = 0; i < x; i++) out = out.concat([NODES]);
+              return [out.length, NODES[1][1] + x];
+            }
+        "#;
+        let js = module_small_budget_node_equiv("frozen-load-data", src, &[0, 1, 3]);
+        assert!(js.contains("2 + "), "the frozen element's read should fold:\n{js}");
+    }
+
     /// An interpreter that returns from an interpreted function by throwing
     /// (`throw new Return(v)`, caught where the call is interpreted), its
     /// recursion through that `try`: the runtime `try`'s body and handler

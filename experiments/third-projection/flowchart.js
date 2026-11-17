@@ -27,7 +27,19 @@ function toFlowchart(fn) {
   var open = { label: entry, assigns: [] };
   open = lowerStatements(fn[3], open, state, null);
   if (open !== null) closeBlock(state, open, ["return", ["undef"]]);
-  return simplify(["flowchart", fn[2], state.blocks], entry);
+  return deepFreeze(simplify(["flowchart", fn[2], state.blocks], entry));
+}
+
+// A program, frozen through: nothing changes it once made, and split-shot,
+// which then knows that, keeps knowing it where it hands the program, or a
+// part of it, to runtime code (a compiler's output holds parts of the
+// interpreter's expressions).
+function deepFreeze(x) {
+  if (Array.isArray(x) && !Object.isFrozen(x)) {
+    for (var i = 0; i < x.length; i++) deepFreeze(x[i]);
+    Object.freeze(x);
+  }
+  return x;
 }
 
 // A jump to a block that only jumps on goes where that block goes, and the
@@ -135,6 +147,9 @@ function runFlowchart(program, args) {
   }
 }
 
+// (Loops and direct recursion, no callbacks: what split-shot specializes this
+// evaluator to is each expression of a program, and a recursion through a
+// callback made anew for each call it stops unfolding.)
 function evalExpression(e, store) {
   switch (e[0]) {
     case "lit": return e[1];
@@ -142,7 +157,7 @@ function evalExpression(e, store) {
     case "var":
       if (!store.has(e[1])) throw new Error("flowchart: unbound variable " + e[1]);
       return store.get(e[1]);
-    case "arr": return e[1].map(function (x) { return evalExpression(x, store); });
+    case "arr": return evalList(e[1], store);
     case "idx": return evalExpression(e[1], store)[evalExpression(e[2], store)];
     case "dot":
       if (e[2] !== "length") throw new Error("flowchart: unsupported property " + e[2]);
@@ -150,9 +165,18 @@ function evalExpression(e, store) {
     case "unary": return unary(e[1], evalExpression(e[2], store));
     case "bin": return binary(e[1], evalExpression(e[2], store), evalExpression(e[3], store));
     case "cond": return evalExpression(e[1], store) ? evalExpression(e[2], store) : evalExpression(e[3], store);
-    case "call": return callBuiltin(e[1], e[2].map(function (x) { return evalExpression(x, store); }), function (x) { return evalExpression(x, store); });
+    case "call": {
+      var receiver = e[1][0] === "dot" ? evalExpression(e[1][1], store) : undefined;
+      return callBuiltin(e[1], evalList(e[2], store), receiver);
+    }
   }
   throw new Error("flowchart: unsupported expression " + e[0]);
+}
+
+function evalList(es, store) {
+  var out = [];
+  for (var i = 0; i < es.length; i++) out.push(evalExpression(es[i], store));
+  return out;
 }
 
 function unary(op, v) {
@@ -179,18 +203,18 @@ function binary(op, a, b) {
   throw new Error("flowchart: unsupported operator " + op);
 }
 
-// A builtin function (callee ["var", f]) or method (["dot", receiver, m]).
-function callBuiltin(callee, args, evalReceiver) {
+// A builtin function (callee ["var", f]) or method (["dot", receiver, m],
+// the receiver's value given).
+function callBuiltin(callee, args, receiver) {
   if (callee[0] === "dot") {
-    var r = evalReceiver(callee[1]);
-    if (callee[2] === "slice") return args.length === 1 ? r.slice(args[0]) : r.slice(args[0], args[1]);
-    if (callee[2] === "concat") return r.concat(args[0]);
-    if (callee[2] === "indexOf") return r.indexOf(args[0]);
+    if (callee[2] === "slice") return args.length === 1 ? receiver.slice(args[0]) : receiver.slice(args[0], args[1]);
+    if (callee[2] === "concat") return receiver.concat(args[0]);
+    if (callee[2] === "indexOf") return receiver.indexOf(args[0]);
     throw new Error("flowchart: unsupported method " + callee[2]);
   }
   var f = BUILTINS[callee[1]];
   if (!f) throw new Error("flowchart: unknown function " + callee[1]);
-  return f.apply(null, args);
+  return f(args[0], args[1], args[2]);
 }
 
 // ───────────── builtins ─────────────
@@ -215,10 +239,13 @@ var BUILTINS = {
   // the tests that are not static.
   pointsOf: function (program, names) {
     var points = [program[2][0][0]];
-    program[2].forEach(function (b) {
-      var j = b[2];
-      if (j[0] === "if" && !staticIn(j[1], names)) [j[2], j[3]].forEach(function (l) { if (points.indexOf(l) < 0) points.push(l); });
-    });
+    for (var b = 0; b < program[2].length; b++) {
+      var j = program[2][b][2];
+      if (j[0] === "if" && !staticIn(j[1], names)) {
+        if (points.indexOf(j[2]) < 0) points.push(j[2]);
+        if (points.indexOf(j[3]) < 0) points.push(j[3]);
+      }
+    }
     return points;
   },
   // A state's label ("S" and its index in `seen`), and `seen` with it. (Only
@@ -235,7 +262,11 @@ var BUILTINS = {
   // static computed: the residual expression.
   reduce: function (e, names, values) { return reduceExpression(e, names, values); },
   // The dynamic parameters of a program, given the static variables.
-  dynamicParams: function (program, names) { return program[1].filter(function (p) { return names.indexOf(p) < 0; }); },
+  dynamicParams: function (program, names) {
+    var out = [];
+    for (var i = 0; i < program[1].length; i++) if (names.indexOf(program[1][i]) < 0) out.push(program[1][i]);
+    return out;
+  },
 };
 
 // Equal as data (arrays element by element, the rest by ===). The same object
@@ -264,34 +295,46 @@ function staticIn(e, names) {
   switch (e[0]) {
     case "lit": case "undef": return true;
     case "var": return names.indexOf(e[1]) >= 0;
-    case "arr": return e[1].every(function (x) { return staticIn(x, names); });
+    case "arr": return allStaticIn(e[1], names);
     case "idx": return staticIn(e[1], names) && staticIn(e[2], names);
     case "dot": return staticIn(e[1], names);
     case "unary": return staticIn(e[2], names);
     case "bin": return staticIn(e[2], names) && staticIn(e[3], names);
     case "cond": return staticIn(e[1], names) && staticIn(e[2], names) && staticIn(e[3], names);
-    case "call": return (e[1][0] !== "dot" || staticIn(e[1][1], names)) && e[2].every(function (x) { return staticIn(x, names); }) && !(e[1][0] === "var" && e[1][1] === "fail");
+    case "call":
+      if (e[1][0] === "var" && e[1][1] === "fail") return false;
+      return (e[1][0] !== "dot" || staticIn(e[1][1], names)) && allStaticIn(e[2], names);
   }
   throw new Error("flowchart: unsupported expression " + e[0]);
 }
 
+function allStaticIn(es, names) {
+  for (var i = 0; i < es.length; i++) if (!staticIn(es[i], names)) return false;
+  return true;
+}
+
 function reduceExpression(e, names, values) {
   if (staticIn(e, names)) return ["lit", evalExpression(e, storeOf(names, values))];
-  var r = function (x) { return reduceExpression(x, names, values); };
   switch (e[0]) {
     case "var": return e;
-    case "arr": return ["arr", e[1].map(r)];
-    case "idx": return ["idx", r(e[1]), r(e[2])];
-    case "dot": return ["dot", r(e[1]), e[2]];
-    case "unary": return ["unary", e[1], r(e[2])];
-    case "bin": return ["bin", e[1], r(e[2]), r(e[3])];
-    case "cond": {
-      if (staticIn(e[1], names)) return evalExpression(e[1], storeOf(names, values)) ? r(e[2]) : r(e[3]);
-      return ["cond", r(e[1]), r(e[2]), r(e[3])];
-    }
-    case "call": return ["call", e[1][0] === "dot" ? ["dot", r(e[1][1]), e[1][2]] : e[1], e[2].map(r)];
+    case "arr": return ["arr", reduceList(e[1], names, values)];
+    case "idx": return ["idx", reduceExpression(e[1], names, values), reduceExpression(e[2], names, values)];
+    case "dot": return ["dot", reduceExpression(e[1], names, values), e[2]];
+    case "unary": return ["unary", e[1], reduceExpression(e[2], names, values)];
+    case "bin": return ["bin", e[1], reduceExpression(e[2], names, values), reduceExpression(e[3], names, values)];
+    case "cond":
+      if (staticIn(e[1], names)) return evalExpression(e[1], storeOf(names, values)) ? reduceExpression(e[2], names, values) : reduceExpression(e[3], names, values);
+      return ["cond", reduceExpression(e[1], names, values), reduceExpression(e[2], names, values), reduceExpression(e[3], names, values)];
+    case "call":
+      return ["call", e[1][0] === "dot" ? ["dot", reduceExpression(e[1][1], names, values), e[1][2]] : e[1], reduceList(e[2], names, values)];
   }
   throw new Error("flowchart: unsupported expression " + e[0]);
+}
+
+function reduceList(es, names, values) {
+  var out = [];
+  for (var i = 0; i < es.length; i++) out.push(reduceExpression(es[i], names, values));
+  return out;
 }
 
 // ───────────── division ─────────────

@@ -57,9 +57,31 @@ equal at once (not by `JSON.stringify`).
 The first projection works: with the target made at load, split-shot compiles
 the evaluator away and leaves the Brainfuck program as JavaScript (0.8 s); the
 evaluator dispatches on a numeric block index, as a VM on its program counter
-(by label, from a `Map`, it did not compile). The second and third do not yet:
-making the compiler (or the cogen) at load is a large static computation that
-V8 does in milliseconds and split-shot's static evaluation takes minutes over
-(every loop iteration is a block whose state is keyed, hashed and weighed by the
-whistle, at a cost that grows with the heap), or gives up on. That is the next
-piece of work: an engine fast path for long fully static computation.
+(by label, from a `Map`, it did not compile).
+
+The second projection is made at load too (the compiler mix makes of itself
+for Brainfuck, 15 s; `sameData` as a loop over pairs, since split-shot
+generalized the recursion over a state's depth). Specializing the evaluator
+to that compiler, its program a runtime value, is what gives the compiler as
+JavaScript. It works for a small interpreter (`tiny`: `+` and `-` on an
+accumulator): in 4 s, 114 lines. `main(program)` is a loop over `program`
+that appends `["=", "acc", ["bin", "+", ...]]` to the code it builds, with no
+evaluator left, and it gives exactly what mix gives on every program tried.
+That needed, in the evaluator and the engine:
+
+- `evalExpression`, `staticIn` and `reduceExpression` recurse directly over
+  argument lists (`evalList`, ...), with no callbacks made per call, which
+  split-shot stopped unfolding.
+- Flowcharts are frozen through (`deepFreeze`). A frozen load-time array
+  stays known after it is handed to runtime code, as part of the code the
+  compiler emits (`PE_NO_KEEP_FROZEN`, `PE_NO_FROZEN_ARRAYS`).
+- A store (the evaluator's variable `Map`) keeps a variable whose list is
+  rebuilt, longer, on every round of an interpreted loop: that entry becomes
+  a runtime variable and the `Map` stays modeled (`PE_NO_UNPAIRED_FIELD_LIFT`).
+  `runFlowchart(count)` compiles to `a = 0; b = []; while (a < c) { b =
+  b.concat([a]); a += 1 }`.
+
+The Brainfuck compiler (155 blocks) does not finish yet: each of split-shot's
+passes over it takes minutes, and the whistle fires inside the evaluator's
+argument loops on states from different rounds of the interpreted compiler's
+loop.

@@ -10150,10 +10150,19 @@ impl Js {
         if accessor_made {
             dynamic.extend(with_cells.iter().copied());
         }
-        // (A frozen ordinary object no write changes.)
-        let frozen = |a: &usize| {
-            matches!(watch.snapshot.get(a), Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. })
-                if private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)))
+        // (A frozen ordinary object no write changes. Nor a frozen array:
+        // its elements and length read-only, as its properties are.
+        // `PE_NO_FROZEN_ARRAYS`: an array as any other.)
+        let frozen = |a: &usize| match watch.snapshot.get(a) {
+            Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. }) => {
+                private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0))
+            }
+            Some(HeapObj::Array(arr)) => {
+                arr.frozen
+                    && !env_flag!("PE_NO_FROZEN_ARRAYS")
+                    && arr.props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0))
+            }
+            _ => false,
         };
         // What runtime code may write, or hand to code not seen (see
         // `entry_pts`): runtime state. `None` when the residual has code
@@ -10193,7 +10202,7 @@ impl Js {
         let mut hoist = self.entry.hoist.borrow_mut();
         let hoist_before = hoist.len();
         for a in made_by_main {
-            if may_change(&a) || env_flag!("PE_ENTRY_NO_HOIST") {
+            if (may_change(&a) && !frozen(&a)) || env_flag!("PE_ENTRY_NO_HOIST") {
                 dynamic.insert(a);
             } else {
                 hoist.insert(a);
@@ -13491,8 +13500,9 @@ impl Client for Js {
         let g = self.generalize_inner(seen, from, out);
         if env_flag!("GENERALIZE_DEBUG") {
             eprintln!(
-                "[GENERALIZE] pc={}\n  seen locals {:?} facts {:?}\n  from locals {:?} facts {:?}\n  -> locals {:?} facts {:?}\n  ops {:?}",
+                "[GENERALIZE] pc={} slots {:?}\n  seen locals {:?} facts {:?}\n  from locals {:?} facts {:?}\n  -> locals {:?} facts {:?}\n  ops {:?}",
                 from.top().pc,
+                self.slot_names.get(from.top().func),
                 seen.top().locals,
                 seen.facts,
                 from.top().locals,
@@ -13957,6 +13967,15 @@ impl Js {
                 self.code.get(cand.top().pc),
                 frames.join(" > ")
             );
+            // (`WHISTLE_FRAMES_DEBUG`: every frame of both states, its pc,
+            // its point and its locals.)
+            if env_flag!("WHISTLE_FRAMES_DEBUG") {
+                for (name, st) in [("seen", seen), ("cand", cand)] {
+                    for f in &st.frames {
+                        eprintln!("  {name} {} pc={} point={:?} locals={:?}", self.names[f.func], f.pc, self.dispatch_point(st, f), f.locals);
+                    }
+                }
+            }
         }
         fired
     }
@@ -16645,9 +16664,15 @@ impl Js {
         // runtime value, and the field is then lifted as any other. The
         // field's holder stays modeled. `PE_NO_REF_FIELD_LIFT`: the holder
         // becomes a runtime value instead, below.)
+        // (Do the two heaps hold the same objects, fresh ones standing for
+        // their partners? Then fields are compared as they always were; when
+        // not, see below.)
+        let alike = seen.heap.len() == g.heap.len() && g.heap.keys().all(|a| seen.heap.contains_key(fresh.get(a).unwrap_or(a)));
+        let mut lifted_any = false;
         if !fields_skipped && !env_flag!("PE_NO_REF_FIELD_LIFT") {
             for addr in self.ref_field_targets(seen, &g, &fresh) {
                 if g.heap.contains_key(&addr) && !g.escaped.contains(&addr) {
+                    lifted_any = true;
                     if env_flag!("GEN_DEBUG") {
                         eprintln!("[GEN-REF-FIELD] escape @{addr}");
                     }
@@ -16655,16 +16680,31 @@ impl Js {
                 }
             }
         }
-        let fields = if fields_skipped {
-            Vec::new()
-        } else {
-            match self.heap_field_changes(&seen.heap, &g.heap, self.dynamically_controlled(from), from, &fresh) {
-                Some((changes, _)) => {
-                    self.adopt_field_owners(&fresh);
-                    changes
-                }
-                None => Vec::new(),
+        let dynamic_from = self.dynamically_controlled(from);
+        let mut fields_found = if fields_skipped || !alike { None } else { self.heap_field_changes(&seen.heap, &g.heap, dynamic_from, from, &fresh) };
+        // (Where those are not alike: what `seen` holds that the lifted
+        // fields alone reach (the list a loop built one shorter, an object
+        // with no partner here) is no part of the comparison, its fields
+        // being what is lifted; and this path holds no more such objects
+        // either, once what it lifted is gone. `PE_NO_UNPAIRED_FIELD_LIFT`:
+        // not compared then.)
+        let mut cut_seen: Option<State> = None;
+        if !alike && !fields_skipped && !env_flag!("PE_NO_UNPAIRED_FIELD_LIFT") {
+            if lifted_any {
+                g.gc();
             }
+            cut_seen = self.without_lifted_fields(seen, &g, &fresh);
+            fields_found = self.heap_field_changes(&cut_seen.as_ref().unwrap_or(seen).heap, &g.heap, dynamic_from, from, &fresh);
+        } else if !alike && !fields_skipped {
+            fields_found = self.heap_field_changes(&seen.heap, &g.heap, dynamic_from, from, &fresh);
+        }
+        let seen_cmp: &State = cut_seen.as_ref().unwrap_or(seen);
+        let fields = match fields_found {
+            Some((changes, _)) => {
+                self.adopt_field_owners(&fresh);
+                changes
+            }
+            None => Vec::new(),
         };
         if env_flag!("GEN_DEBUG") && !fields.is_empty() {
             for &(addr, idx) in &fields {
@@ -16688,14 +16728,14 @@ impl Js {
             // it would materialize a dead object into the variable of a live
             // one.
             g.gc();
-            let mut changed = self.heap_shape_changes(&seen.heap, &g.heap);
+            let mut changed = self.heap_shape_changes(&seen_cmp.heap, &g.heap);
             // (And those whose fields hold other objects than at `seen`'s
             // visit (a cell a loop keeps a fresh object in each iteration):
             // no variable stands for an object, so they become runtime
             // values too. `PE_NO_REF_FIELD_ESCAPE`: kept.)
             if !env_flag!("PE_NO_REF_FIELD_ESCAPE") && fields.is_empty() {
                 for (addr, c) in g.heap.iter() {
-                    let Some(o) = seen.heap.get(addr) else { continue };
+                    let Some(o) = seen_cmp.heap.get(addr) else { continue };
                     if o == c || changed.contains(addr) || g.escaped.contains(addr) {
                         continue;
                     }
@@ -20346,7 +20386,11 @@ impl Js {
         guards: Option<&std::cell::OnceCell<Vec<(usize, Option<usize>)>>>,
     ) -> Option<(Vec<(usize, usize)>, bool)> {
         if seen.len() != cand.len() {
-            { if env_flag!("FIELD_DEBUG") { eprintln!("[FIELD] none at site 1"); } return None; }
+            if env_flag!("FIELD_DEBUG") {
+                let only = |a: &Heap, b: &Heap| a.keys().filter(|k| b.get(k).is_none()).map(|k| (*k, format!("{:?}", a.get(k)).chars().take(120).collect::<String>())).collect::<Vec<_>>();
+                eprintln!("[FIELD] none at site 1: only seen {:?} only cand {:?}", only(seen, cand), only(cand, seen));
+            }
+            return None;
         }
         let creation = self.creation_pc.borrow();
         let mut changes = Vec::new();
@@ -20500,11 +20544,19 @@ impl Js {
     /// nothing).
     fn ref_field_targets(&self, seen: &State, cand: &State, fresh: &HashMap<usize, usize>) -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
-        if seen.heap.len() != cand.heap.len() {
+        // (Where the heaps are not alike so far (an object one holds the
+        // other does not), only that: a field holding, at this visit, an
+        // object the earlier one does not have, where the earlier one held
+        // an object this one does not have, or a runtime value (see below). A list built
+        // anew, longer each time, so no object of one stands for the other's
+        // (see `pair_fresh`). `PE_NO_UNPAIRED_FIELD_LIFT`: none lifted, the
+        // holder a runtime value instead.)
+        let alike = seen.heap.len() == cand.heap.len() && cand.heap.keys().all(|a| seen.heap.contains_key(fresh.get(a).unwrap_or(a)));
+        if !alike && env_flag!("PE_NO_UNPAIRED_FIELD_LIFT") {
             return out;
         }
         for (addr, c) in cand.heap.iter() {
-            let Some(s) = seen.heap.get(fresh.get(addr).unwrap_or(addr)) else { return Vec::new() };
+            let Some(s) = seen.heap.get(fresh.get(addr).unwrap_or(addr)) else { continue };
             if s == c || cand.escaped.contains(addr) {
                 continue;
             }
@@ -20532,12 +20584,86 @@ impl Js {
                 if !matches!(cand.heap.get(b), Some(HeapObj::Array(_) | HeapObj::Object { class: ObjClass::Ordinary, .. })) {
                     continue;
                 }
-                if matches!(x, Abs::Dyn(_) | Abs::Ref(_)) && !out.contains(b) {
+                // (One replaced: `seen` held there an object this path no
+                // longer has; or a runtime value, where this path made one
+                // since (a list started again empty). Not an older object,
+                // one this path reaches that `seen` did not: no list
+                // replaced it.)
+                let unpaired = |x: &Abs| match x {
+                    Abs::Ref(a) => !cand.heap.contains_key(a),
+                    Abs::Dyn(_) => !entry_boundary_object(*b) && matches!(cand.heap.get(b), Some(HeapObj::Array(_))),
+                    _ => false,
+                };
+                if matches!(x, Abs::Dyn(_) | Abs::Ref(_)) && (alike || (!seen.heap.contains_key(b) && unpaired(x))) && !out.contains(b) {
+                    if env_flag!("GEN_DEBUG") {
+                        eprintln!("[GEN-REF-TARGET] @{addr} holds @{b} (was {x:?}, alike {alike}): {}", format!("{:?}", cand.heap.get(b)).chars().take(160).collect::<String>());
+                    }
                     out.push(*b);
                 }
             }
         }
         out
+    }
+
+    /// `seen` without the objects only its lifted fields reach: those of
+    /// the holders `cand` keeps modeled whose field holds an object in
+    /// `seen` and a runtime value in `cand` (see `ref_field_targets`). Each
+    /// such field still holds its object's address, which the returned
+    /// heap may no longer hold. `None` when no field is such.
+    fn without_lifted_fields(&self, seen: &State, cand: &State, fresh: &HashMap<usize, usize>) -> Option<State> {
+        let mut cut: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+        for (addr, c) in cand.heap.iter() {
+            let at = *fresh.get(addr).unwrap_or(addr);
+            let Some(s) = seen.heap.get(&at) else { continue };
+            for (idx, (x, y)) in s.children().into_iter().zip(c.children()).enumerate() {
+                // (Not the object itself made a runtime value in between (a
+                // table the load code made, handed to runtime code): that is
+                // its variable, not another value.)
+                // (Nor a function, or any object but an array or an
+                // ordinary one: none is lifted, see `ref_field_targets`.)
+                match (x, y) {
+                    (Abs::Ref(a), Abs::Dyn(RExpr::Var(v))) if *v == self.escape_var(*a) => {}
+                    (Abs::Ref(a), Abs::Dyn(_)) if matches!(seen.heap.get(a), Some(HeapObj::Array(_) | HeapObj::Object { class: ObjClass::Ordinary, .. })) => {
+                        cut.insert((at, idx));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if cut.is_empty() {
+            return None;
+        }
+        let mut out = seen.clone();
+        let mut live: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut work: Vec<usize> = Vec::new();
+        for v in seen.frames.iter().flat_map(|f| f.values()).chain(seen.fns.values()).chain(seen.globals.values().map(|(v, _)| v)) {
+            if let Abs::Ref(a) = v {
+                work.push(*a);
+            }
+        }
+        while let Some(a) = work.pop() {
+            if !live.insert(a) {
+                continue;
+            }
+            let Some(o) = seen.heap.get(&a) else { continue };
+            // (Every object it reaches but those only a cut field holds.)
+            let kids = o.children();
+            let only_cut: Vec<usize> = kids
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, c)| match c {
+                    Abs::Ref(b) if cut.contains(&(a, idx)) && !kids.iter().enumerate().any(|(j, d)| j != idx && !cut.contains(&(a, j)) && *d == *c) => Some(*b),
+                    _ => None,
+                })
+                .collect();
+            o.for_each_child_ref(&mut |b| {
+                if !only_cut.contains(&b) && !live.contains(&b) {
+                    work.push(b);
+                }
+            });
+        }
+        out.heap.retain(&|a| live.contains(&a));
+        Some(out)
     }
 
     /// Make the typed array `new ctor(elems)` in `dst` (`buf` its buffer's
@@ -24622,10 +24748,11 @@ impl Js {
                 .map(|(i, f)| format!("frame {i} skel {:?} now {:?}", f.entry_skel, now))
                 .collect();
             eprintln!(
-                "[RESID] {} depth={} shared={shared_context} recursive={recursive} all_dyn={all_dyn} dyn_ctl={} stalled={stalled:?}",
+                "[RESID] {} depth={} shared={shared_context} recursive={recursive} all_dyn={all_dyn} dyn_ctl={} in {} stalled={stalled:?}",
                 self.names[fid],
                 s.frames.len(),
-                s.top().dyn_ctl
+                s.top().dyn_ctl,
+                s.frames.iter().map(|f| self.names[f.func].as_str()).collect::<Vec<_>>().join(" > ")
             );
         }
         // An async function's body runs partly after the script (its awaits
@@ -31770,10 +31897,33 @@ impl Js {
         // function's record a call frame holds, `{pc, fp, f}` pushed on a
         // runtime stack, stays the program's. `PE_NO_KEEP_HOISTED`: made
         // runtime.)
-        let kept: std::collections::HashSet<usize> = if env_flag!("PE_NO_KEEP_HOISTED") || !self.keep_hoisted_on.get() {
+        // (Wherever it is handed over, one frozen: no code can change it,
+        // and the model's copy is the runtime object's (a compiler's output
+        // holding a part of the program it was made from). `PE_NO_KEEP_FROZEN`:
+        // as any other.)
+        let frozen_whole = |a: &usize| {
+            !env_flag!("PE_NO_KEEP_FROZEN")
+                && match heap.get(a) {
+                    Some(HeapObj::Array(arr)) => arr.frozen && arr.props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0)),
+                    Some(HeapObj::Object { props, extensible: false, private, class: ObjClass::Ordinary, .. }) => {
+                        private.is_empty() && props.iter().all(|p| p.attrs & CONFIGURABLE == 0 && (matches!(p.val, PVal::Accessor { .. }) || p.attrs & WRITABLE == 0))
+                    }
+                    _ => false,
+                }
+        };
+        let keep_all = !env_flag!("PE_NO_KEEP_HOISTED") && self.keep_hoisted_on.get();
+        let kept: std::collections::HashSet<usize> = if env_flag!("PE_NO_KEEP_HOISTED") {
             std::collections::HashSet::new()
         } else {
-            let mut kept: std::collections::HashSet<usize> = made.keys().copied().filter(|a| entry_is_hoisted(*a) && entry_unchanged(*a, heap.get(a))).collect();
+            // (A frozen one the load code made but that has no runtime
+            // identity yet, made here as a copy: kept too. Made by `main`, it
+            // is one the next pass has the load code make, see
+            // `EntrySplit`; this pass's identity is not the residual's.)
+            let mut kept: std::collections::HashSet<usize> = made
+                .keys()
+                .copied()
+                .filter(|a| entry_unchanged(*a, heap.get(a)) && ((entry_is_hoisted(*a) && keep_all) || frozen_whole(a)))
+                .collect();
             loop {
                 let drop: Vec<usize> = kept
                     .iter()
