@@ -13,7 +13,7 @@ Moved here from `PlayGround/claude-experiments/partial-new`, where it was develo
 How much is known in `main` depends on who else could have touched the program's state:
 
 - **An ES module** (`export function main(input)`, with its imports): its top-level bindings are its own. What its top-level code builds (a parsed template, a compiled matcher, class instances) is known in `main`, and that code runs once, as the residual's load code.
-- **A plain script**: its top-level `let`/`const`/`class` are open to other scripts unless `--closed-script` says otherwise, and its `var`s and functions are properties of the global object that any code the specializer does not see may reassign. A class instance's methods are then the runtime's.
+- **A plain script**: the world is closed by default. Its top-level bindings (`var`s and functions as much as `let`/`const`/`class`) are its own: no code the specializer does not see reads or reassigns them, so they change only as the program's own code changes them (by name, or through the global object), and one it leaves alone stays known in `main` and in the callbacks runtime code calls. `--open-script` gives that up for a script that other code reads or patches (its `var`s and functions are then properties of the global object anyone may reassign; a class instance's methods are then the runtime's).
 - **Everything inside `main`**: all known, and all redone per call.
 
 `--why` (below) says which of these a residual is paying for.

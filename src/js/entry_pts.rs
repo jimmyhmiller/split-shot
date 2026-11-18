@@ -2040,10 +2040,20 @@ impl<'a> Pta<'a> {
             // name is another object's.)
             // (But for what it exports, which `main` reads.)
             let load = i == 0 && !*runtime && rfid.is_none() && !env_flag!("PE_LOAD_VARS_SHARED");
+            // (And `main`: a boundary object it makes itself, as it escapes,
+            // is a copy of its own, made each call, its variable named by the
+            // object's address. Filling it, a cycle's in two phases, is
+            // making it, no write of the boundary's object. The split hoists
+            // what `main` makes into the load code, and the pass after reads
+            // its writes through the load code's variable. `PE_NO_MAIN_OWN`:
+            // the boundary's object.)
+            let main = rfid.is_none() && *runtime && !env_flag!("PE_NO_MAIN_OWN");
             self.own = if rfid.is_some() {
                 self.defined[i].clone()
             } else if load {
                 self.defined[i].iter().copied().filter(|v| !self.exports.contains(v)).collect()
+            } else if main {
+                self.defined[i].iter().copied().filter(|v| self.names.contains_key(v)).collect()
             } else {
                 std::collections::HashSet::new()
             };

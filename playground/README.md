@@ -23,9 +23,9 @@ function main(text) {
 - A program with module syntax (`import`/`export`) is an ES module, linked as the
   CLI links a `.mjs` file (`js_frontend::link::link_source`, the entry module
   held in memory), and its exported `main` is specialized. Otherwise it is a
-  plain script. (In a script, top-level functions are globals another script
-  could replace; once there is top-level code, split-shot keeps calls through
-  them. A module's bindings are its own.)
+  plain script. Either way the world is closed, as on the command line: the
+  program's top-level functions and variables change only as its own code
+  changes them, so calls through them stay known.
 - The Interpreters examples are cases of the interpreter suite, imported from
   `tools/wild/interp` (see `docs/INTERP.md`).
 - `examples/`: the example programs. An example may be several files (shown as

@@ -12,7 +12,8 @@
 // Each corpus file is a plain script defining `main(input)`. Header comments:
 //   // inputs: [<JSON values>]     inputs main is called with (required)
 //   // async: true                 main's result is awaited (microtasks run) before comparing
-//   // after: <expression>         evaluated after main in the same context (runs escaped functions at runtime)
+//   // after: <expression>         evaluated after main in the same context (runs escaped functions at runtime);
+//                                  code outside reading the program: specialized with --open-script
 //   // forbid: <regex>             the residual must not match (a folding claim)
 //   // forbid-main: <regex>        the residual's `main` must not match (a folding
 //                                  claim about main alone: a script's top-level

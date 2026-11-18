@@ -39,9 +39,11 @@ fn main() -> ExitCode {
     // (`__abstract(type, name)`, `__optimize(f)`, ...) with their runtime
     // meaning, and the specializer may use what they declare.
     let prepack_intrinsics = raw.iter().any(|a| a == "--prepack-intrinsics");
-    // `--closed-script`: no other script reads this one's top-level
-    // let/const/class bindings.
-    let closed_script = raw.iter().any(|a| a == "--closed-script");
+    // `--open-script`: code not seen (other scripts, callers of the
+    // residual) may read the script's top-level bindings and reassign its
+    // `var`s and functions. Without it the world is closed: the program's
+    // top-level bindings change only as its own code changes them.
+    let open_script = raw.iter().any(|a| a == "--open-script");
     // `--react`: rely on React's contract (see the engine's `js/react.rs`).
     let react = raw.iter().any(|a| a == "--react");
     // `--ts` (or a `.ts` file): TypeScript; `--no-trust-types`: its type
@@ -142,14 +144,15 @@ fn main() -> ExitCode {
     // file); without it, a `.js` file of no declared format and no module
     // syntax is a plain script.
     let commonjs = raw.iter().any(|a| a == "--commonjs");
-    let args: Vec<String> = raw.into_iter().filter(|a| a != "--js" && a != "--long-names" && a != "--source-names" && a != "--prepack-intrinsics" && a != "--closed-script" && a != "--react" && a != "--ts" && a != "--no-trust-types" && a != "--link-only" && a != "--commonjs" && a != "--why").collect();
+    let args: Vec<String> = raw.into_iter().filter(|a| a != "--js" && a != "--long-names" && a != "--source-names" && a != "--prepack-intrinsics" && a != "--open-script" && a != "--react" && a != "--ts" && a != "--no-trust-types" && a != "--link-only" && a != "--commonjs" && a != "--why").collect();
     if args.len() < 2 {
         eprintln!("usage: {} [--js] <file.js> [input ...]", args[0]);
         eprintln!("  --js          print the residual as JavaScript instead of the IR");
         eprintln!("  --long-names  keep the residual's v<id> variable names");
         eprintln!("  --source-names  name the residual's variables as the program names them, where one stands for one");
         eprintln!("  --prepack-intrinsics  the environment defines Prepack's intrinsics (__abstract, ...)");
-        eprintln!("  --closed-script  no other script reads this one's top-level let/const/class");
+        eprintln!("  --open-script  code not seen may read the script's top-level bindings and reassign its vars and functions");
+        eprintln!("                (default: a closed world, where only the program's own code changes them)");
         eprintln!("  --host-globals A,B  the host's globals besides the engine's: any other one the program does not define is absent");
         eprintln!("  --react       rely on React's contract: fold component trees (__optimizeReactComponentTree)");
         eprintln!("  --ts          the file is TypeScript (also for a .ts file); its annotations are facts");
@@ -181,6 +184,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if module_program && open_script {
+        eprintln!("error: --open-script applies to a plain script; {path} is a program of modules, whose bindings are its own");
+        return ExitCode::FAILURE;
+    }
     let (src, entry) = if module_program {
         let opts = js_frontend::link::LinkOptions { conditions: conditions.clone(), entry: entry.clone() };
         match js_frontend::link::link(std::path::Path::new(path), &opts) {
@@ -207,19 +214,20 @@ fn main() -> ExitCode {
         (src, entry)
     };
     let typescript = !module_program && (ts_flag || path.ends_with(".ts"));
-    if emit_js && (entry != "main" || typescript || module_program || source_names || why || why_json.is_some() || host_globals.is_some()) {
+    if emit_js {
         // (A program of modules is linked to one script whose top-level
         // names are the linker's own: no other script reads them.)
-        let opts = js_frontend::LowerOpts { closed_script: closed_script || module_program, typescript, trust_types, react, source_names, host_globals: host_globals.clone(), module_output: module_program, spec_budget: None };
+        let opts = js_frontend::LowerOpts { open_script, typescript, trust_types, react, source_names, host_globals: host_globals.clone(), module_output: module_program, spec_budget: None };
         // (`PE_REPEAT=n`: the whole compilation run n times more first, its
         // output dropped: one process to profile.)
         let repeat: usize = std::env::var("PE_REPEAT").ok().map(|n| n.parse().expect("PE_REPEAT is a count")).unwrap_or(0);
         for _ in 0..repeat {
             let _ = js_frontend::to_js_with(&src, &entry, short_names, prepack_intrinsics, &opts);
         }
-        match js_frontend::to_js_why(&src, &entry, short_names, prepack_intrinsics, &opts, why || why_json.is_some()) {
-            Ok((js, report)) => {
-                println!("--- residual as JavaScript ---");
+        match js_frontend::specialize_full(&src, &entry, short_names, prepack_intrinsics, &opts, why || why_json.is_some()) {
+            Ok(js_frontend::Specialized { js, report, prog, .. }) => {
+                // (The entry's block count: tools read it, `docs/p2real/derive.js`.)
+                println!("--- residual as JavaScript ({} block(s)) ---", prog.blocks.len());
                 print!("{js}");
                 if let Some(r) = report {
                     if why {
@@ -249,21 +257,8 @@ fn main() -> ExitCode {
         }
     };
 
-    if emit_js {
-        match js_frontend::to_js_opts(&src, "main", short_names) {
-            Ok(js) => {
-                println!("--- residual as JavaScript ({} block(s)) ---", prog.blocks.len());
-                print!("{js}");
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    } else {
-        println!("--- residual program ({} block(s)) ---", prog.blocks.len());
-        print!("{}", vm.dump(&prog));
-    }
+    println!("--- residual program ({} block(s)) ---", prog.blocks.len());
+    print!("{}", vm.dump(&prog));
 
     let inputs: Vec<i64> = args[2..].iter().filter_map(|s| s.parse().ok()).collect();
     if !inputs.is_empty() {

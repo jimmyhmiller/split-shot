@@ -89,9 +89,6 @@ pub fn specialize(src: &str, entry: &str, budget: f64, source_names: bool, why: 
     };
     let opts = js_frontend::LowerOpts {
         source_names,
-        // (A linked program's top-level names are the linker's own: no
-        // other script reads them.)
-        closed_script: module,
         module_output: module,
         spec_budget: (budget > 0.0).then_some(budget as u64),
         ..js_frontend::LowerOpts::default()

@@ -411,7 +411,7 @@ for (const file of files) {
   fs.writeFileSync(wfile, wrapped);
   // (Wall time of the specializer process, startup included.)
   const t0 = process.hrtime.bigint();
-  const r = spawnSync(bin, ['--js', '--prepack-intrinsics', '--closed-script', '--entry', '__pe_entry', wfile], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(bin, ['--js', '--prepack-intrinsics', '--entry', '__pe_entry', wfile], { encoding: 'utf8', timeout: 60000 });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   if (r.status !== 0) {
     const err = ((r.stderr || '') + (r.error ? String(r.error) : '')).trim().split('\n').filter((l) => l && !l.startsWith('note:'));

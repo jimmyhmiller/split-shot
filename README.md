@@ -51,3 +51,11 @@ Save the interpreter above as `example.js` and run:
 ```sh
 ./target/release/js-frontend --js example.js
 ```
+
+To specialize a function other than `main`, name it with `--entry`:
+
+```sh
+./target/release/js-frontend --js --entry validateUser validate.js
+```
+
+split-shot assumes a closed world: the program's top-level functions and variables change only as the program itself changes them, so nothing outside can monkey-patch them while the residual runs. For a script that other code reads or patches, pass `--open-script`.

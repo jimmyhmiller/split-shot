@@ -176,7 +176,7 @@ for (const rel of files) {
   const wfile = path.join(tmp, rel.replace(/\//g, '__'));
   fs.writeFileSync(wfile, program + 'function __pe_entry() {}\n');
   const t0 = Date.now();
-  const r = spawnSync(BIN, ['--js', '--prepack-intrinsics', '--closed-script', ...(react ? ['--react'] : []), '--entry', '__pe_entry', wfile], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(BIN, ['--js', '--prepack-intrinsics', ...(react ? ['--react'] : []), '--entry', '__pe_entry', wfile], { encoding: 'utf8', timeout: 60000 });
   const ms = Date.now() - t0;
   if (r.status !== 0) {
     const last = (r.stderr || String(r.error)).trim().split('\n').filter((l) => l && !l.startsWith('note:')).pop();

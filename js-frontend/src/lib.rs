@@ -38,10 +38,10 @@ pub fn to_js_opts(src: &str, entry: &str, short_names: bool) -> Result<String, S
 
 /// `to_js_opts`, for an environment that may define Prepack's intrinsics
 /// (`__abstract`, `__optimize`, ...) with their runtime meaning, and where
-/// (`closed_script`) no other script reads this one's top-level lexical
-/// bindings (see `lower::compile_full_opts`).
-pub fn to_js_env(src: &str, entry: &str, short_names: bool, prepack_intrinsics: bool, closed_script: bool) -> Result<String, String> {
-    to_js_with(src, entry, short_names, prepack_intrinsics, &LowerOpts { closed_script, ..LowerOpts::default() })
+/// (`open_script`) code not seen may read and reassign the script's
+/// top-level bindings (see `LowerOpts::open_script`).
+pub fn to_js_env(src: &str, entry: &str, short_names: bool, prepack_intrinsics: bool, open_script: bool) -> Result<String, String> {
+    to_js_with(src, entry, short_names, prepack_intrinsics, &LowerOpts { open_script, ..LowerOpts::default() })
 }
 
 /// `to_js_env`, with all the lowering options (TypeScript input among them).
@@ -102,7 +102,7 @@ pub fn specialize_full(
     if opts.react {
         vm.set_react();
     }
-    if opts.closed_script {
+    if !opts.open_script {
         vm.set_closed_script();
     }
     if let Some(names) = &opts.host_globals {
@@ -2962,7 +2962,7 @@ mod tests {
         let path = dir.join("main.mjs");
         std::fs::write(&path, src).unwrap();
         let linked = link::link(&path, &link::LinkOptions { entry: "main".into(), ..Default::default() }).unwrap();
-        let opts = LowerOpts { closed_script: true, module_output: true, spec_budget: Some(5_000_000), ..LowerOpts::default() };
+        let opts = LowerOpts { module_output: true, spec_budget: Some(5_000_000), ..LowerOpts::default() };
         let js = to_js_with(&linked, "main", false, false, &opts).unwrap();
         if Command::new("node").arg("--version").output().is_ok() {
             let run = |code: &str, i: i64| {

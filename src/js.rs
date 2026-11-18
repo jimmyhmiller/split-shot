@@ -1772,12 +1772,13 @@ impl HeapObj {
 /// again and again until no call changes more (see `specialize_program`).
 ///
 /// The residual's contract: once it has loaded, code outside calls `main`
-/// (and what `main` gives it), any number of times; it may read the
-/// program's open globals at any time, and call the functions they hold
-/// once it is done calling `main` (as Prepack's `inspect` is called). What
-/// those functions read the load code writes out; what they would change
-/// between calls of `main` is not taken into account (as built-ins are
-/// taken to be standard).
+/// (and what `main` gives it), any number of times. In a closed world (the
+/// default, see `Js::set_closed_script`) that is all it does. In an open
+/// one it may also read the program's globals at any time, and call the
+/// functions they hold once it is done calling `main` (as Prepack's
+/// `inspect` is called). What those functions read the load code writes
+/// out; what they would change between calls of `main` is not taken into
+/// account (as built-ins are taken to be standard).
 #[derive(Default)]
 struct EntrySplit {
     /// Specializing the top-level code alone: `EntryBoundary` stops there.
@@ -1821,8 +1822,8 @@ struct EntrySplit {
     /// The states the top-level code reached its end in, as they arrived
     /// (before anything was made runtime state there).
     raw_ends: std::cell::RefCell<Vec<State>>,
-    /// No other script reads the top-level lexical bindings (see
-    /// `Js::set_closed_script`).
+    /// The world is closed: the program's top-level bindings are its own
+    /// (see `Js::set_closed_script`).
     closed: std::cell::Cell<bool>,
     /// The globals residual code was found to read by name (or any: `every`).
     read_globals: std::cell::RefCell<std::collections::BTreeSet<String>>,
@@ -1831,9 +1832,16 @@ struct EntrySplit {
     /// script's, which no residual code was known to read).
     skipped: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// The globals that keep their values while `main` runs, however runtime
-    /// code it runs (a closed script's lexical ones no residual code
-    /// assigns): known after runtime code too (see `sync_globals`).
+    /// code it runs (in a closed world, the program's top-level bindings no
+    /// residual code assigns): known after runtime code too (see
+    /// `sync_globals`).
     stable: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// Of the `stable` globals, those a residual function's body knows too,
+    /// with what it knows of each: the program's one object of a function
+    /// (`Some(fid)`: its code), or a primitive (`None`, the value). Runtime
+    /// code calls a body at any time `main` may have left, and these hold
+    /// their value then as well (see `Js::body_start_in`).
+    stable_in_bodies: std::cell::RefCell<Vec<(String, Option<usize>, Abs)>>,
     /// What the last split pass watched, and the boundary's objects.
     watched: std::cell::RefCell<Option<(EntryWatch, std::collections::BTreeSet<usize>)>>,
     /// Data properties of the boundary's objects (by address and key) that
@@ -5276,9 +5284,15 @@ impl Js {
         self.react = Some(react::React::new(&self.names));
     }
 
-    /// No other script reads the program's top-level lexical bindings (see
-    /// `lower::compile_full_opts`): the load code writes one out only when
-    /// residual code reads it (see `entry_boundary`).
+    /// The world is closed (see `lower::LowerOpts::open_script`): no code
+    /// the specializer does not see reads the program's top-level bindings
+    /// or reassigns them, its `var`s and functions (properties of the
+    /// global object) as much as its `let`/`const`/`class`. One changes only
+    /// as the program's own code changes it (by name, or through the global
+    /// object: see `pristine::Writes`), so one no residual code assigns
+    /// keeps its value while `main` runs runtime code, and the load code
+    /// writes one out only when residual code reads it (see
+    /// `entry_boundary`).
     pub fn set_closed_script(&mut self) {
         self.entry.closed.set(true);
     }
@@ -6490,6 +6504,16 @@ impl Js {
     /// binding that is not a property of the global object)?
     fn is_lexical_global(&self, name: &str) -> bool {
         self.script_decls.iter().any(|(n, lexical)| *lexical && n == name)
+    }
+
+    /// Is `name` one of the program's own globals in a closed world: a
+    /// top-level declaration of the script (`var`, function, `let`, `const`
+    /// or `class`), which no code outside reads or writes (see
+    /// `set_closed_script`), and whose writes are tracked as its value (not
+    /// one the program defined on the global object as it likes: see
+    /// `global_write_tracked`)?
+    fn closed_global(&self, name: &str) -> bool {
+        self.entry.closed.get() && self.script_decls.iter().any(|(n, _)| n == name) && self.global_write_tracked(name)
     }
 
     /// `G.prototype` of a standard constructor `G` the program does not
@@ -8623,6 +8647,19 @@ impl Js {
         // The body runs at runtime, at any point: what the top-level
         // functions' objects hold then is not known here.
         self.alloc_fn_objects(&mut start, false);
+        // (But a global of the program that keeps its value while `main`
+        // runs keeps it when runtime code calls the body too: see
+        // `EntrySplit::stable_in_bodies`.)
+        for (name, fid, prim) in self.entry.stable_in_bodies.borrow().iter() {
+            let v = match fid {
+                Some(fid) => match start.fns.get(fid) {
+                    Some(v) => v.clone(),
+                    None => self.refresh_fn(&mut start, *fid),
+                },
+                None => prim.clone(),
+            };
+            start.globals.insert(name.clone(), (v, false));
+        }
         start
     }
 
@@ -9810,6 +9847,7 @@ impl Js {
         self.entry.boundary.borrow_mut().clear();
         self.entry.skipped.borrow_mut().clear();
         self.entry.stable.borrow_mut().clear();
+        self.entry.stable_in_bodies.borrow_mut().clear();
         let whole = |js: &Js| crate::engine::specialize(js, js.start());
         if !self.code.iter().any(|i| matches!(i, Instr::EntryBoundary)) || env_flag!("PE_NO_ENTRY_SPLIT") || self.entry.disabled.get() {
             return whole(self);
@@ -10007,6 +10045,7 @@ impl Js {
         let main = crate::engine::specialize(self, state);
         let watch = ENTRY_WATCH.with(|w| w.borrow_mut().take()).expect("the watch set above");
         self.entry.stable.borrow_mut().clear();
+        self.entry.stable_in_bodies.borrow_mut().clear();
         if env_flag!("ENTRY_DEBUG") {
             eprintln!(
                 "[ENTRY] split: {} exports, boundary heap {}, written {:?}, escaped {:?}, globals {:?}",
@@ -10091,8 +10130,22 @@ impl Js {
         // (The code and objects reachable from `code` and the globals in
         // `read`: what it makes or names, the globals it reads, their objects
         // and the functions of those, until no more.)
+        // (The program's code run as it is may run at runtime wherever the
+        // load code left it, a function in an object: what it reads by
+        // name, or every global through a direct `eval`, runtime code
+        // reads.)
+        let (verbatim_read, verbatim_every) = {
+            let (mut read, mut every) = (std::collections::BTreeSet::new(), false);
+            for i in &self.code {
+                if let Instr::PushVerbatim(t, globals) = i {
+                    rexpr_globals_read(&RExpr::Verbatim(t.clone(), globals.clone()), &mut read, &mut every);
+                }
+            }
+            (read, every)
+        };
         let close = |mut code: std::collections::HashSet<usize>, mut read: std::collections::BTreeSet<String>| {
-            let mut every = false;
+            let mut every = verbatim_every;
+            read.extend(verbatim_read.iter().cloned());
             let mut reached: std::collections::HashSet<usize>;
             loop {
                 let mut work: Vec<usize> = code.iter().copied().collect();
@@ -10138,15 +10191,15 @@ impl Js {
         // (Between calls, code outside calls nothing else of the program: its
         // entry is `main`. See `EntrySplit`.)
         let (code, _, _, reached) = close(seed.clone(), std::collections::BTreeSet::new());
-        // What code outside may read: the program's open globals (all but a
-        // closed script's lexical bindings), and what the functions they hold
-        // read when called (after the calls of `main`, as Prepack's
-        // `inspect`): written out by the load code.
+        // What code outside may read: the program's open globals (all in an
+        // open world; in a closed one only those it did not declare), and
+        // what the functions they hold read when called (after the calls of
+        // `main`, as Prepack's `inspect`): written out by the load code.
         let open: std::collections::BTreeSet<String> = watch
             .global_roots
             .iter()
             .map(|(g, _)| g)
-            .filter(|g| !(self.entry.closed.get() && self.is_lexical_global(g)))
+            .filter(|g| !self.closed_global(g))
             .cloned()
             .collect();
         let (_, outside_read, outside_every, _) = close(seed.clone(), open);
@@ -26508,12 +26561,11 @@ impl Js {
     /// (`agreeing`: the paths kept what they agree on, and name those
     /// variables by where the state holds them.)
     /// Is the global `g` one the load code does not write out at the
-    /// boundary: a closed script's lexical binding `main` does not assign,
-    /// which no residual code was found to read (see `boundary_finish`)? It
-    /// stays known, its object too.
+    /// boundary: in a closed world, a top-level binding of the program
+    /// `main` does not assign, which no residual code was found to read
+    /// (see `boundary_finish`)? It stays known, its object too.
     fn global_left_unwritten(&self, g: &str) -> bool {
-        self.entry.closed.get()
-            && self.is_lexical_global(g)
+        self.closed_global(g)
             && !self.entry.all_globals_dynamic.get()
             && !self.entry.dynamic_globals.borrow().contains(g)
             && !self.entry.read_every.get()
@@ -26686,6 +26738,9 @@ impl Js {
             let roots = s0
                 .globals
                 .iter()
+                // (Residual code reading the global object as a whole reads
+                // the program's `var`s and functions too, closed world or
+                // not: only a lexical binding is no property of it.)
                 .filter(|(g, _)| !(self.entry.closed.get() && self.is_lexical_global(g)))
                 .map(|(_, (v, _))| v)
                 .chain(if self.entry.closed.get() { None } else { Some(s0.fns.values()) }.into_iter().flatten());
@@ -26799,14 +26854,26 @@ impl Js {
         let heap = s.heap.clone();
         let mut seen: HashMap<usize, usize> = HashMap::new();
         let dirty: Vec<(String, Abs)> = s.globals.iter().filter(|(_, (_, d))| *d).map(|(k, (v, _))| (k.clone(), v.clone())).collect();
-        // (A closed script's lexical binding `main` does not assign: known
-        // throughout, and written out only if residual code reads it.)
-        let closed_lexical = |g: &str| {
-            self.entry.closed.get() && self.is_lexical_global(g) && !self.entry.all_globals_dynamic.get() && !self.entry.dynamic_globals.borrow().contains(g)
-        };
-        for (name, _) in s.globals.iter() {
-            if closed_lexical(name) && !env_flag!("PE_ENTRY_NO_STABLE") {
+        // (In a closed world, a top-level binding of the program `main` does
+        // not assign: known throughout, and written out only if residual
+        // code reads it.)
+        let own_unassigned = |g: &str| self.closed_global(g) && !self.entry.all_globals_dynamic.get() && !self.entry.dynamic_globals.borrow().contains(g);
+        for (name, (v, _)) in s.globals.iter() {
+            if own_unassigned(name) && !env_flag!("PE_ENTRY_NO_STABLE") {
                 self.entry.stable.borrow_mut().insert(name.clone());
+                // (What a residual body knows of it: a function's code, a
+                // primitive's value. An object's contents runtime code may
+                // change; the body reads it as it is.)
+                let known = match v {
+                    Abs::Ref(_) => self.program_fn_object(s, v).map(|fid| (Some(fid), Abs::Undef)),
+                    Abs::Dyn(_) => None,
+                    prim => Some((None, prim.clone())),
+                };
+                if let Some((fid, prim)) = known {
+                    if !env_flag!("PE_NO_STABLE_IN_BODIES") {
+                        self.entry.stable_in_bodies.borrow_mut().push((name.clone(), fid, prim));
+                    }
+                }
             }
         }
         for (name, v) in dirty {
@@ -28856,24 +28923,28 @@ impl Js {
         }
     }
 
+    /// The function `v` is the program's one object of, if it is one: a
+    /// top-level function's, or a capture-free one made once. Its code is
+    /// known wherever the object is, its properties the runtime's.
+    fn program_fn_object(&self, s: &State, v: &Abs) -> Option<usize> {
+        let Abs::Ref(a) = v else { return None };
+        match s.heap.get(a) {
+            Some(HeapObj::Closure { fid, captured, once, .. }) => {
+                let top_level = self.creation_pc.borrow().get(a).is_some_and(|pc| *pc >= self.code.len());
+                let shared = *once && captured.is_empty() && self.shared_fn_objects.borrow().get(fid).is_none_or(|x| x == a);
+                (top_level || shared).then_some(*fid)
+            }
+            _ => None,
+        }
+    }
+
     /// Write the tracked global `name`'s value out at runtime (it stays
     /// tracked, as written: a primitive keeps its static value, an object is
     /// its runtime variable from now on).
     fn write_global(&self, s: &mut State, name: &str, out: &mut Vec<Op>) {
         let v = s.globals.get(name).unwrap().0.clone();
-        // (The program's one object of a function, a top-level one or a
-        // capture-free one made once: its code stays known.)
-        let top_fn = match &v {
-            Abs::Ref(a) => match s.heap.get(a) {
-                Some(HeapObj::Closure { fid, captured, once, .. }) => {
-                    let top_level = self.creation_pc.borrow().get(a).is_some_and(|pc| *pc >= self.code.len());
-                    let shared = *once && captured.is_empty() && self.shared_fn_objects.borrow().get(fid).is_none_or(|x| x == a);
-                    (top_level || shared).then_some(*fid)
-                }
-                _ => None,
-            },
-            _ => None,
-        };
+        // (The program's one object of a function: its code stays known.)
+        let top_fn = self.program_fn_object(s, &v);
         let mut escaped = std::collections::HashSet::new();
         let expr = self.operand_rexpr(s, &v, &mut escaped, out);
         self.freeze_readers(s, 0, out, &|e| matches!(e, RExpr::Global(n) if n == name));
@@ -36687,46 +36758,59 @@ fn visit_rexpr(e: &RExpr, f: &mut dyn FnMut(&RExpr)) {
     }
 }
 
+/// The globals expression `e` reads by name (into `read`), or whether it
+/// may read any (`every`: code made from a string, the global object as a
+/// value).
+fn rexpr_globals_read(e: &RExpr, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
+    let function_prototype = |e: &RExpr| matches!(e, RExpr::Get(f, p) if p == "prototype" && matches!(&**f, RExpr::Global(g) if g == "Function"));
+    match e {
+        // (`Function.prototype` and its methods make no code from a
+        // string; its `constructor` is `Function`.)
+        RExpr::Get(o, k) if function_prototype(o) => {
+            if k == "constructor" {
+                *every = true;
+            }
+            read.insert("Function".into());
+            return;
+        }
+        _ if function_prototype(e) => {
+            read.insert("Function".into());
+            return;
+        }
+        RExpr::Get(o, k) if is_global_object(&Abs::Dyn((**o).clone())) => {
+            read.insert(k.clone());
+        }
+        // (Code made from a string reads what it names.)
+        RExpr::Global(g) if is_global_object(&Abs::Dyn(e.clone())) || g == "eval" || g == "Function" => {
+            *every = true;
+        }
+        RExpr::Global(g) => {
+            read.insert(g.clone());
+        }
+        // (Code run as it is reads the globals it names, as a reference
+        // to each would: all of them, through a direct `eval` of code
+        // not known here.)
+        RExpr::Verbatim(_, globals) => {
+            for g in globals {
+                rexpr_globals_read(&RExpr::Global(g.clone()), read, every);
+            }
+        }
+        _ => {}
+    }
+    if !matches!(e, RExpr::Get(o, _) if is_global_object(&Abs::Dyn((**o).clone()))) {
+        for c in crate::inline::children(e) {
+            rexpr_globals_read(c, read, every);
+        }
+    }
+}
+
 /// The residual functions `prog` makes or refers to, and those they do, of
 /// `fns` (by index).
 /// The globals the residual program `prog` reads by name (`read`), or
 /// whether it may read any (`every`: the global object as a value, not a
 /// static property read of it).
 fn program_globals_read(prog: &Program<Op, Cond>, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
-    fn expr(e: &RExpr, read: &mut std::collections::BTreeSet<String>, every: &mut bool) {
-        let function_prototype = |e: &RExpr| matches!(e, RExpr::Get(f, p) if p == "prototype" && matches!(&**f, RExpr::Global(g) if g == "Function"));
-        match e {
-            // (`Function.prototype` and its methods make no code from a
-            // string; its `constructor` is `Function`.)
-            RExpr::Get(o, k) if function_prototype(o) => {
-                if k == "constructor" {
-                    *every = true;
-                }
-                read.insert("Function".into());
-                return;
-            }
-            _ if function_prototype(e) => {
-                read.insert("Function".into());
-                return;
-            }
-            RExpr::Get(o, k) if is_global_object(&Abs::Dyn((**o).clone())) => {
-                read.insert(k.clone());
-            }
-            // (Code made from a string reads what it names.)
-            RExpr::Global(g) if is_global_object(&Abs::Dyn(e.clone())) || g == "eval" || g == "Function" => {
-                *every = true;
-            }
-            RExpr::Global(g) => {
-                read.insert(g.clone());
-            }
-            _ => {}
-        }
-        if !matches!(e, RExpr::Get(o, _) if is_global_object(&Abs::Dyn((**o).clone()))) {
-            for c in crate::inline::children(e) {
-                expr(c, read, every);
-            }
-        }
-    }
+    let expr = rexpr_globals_read;
     for b in &prog.blocks {
         for op in &b.ops {
             if let Op::Try { body, catch_body, finally_body, .. } = op {

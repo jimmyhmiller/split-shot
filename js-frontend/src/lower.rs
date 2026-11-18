@@ -79,10 +79,15 @@ pub fn compile_full(src: &str, entry: &str) -> R<(Vec<FuncDef>, Vec<Option<FnSou
 /// How a program is lowered.
 #[derive(Clone, Default)]
 pub struct LowerOpts {
-    /// No other script reads this one's top-level `let`/`const`/`class`
-    /// bindings: one no function of the script mentions (and with no `eval`
-    /// in the script) is a plain local of the top-level code.
-    pub closed_script: bool,
+    /// The script's world is open: code the specializer does not see (other
+    /// scripts, callers of the residual) may read this one's top-level
+    /// bindings and reassign its `var`s and functions (properties of the
+    /// global object) at any time. Off by default: the world is closed, the
+    /// program's top-level bindings are its own, changed only as its own
+    /// code changes them, and a top-level `let`/`const`/`class` binding no
+    /// function of the script mentions (with no `eval` in the script) is a
+    /// plain local of the top-level code.
+    pub open_script: bool,
     /// The source is TypeScript (its types are erased; see `ts`).
     pub typescript: bool,
     /// Trust the TypeScript annotations: a parameter or variable annotated
@@ -110,7 +115,7 @@ pub struct LowerOpts {
 
 /// `compile_full`, with the lowering options.
 pub fn compile_full_opts(src: &str, entry: &str, opts: &LowerOpts) -> R<(Vec<FuncDef>, Vec<Option<FnSource>>)> {
-    let closed_script = opts.closed_script;
+    let closed_script = !opts.open_script;
     let trust_types = opts.typescript && opts.trust_types;
     let module = if opts.typescript { crate::parse_ts(src)? } else { crate::parse_program(src)? };
     reject_unsupported(&module)?;
